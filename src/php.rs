@@ -14,6 +14,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+
 #[link(name = "php")]
 extern "C" {
     fn php_embed_init(argc: c_int, argv: *mut *mut c_char) -> c_int;
@@ -407,6 +408,10 @@ impl PhpWorkerPool {
         let mut stream = UnixStream::connect(socket_path)
             .map_err(|e| format!("Failed to connect: {}", e))?;
 
+        Self::send_on_stream(&mut stream, request)
+    }
+
+    fn send_on_stream(stream: &mut UnixStream, request: &PhpRequest) -> Result<PhpResponse, String> {
         // Send request (bincode)
         let request_bytes = bincode::serialize(request).map_err(|e| e.to_string())?;
         let len_bytes = (request_bytes.len() as u32).to_be_bytes();
