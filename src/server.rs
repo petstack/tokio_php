@@ -1,17 +1,17 @@
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode, Method};
 use hyper_util::rt::TokioIo;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::php::PhpRuntime;
+use crate::php::{PhpRequest, PhpRuntime};
 
 const DOCUMENT_ROOT: &str = "/var/www/html";
 
@@ -51,13 +51,14 @@ async fn handle_request(
     remote_addr: SocketAddr,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let method = req.method().clone();
-    let uri_path = req.uri().path().to_string();
+    let uri = req.uri().clone();
+    let uri_path = uri.path().to_string();
 
     info!("{} {} - {}", method, uri_path, remote_addr);
 
     let response = match method {
         Method::GET | Method::POST => {
-            process_request(&uri_path).await
+            process_request(req, remote_addr).await
         }
         _ => {
             create_response(StatusCode::METHOD_NOT_ALLOWED, "text/plain", "Method Not Allowed")
@@ -67,9 +68,136 @@ async fn handle_request(
     Ok(response)
 }
 
-async fn process_request(uri_path: &str) -> Response<Full<Bytes>> {
+fn parse_query_string(query: &str) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next().unwrap_or("");
+        let value = parts.next().unwrap_or("");
+
+        // URL decode
+        let key = percent_encoding::percent_decode_str(key)
+            .decode_utf8_lossy()
+            .to_string();
+        let value = percent_encoding::percent_decode_str(value)
+            .decode_utf8_lossy()
+            .to_string();
+
+        if !key.is_empty() {
+            params.insert(key, value);
+        }
+    }
+
+    params
+}
+
+fn parse_form_urlencoded(body: &str) -> HashMap<String, String> {
+    parse_query_string(body)
+}
+
+fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
+    let mut cookies = HashMap::new();
+
+    for cookie in cookie_header.split(';') {
+        let cookie = cookie.trim();
+        if cookie.is_empty() {
+            continue;
+        }
+
+        let mut parts = cookie.splitn(2, '=');
+        let name = parts.next().unwrap_or("").trim();
+        let value = parts.next().unwrap_or("").trim();
+
+        if !name.is_empty() {
+            // URL decode cookie value
+            let value = percent_encoding::percent_decode_str(value)
+                .decode_utf8_lossy()
+                .to_string();
+            cookies.insert(name.to_string(), value);
+        }
+    }
+
+    cookies
+}
+
+async fn process_request(
+    req: Request<IncomingBody>,
+    remote_addr: SocketAddr,
+) -> Response<Full<Bytes>> {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let uri_path = uri.path().to_string();
+    let content_type = req
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // Parse cookies from Cookie header
+    let cookie_header = req
+        .headers()
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let cookies = if cookie_header.is_empty() {
+        HashMap::new()
+    } else {
+        parse_cookies(&cookie_header)
+    };
+
+    // Parse query string for GET parameters
+    let get_params = uri
+        .query()
+        .map(|q| parse_query_string(q))
+        .unwrap_or_default();
+
+    // Read and parse POST body
+    let post_params = if method == Method::POST {
+        let body_bytes = match req.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(e) => {
+                error!("Failed to read request body: {}", e);
+                return create_response(
+                    StatusCode::BAD_REQUEST,
+                    "text/plain",
+                    "Failed to read request body",
+                );
+            }
+        };
+
+        if content_type.starts_with("application/x-www-form-urlencoded") {
+            let body_str = String::from_utf8_lossy(&body_bytes);
+            parse_form_urlencoded(&body_str)
+        } else {
+            HashMap::new()
+        }
+    } else {
+        HashMap::new()
+    };
+
+    // Build server variables
+    let mut server_vars = HashMap::new();
+    server_vars.insert("REQUEST_METHOD".to_string(), method.to_string());
+    server_vars.insert("REQUEST_URI".to_string(), uri.to_string());
+    server_vars.insert("QUERY_STRING".to_string(), uri.query().unwrap_or("").to_string());
+    server_vars.insert("REMOTE_ADDR".to_string(), remote_addr.ip().to_string());
+    server_vars.insert("REMOTE_PORT".to_string(), remote_addr.port().to_string());
+    server_vars.insert("SERVER_SOFTWARE".to_string(), "tokio_php/0.1.0".to_string());
+    server_vars.insert("SERVER_PROTOCOL".to_string(), "HTTP/1.1".to_string());
+    server_vars.insert("CONTENT_TYPE".to_string(), content_type);
+    if !cookie_header.is_empty() {
+        server_vars.insert("HTTP_COOKIE".to_string(), cookie_header.clone());
+    }
+
     // Decode URL path
-    let decoded_path = percent_encoding::percent_decode_str(uri_path)
+    let decoded_path = percent_encoding::percent_decode_str(&uri_path)
         .decode_utf8_lossy()
         .to_string();
 
@@ -95,20 +223,22 @@ async fn process_request(uri_path: &str) -> Response<Full<Bytes>> {
         .unwrap_or("");
 
     if extension == "php" {
-        // Execute PHP file in blocking task
-        execute_php_file(&file_path).await
+        let php_request = PhpRequest {
+            script_path: file_path.to_string_lossy().to_string(),
+            get_params,
+            post_params,
+            cookies,
+            server_vars,
+        };
+        execute_php_file(php_request).await
     } else {
-        // Serve static file
         serve_static_file(&file_path).await
     }
 }
 
-async fn execute_php_file(file_path: &Path) -> Response<Full<Bytes>> {
-    let path_str = file_path.to_string_lossy().to_string();
-
-    // PHP execution is blocking, run in spawn_blocking
+async fn execute_php_file(request: PhpRequest) -> Response<Full<Bytes>> {
     let result = tokio::task::spawn_blocking(move || {
-        PhpRuntime::execute_file(&path_str)
+        PhpRuntime::execute_request(request)
     }).await;
 
     match result {

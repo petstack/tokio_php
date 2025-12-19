@@ -1,21 +1,23 @@
 use once_cell::sync::OnceCell;
-use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::ffi::CString;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::raw::{c_char, c_int, c_void};
-use std::os::unix::io::{FromRawFd, RawFd};
+use std::os::unix::io::FromRawFd;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-type size_t = usize;
-
 #[link(name = "php")]
 extern "C" {
     fn php_embed_init(argc: c_int, argv: *mut *mut c_char) -> c_int;
     fn php_embed_shutdown();
-
+    fn zend_eval_string(
+        str: *mut c_char,
+        retval_ptr: *mut c_void,
+        string_name: *mut c_char,
+    ) -> c_int;
     fn php_execute_simple_script(handle: *mut ZendFileHandle, retval: *mut c_void) -> c_int;
     fn zend_stream_init_filename(handle: *mut ZendFileHandle, filename: *const c_char);
     fn zend_destroy_file_handle(handle: *mut ZendFileHandle);
@@ -29,8 +31,17 @@ pub struct ZendFileHandle {
 static PHP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static PHP_EXECUTOR: OnceCell<PhpExecutor> = OnceCell::new();
 
+#[derive(Debug, Clone)]
+pub struct PhpRequest {
+    pub script_path: String,
+    pub get_params: HashMap<String, String>,
+    pub post_params: HashMap<String, String>,
+    pub cookies: HashMap<String, String>,
+    pub server_vars: HashMap<String, String>,
+}
+
 enum PhpCommand {
-    ExecuteFile(String, mpsc::Sender<Result<String, String>>),
+    ExecuteRequest(PhpRequest, mpsc::Sender<Result<String, String>>),
     Shutdown,
 }
 
@@ -42,7 +53,6 @@ impl PhpExecutor {
     fn new() -> Result<Self, String> {
         let (tx, rx) = mpsc::channel::<PhpCommand>();
 
-        // Spawn PHP thread with larger stack (16MB)
         thread::Builder::new()
             .name("php-executor".to_string())
             .stack_size(16 * 1024 * 1024)
@@ -55,7 +65,6 @@ impl PhpExecutor {
     }
 
     fn php_thread(rx: mpsc::Receiver<PhpCommand>) {
-        // Initialize PHP
         unsafe {
             let program_name = CString::new("tokio_php").unwrap();
             let mut argv: [*mut c_char; 2] = [program_name.as_ptr() as *mut c_char, ptr::null_mut()];
@@ -70,11 +79,10 @@ impl PhpExecutor {
         PHP_INITIALIZED.store(true, Ordering::SeqCst);
         tracing::info!("PHP runtime initialized");
 
-        // Process commands
         while let Ok(cmd) = rx.recv() {
             match cmd {
-                PhpCommand::ExecuteFile(path, response_tx) => {
-                    let result = Self::do_execute_file(&path);
+                PhpCommand::ExecuteRequest(request, response_tx) => {
+                    let result = Self::do_execute_request(&request);
                     let _ = response_tx.send(result);
                 }
                 PhpCommand::Shutdown => {
@@ -83,7 +91,6 @@ impl PhpExecutor {
             }
         }
 
-        // Shutdown PHP
         unsafe {
             php_embed_shutdown();
         }
@@ -91,8 +98,79 @@ impl PhpExecutor {
         tracing::info!("PHP runtime shut down");
     }
 
-    fn do_execute_file(file_path: &str) -> Result<String, String> {
-        // Create a pipe to capture stdout
+    fn escape_php_string(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\0', "")
+    }
+
+    fn build_superglobals_code(request: &PhpRequest) -> String {
+        let mut code = String::new();
+
+        // Build $_GET
+        code.push_str("$_GET = [");
+        for (i, (key, value)) in request.get_params.iter().enumerate() {
+            if i > 0 {
+                code.push_str(", ");
+            }
+            code.push_str(&format!(
+                "'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)
+            ));
+        }
+        code.push_str("];\n");
+
+        // Build $_POST
+        code.push_str("$_POST = [");
+        for (i, (key, value)) in request.post_params.iter().enumerate() {
+            if i > 0 {
+                code.push_str(", ");
+            }
+            code.push_str(&format!(
+                "'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)
+            ));
+        }
+        code.push_str("];\n");
+
+        // Build $_SERVER
+        code.push_str("$_SERVER = array_merge($_SERVER ?? [], [");
+        for (i, (key, value)) in request.server_vars.iter().enumerate() {
+            if i > 0 {
+                code.push_str(", ");
+            }
+            code.push_str(&format!(
+                "'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)
+            ));
+        }
+        code.push_str("]);\n");
+
+        // Build $_COOKIE
+        code.push_str("$_COOKIE = [");
+        for (i, (key, value)) in request.cookies.iter().enumerate() {
+            if i > 0 {
+                code.push_str(", ");
+            }
+            code.push_str(&format!(
+                "'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)
+            ));
+        }
+        code.push_str("];\n");
+
+        // Build $_REQUEST (merge of GET and POST, POST takes precedence)
+        code.push_str("$_REQUEST = array_merge($_GET, $_POST);\n");
+
+        code
+    }
+
+    fn do_execute_request(request: &PhpRequest) -> Result<String, String> {
+        // Create pipe for stdout capture
         let mut pipe_fds: [c_int; 2] = [0, 0];
         if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
             return Err("Failed to create pipe".to_string());
@@ -101,7 +179,6 @@ impl PhpExecutor {
         let read_fd = pipe_fds[0];
         let write_fd = pipe_fds[1];
 
-        // Save original stdout
         let original_stdout = unsafe { libc::dup(1) };
         if original_stdout < 0 {
             unsafe {
@@ -111,7 +188,6 @@ impl PhpExecutor {
             return Err("Failed to dup stdout".to_string());
         }
 
-        // Redirect stdout to our pipe
         if unsafe { libc::dup2(write_fd, 1) } < 0 {
             unsafe {
                 libc::close(read_fd);
@@ -121,9 +197,21 @@ impl PhpExecutor {
             return Err("Failed to redirect stdout".to_string());
         }
 
-        // Execute PHP script
+        // Execute superglobals setup and then the script
         unsafe {
-            let path_c = CString::new(file_path).map_err(|e| e.to_string())?;
+            // First, inject superglobals
+            let superglobals_code = Self::build_superglobals_code(request);
+            let code_c = CString::new(superglobals_code).map_err(|e| e.to_string())?;
+            let name_c = CString::new("superglobals_init").unwrap();
+
+            zend_eval_string(
+                code_c.as_ptr() as *mut c_char,
+                ptr::null_mut(),
+                name_c.as_ptr() as *mut c_char,
+            );
+
+            // Now execute the actual script
+            let path_c = CString::new(request.script_path.as_str()).map_err(|e| e.to_string())?;
 
             let mut file_handle: ZendFileHandle = std::mem::zeroed();
             zend_stream_init_filename(&mut file_handle, path_c.as_ptr());
@@ -133,23 +221,15 @@ impl PhpExecutor {
             zend_destroy_file_handle(&mut file_handle);
         }
 
-        // Flush stdout
+        // Flush and restore stdout
         unsafe {
             libc::fflush(ptr::null_mut());
-        }
-
-        // Close write end of pipe
-        unsafe {
             libc::close(write_fd);
-        }
-
-        // Restore original stdout
-        unsafe {
             libc::dup2(original_stdout, 1);
             libc::close(original_stdout);
         }
 
-        // Read output from pipe
+        // Read output
         let mut output = String::new();
         let mut read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
         read_file.read_to_string(&mut output).map_err(|e| e.to_string())?;
@@ -161,10 +241,10 @@ impl PhpExecutor {
         Ok(output)
     }
 
-    fn execute_file(&self, path: String) -> Result<String, String> {
+    fn execute_request(&self, request: PhpRequest) -> Result<String, String> {
         let (tx, rx) = mpsc::channel();
         self.sender
-            .send(PhpCommand::ExecuteFile(path, tx))
+            .send(PhpCommand::ExecuteRequest(request, tx))
             .map_err(|e| format!("Failed to send command: {}", e))?;
 
         rx.recv().map_err(|e| format!("Failed to receive response: {}", e))?
@@ -190,11 +270,22 @@ impl PhpRuntime {
         }
     }
 
-    pub fn execute_file(file_path: &str) -> Result<String, String> {
+    pub fn execute_request(request: PhpRequest) -> Result<String, String> {
         let executor = PHP_EXECUTOR
             .get()
             .ok_or("PHP runtime not initialized")?;
 
-        executor.execute_file(file_path.to_string())
+        executor.execute_request(request)
+    }
+
+    #[allow(dead_code)]
+    pub fn execute_file(file_path: &str) -> Result<String, String> {
+        Self::execute_request(PhpRequest {
+            script_path: file_path.to_string(),
+            get_params: HashMap::new(),
+            post_params: HashMap::new(),
+            cookies: HashMap::new(),
+            server_vars: HashMap::new(),
+        })
     }
 }
