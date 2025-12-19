@@ -123,6 +123,10 @@ impl PhpExecutor {
     fn build_superglobals_code(request: &PhpRequest) -> String {
         let mut code = String::new();
 
+        // Clear headers from previous requests and reset response code
+        code.push_str("header_remove();\n");
+        code.push_str("http_response_code(200);\n");
+
         // Start output buffering at the very beginning
         code.push_str("if (!ob_get_level()) ob_start();\n");
 
@@ -342,10 +346,7 @@ impl PhpExecutor {
         let mut read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
         read_file.read_to_string(&mut output).map_err(|e| e.to_string())?;
 
-        if output.is_empty() {
-            return Err("PHP script produced no output".to_string());
-        }
-
+        // Allow empty body (e.g., for redirects)
         Ok(PhpResponse {
             body: output,
             headers,
@@ -353,7 +354,7 @@ impl PhpExecutor {
     }
 
     unsafe fn capture_headers() -> Vec<(String, String)> {
-        // Use a pipe to capture the output of headers_list()
+        // Use a pipe to capture the output of headers_list() and http_response_code()
         let mut pipe_fds: [c_int; 2] = [0, 0];
         if libc::pipe(pipe_fds.as_mut_ptr()) != 0 {
             return Vec::new();
@@ -376,9 +377,13 @@ impl PhpExecutor {
             return Vec::new();
         }
 
-        // Get headers using PHP's headers_list() and print them
+        // Get headers using PHP's headers_list() and http_response_code()
         let code = CString::new(
-            "foreach (headers_list() as $h) { echo $h . \"\\n\"; }"
+            "$code = http_response_code();\n\
+             if ($code && $code !== 200) {\n\
+                 echo \"Status: $code\\n\";\n\
+             }\n\
+             foreach (headers_list() as $h) { echo $h . \"\\n\"; }"
         ).unwrap();
         let name = CString::new("get_headers").unwrap();
         zend_eval_string(

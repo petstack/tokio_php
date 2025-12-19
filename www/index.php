@@ -48,6 +48,7 @@
             <li><a href="/cookie.php">Cookie Example</a> - Test $_COOKIE parameters</li>
             <li><a href="/session.php">Session Example</a> - Test $_SESSION with visit counter</li>
             <li><a href="/upload.php">Upload Example</a> - Test $_FILES file uploads</li>
+            <li><a href="/headers.php">Headers Example</a> - Test header() and redirects</li>
         </ul>
     </div>
 
@@ -61,6 +62,7 @@
             <li>✓ <code>$_FILES</code> - File uploads</li>
             <li>✓ <code>$_SERVER</code> - Server variables</li>
             <li>✓ <code>$_REQUEST</code> - Merged GET/POST</li>
+            <li>✓ <code>header()</code> - Custom headers & redirects</li>
             <li>✓ Static file serving</li>
         </ul>
     </div>

@@ -384,18 +384,74 @@ async fn execute_php_file(request: PhpRequest) -> Response<Full<Bytes>> {
     }
 }
 
-fn create_php_response(status: StatusCode, php_response: PhpResponse) -> Response<Full<Bytes>> {
+fn create_php_response(_default_status: StatusCode, php_response: PhpResponse) -> Response<Full<Bytes>> {
+    let mut status = StatusCode::OK;
+    let mut content_type = "text/html; charset=utf-8".to_string();
+    let mut custom_headers: Vec<(String, String)> = Vec::new();
+
+    // Process PHP headers
+    for (name, value) in &php_response.headers {
+        let name_lower = name.to_lowercase();
+
+        // Check for HTTP status line (e.g., "HTTP/1.1 302 Found")
+        if name_lower.starts_with("http/") {
+            // This is a status line, parse the status code
+            if let Some(code_str) = value.split_whitespace().next() {
+                if let Ok(code) = code_str.parse::<u16>() {
+                    // Skip 1xx informational status codes (not supported in HTTP/1.1 by hyper)
+                    if code >= 200 {
+                        if let Ok(s) = StatusCode::from_u16(code) {
+                            status = s;
+                        }
+                    } else {
+                        info!("Skipping unsupported 1xx status code: {}", code);
+                    }
+                }
+            }
+            continue;
+        }
+
+        match name_lower.as_str() {
+            "content-type" => {
+                content_type = value.clone();
+            }
+            "location" => {
+                // Redirect - set status to 302 if not already set to a 3xx
+                if !status.is_redirection() {
+                    status = StatusCode::FOUND;
+                }
+                custom_headers.push((name.clone(), value.clone()));
+            }
+            "status" => {
+                // CGI-style status header (e.g., "Status: 404 Not Found")
+                if let Some(code_str) = value.split_whitespace().next() {
+                    if let Ok(code) = code_str.parse::<u16>() {
+                        // Skip 1xx informational status codes (not supported in HTTP/1.1 by hyper)
+                        // This includes 100 Continue, 101 Switching Protocols, 102 Processing, 103 Early Hints
+                        if code >= 200 {
+                            if let Ok(s) = StatusCode::from_u16(code) {
+                                status = s;
+                            }
+                        } else {
+                            info!("Skipping unsupported 1xx status code: {}", code);
+                        }
+                    }
+                }
+            }
+            _ => {
+                custom_headers.push((name.clone(), value.clone()));
+            }
+        }
+    }
+
     let mut builder = Response::builder()
         .status(status)
-        .header("Content-Type", "text/html; charset=utf-8")
+        .header("Content-Type", content_type)
         .header("Server", "tokio_php/0.1.0");
 
-    // Add headers from PHP (including Set-Cookie for sessions)
-    for (name, value) in &php_response.headers {
-        // Skip Content-Type if already set, we handle it ourselves
-        if name.to_lowercase() != "content-type" {
-            builder = builder.header(name.as_str(), value.as_str());
-        }
+    // Add custom headers from PHP
+    for (name, value) in custom_headers {
+        builder = builder.header(name, value);
     }
 
     builder
