@@ -47,7 +47,7 @@ pub struct PhpRequest {
     pub post_params: HashMap<String, String>,
     pub cookies: HashMap<String, String>,
     pub server_vars: HashMap<String, String>,
-    pub files: HashMap<String, UploadedFile>,
+    pub files: HashMap<String, Vec<UploadedFile>>,
 }
 
 #[derive(Debug, Clone)]
@@ -187,25 +187,63 @@ impl PhpExecutor {
 
         // Build $_FILES
         code.push_str("$_FILES = [\n");
-        for (i, (field_name, file)) in request.files.iter().enumerate() {
+        for (i, (field_name, files_vec)) in request.files.iter().enumerate() {
             if i > 0 {
                 code.push_str(",\n");
             }
-            code.push_str(&format!(
-                "  '{}' => [\n\
-                 \x20   'name' => '{}',\n\
-                 \x20   'type' => '{}',\n\
-                 \x20   'tmp_name' => '{}',\n\
-                 \x20   'error' => {},\n\
-                 \x20   'size' => {}\n\
-                 \x20 ]",
-                Self::escape_php_string(field_name),
-                Self::escape_php_string(&file.name),
-                Self::escape_php_string(&file.mime_type),
-                Self::escape_php_string(&file.tmp_name),
-                file.error,
-                file.size
-            ));
+
+            if files_vec.len() == 1 {
+                // Single file - standard PHP format
+                let file = &files_vec[0];
+                code.push_str(&format!(
+                    "  '{}' => [\n\
+                     \x20   'name' => '{}',\n\
+                     \x20   'type' => '{}',\n\
+                     \x20   'tmp_name' => '{}',\n\
+                     \x20   'error' => {},\n\
+                     \x20   'size' => {}\n\
+                     \x20 ]",
+                    Self::escape_php_string(field_name),
+                    Self::escape_php_string(&file.name),
+                    Self::escape_php_string(&file.mime_type),
+                    Self::escape_php_string(&file.tmp_name),
+                    file.error,
+                    file.size
+                ));
+            } else {
+                // Multiple files - PHP array format
+                let names: Vec<String> = files_vec.iter()
+                    .map(|f| format!("'{}'", Self::escape_php_string(&f.name)))
+                    .collect();
+                let types: Vec<String> = files_vec.iter()
+                    .map(|f| format!("'{}'", Self::escape_php_string(&f.mime_type)))
+                    .collect();
+                let tmp_names: Vec<String> = files_vec.iter()
+                    .map(|f| format!("'{}'", Self::escape_php_string(&f.tmp_name)))
+                    .collect();
+                let errors: Vec<String> = files_vec.iter()
+                    .map(|f| f.error.to_string())
+                    .collect();
+                let sizes: Vec<String> = files_vec.iter()
+                    .map(|f| f.size.to_string())
+                    .collect();
+
+                code.push_str(&format!(
+                    "  '{}' => [\n\
+                     \x20   'name' => [{}],\n\
+                     \x20   'type' => [{}],\n\
+                     \x20   'tmp_name' => [{}],\n\
+                     \x20   'error' => [{}],\n\
+                     \x20   'size' => [{}]\n\
+                     \x20 ]",
+                    Self::escape_php_string(field_name),
+                    names.join(", "),
+                    types.join(", "),
+                    tmp_names.join(", "),
+                    errors.join(", "),
+                    sizes.join(", ")
+                ));
+            }
         }
         code.push_str("\n];\n");
 

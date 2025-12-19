@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::php::{PhpRequest, PhpResponse, PhpRuntime, UploadedFile};
 
 const DOCUMENT_ROOT: &str = "/var/www/html";
+const MAX_UPLOAD_SIZE: u64 = 10 * 1024 * 1024; // 10MB max file size
 
 pub struct Server {
     addr: SocketAddr,
@@ -133,7 +134,7 @@ fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
 async fn parse_multipart(
     content_type: &str,
     body: Bytes,
-) -> Result<(HashMap<String, String>, HashMap<String, UploadedFile>), String> {
+) -> Result<(HashMap<String, String>, HashMap<String, Vec<UploadedFile>>), String> {
     // Extract boundary from content-type header
     let boundary = content_type
         .split(';')
@@ -150,7 +151,7 @@ async fn parse_multipart(
     let mut multipart = Multipart::new(stream::once(async { Ok::<_, std::io::Error>(body) }), boundary);
 
     let mut params = HashMap::new();
-    let mut files = HashMap::new();
+    let mut files: HashMap<String, Vec<UploadedFile>> = HashMap::new();
 
     while let Some(field) = multipart.next_field().await.map_err(|e| e.to_string())? {
         let field_name = field.name().unwrap_or("").to_string();
@@ -167,6 +168,26 @@ async fn parse_multipart(
             let data = field.bytes().await.map_err(|e| e.to_string())?;
             let size = data.len() as u64;
 
+            // Normalize field name: "files[]" -> "files"
+            let normalized_name = if field_name.ends_with("[]") {
+                field_name[..field_name.len() - 2].to_string()
+            } else {
+                field_name
+            };
+
+            // Check file size limit
+            if size > MAX_UPLOAD_SIZE {
+                // UPLOAD_ERR_INI_SIZE = 1: file exceeds upload_max_filesize
+                files.entry(normalized_name).or_default().push(UploadedFile {
+                    name: original_name,
+                    mime_type: content_type,
+                    tmp_name: String::new(),
+                    size,
+                    error: 1,
+                });
+                continue;
+            }
+
             // Generate unique temp filename
             let tmp_name = format!("/tmp/php{}", Uuid::new_v4().to_string().replace("-", ""));
 
@@ -175,7 +196,7 @@ async fn parse_multipart(
             file.write_all(&data).await.map_err(|e| e.to_string())?;
             file.flush().await.map_err(|e| e.to_string())?;
 
-            files.insert(field_name, UploadedFile {
+            files.entry(normalized_name).or_default().push(UploadedFile {
                 name: original_name,
                 mime_type: content_type,
                 tmp_name,
@@ -302,6 +323,12 @@ async fn process_request(
         .unwrap_or("");
 
     if extension == "php" {
+        // Collect temp file paths for cleanup
+        let temp_files: Vec<String> = files.values()
+            .flat_map(|file_vec| file_vec.iter().map(|f| f.tmp_name.clone()))
+            .filter(|path| !path.is_empty())
+            .collect();
+
         let php_request = PhpRequest {
             script_path: file_path.to_string_lossy().to_string(),
             get_params,
@@ -310,7 +337,20 @@ async fn process_request(
             server_vars,
             files,
         };
-        execute_php_file(php_request).await
+        let response = execute_php_file(php_request).await;
+
+        // Clean up temp files after request completes
+        for temp_file in temp_files {
+            if let Err(e) = tokio::fs::remove_file(&temp_file).await {
+                // Only log if file exists but couldn't be deleted
+                // (PHP script might have moved/deleted it)
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    error!("Failed to clean up temp file {}: {}", temp_file, e);
+                }
+            }
+        }
+
+        response
     } else {
         serve_static_file(&file_path).await
     }

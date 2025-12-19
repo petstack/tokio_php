@@ -100,7 +100,7 @@ $description = htmlspecialchars($_POST['description'] ?? '');
     <?php endif; ?>
 
     <div class="info">
-        <h3>Upload a File</h3>
+        <h3>Upload Single File</h3>
         <form method="POST" enctype="multipart/form-data" action="/upload.php">
             <div class="form-group">
                 <label for="file">Select File:</label>
@@ -112,6 +112,18 @@ $description = htmlspecialchars($_POST['description'] ?? '');
             </div>
             <button type="submit">Upload File</button>
         </form>
+    </div>
+
+    <div class="info">
+        <h3>Upload Multiple Files</h3>
+        <form method="POST" enctype="multipart/form-data" action="/upload.php">
+            <div class="form-group">
+                <label for="files">Select Multiple Files:</label>
+                <input type="file" id="files" name="files[]" multiple>
+            </div>
+            <button type="submit">Upload Files</button>
+        </form>
+        <p style="color: #8892bf; margin-top: 10px;">Hold Ctrl/Cmd to select multiple files</p>
     </div>
 
     <?php if ($description): ?>
@@ -131,7 +143,10 @@ $description = htmlspecialchars($_POST['description'] ?? '');
 
     <div class="info">
         <h3>Test with curl</h3>
-        <pre>curl -F "file=@/path/to/file.txt" -F "description=Test upload" http://localhost:8080/upload.php</pre>
+        <p>Single file:</p>
+        <pre>curl -F "file=@/path/to/file.txt" -F "description=Test" http://localhost:8080/upload.php</pre>
+        <p>Multiple files:</p>
+        <pre>curl -F "files[]=@file1.txt" -F "files[]=@file2.txt" http://localhost:8080/upload.php</pre>
     </div>
 
     <p><a href="/">← Back to home</a></p>
