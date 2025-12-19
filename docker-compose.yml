@@ -1,0 +1,13 @@
+services:
+  tokio_php:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - LISTEN_ADDR=0.0.0.0:8080
+      - RUST_LOG=tokio_php=info
+    volumes:
+      - ./www:/var/www/html:ro
+    restart: unless-stopped
