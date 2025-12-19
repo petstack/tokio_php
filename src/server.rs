@@ -82,13 +82,7 @@ async fn handle_request(
     req: Request<IncomingBody>,
     remote_addr: SocketAddr,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    let method = req.method().clone();
-    let uri = req.uri().clone();
-    let uri_path = uri.path().to_string();
-
-    info!("{} {} - {}", method, uri_path, remote_addr);
-
-    let response = match method {
+    let response = match *req.method() {
         Method::GET | Method::POST => {
             process_request(req, remote_addr).await
         }
@@ -243,41 +237,43 @@ async fn process_request(
     req: Request<IncomingBody>,
     remote_addr: SocketAddr,
 ) -> Response<Full<Bytes>> {
+    // Extract all needed values before consuming req
     let method = req.method().clone();
-    let uri = req.uri().clone();
-    let uri_path = uri.path().to_string();
-    let content_type = req
+    let uri_path = req.uri().path().to_string();
+    let query_string = req.uri().query().unwrap_or("").to_string();
+    let uri_str = req.uri().to_string();
+    let content_type_str = req
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-
-    // Parse cookies from Cookie header
-    let cookie_header = req
+    let cookie_header_str = req
         .headers()
         .get("cookie")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let cookies = if cookie_header.is_empty() {
+
+    // Parse cookies
+    let cookies = if cookie_header_str.is_empty() {
         HashMap::new()
     } else {
-        parse_cookies(&cookie_header)
+        parse_cookies(&cookie_header_str)
     };
 
     // Parse query string for GET parameters
-    let get_params = uri
-        .query()
-        .map(|q| parse_query_string(q))
-        .unwrap_or_default();
+    let get_params = if query_string.is_empty() {
+        HashMap::new()
+    } else {
+        parse_query_string(&query_string)
+    };
 
     // Read and parse POST body
     let (post_params, files) = if method == Method::POST {
         let body_bytes = match req.collect().await {
             Ok(collected) => collected.to_bytes(),
-            Err(e) => {
-                error!("Failed to read request body: {}", e);
+            Err(_) => {
                 return create_response(
                     StatusCode::BAD_REQUEST,
                     "text/plain",
@@ -286,14 +282,13 @@ async fn process_request(
             }
         };
 
-        if content_type.starts_with("application/x-www-form-urlencoded") {
+        if content_type_str.starts_with("application/x-www-form-urlencoded") {
             let body_str = String::from_utf8_lossy(&body_bytes);
             (parse_form_urlencoded(&body_str), HashMap::new())
-        } else if content_type.starts_with("multipart/form-data") {
-            match parse_multipart(&content_type, body_bytes).await {
+        } else if content_type_str.starts_with("multipart/form-data") {
+            match parse_multipart(&content_type_str, body_bytes).await {
                 Ok((params, uploaded_files)) => (params, uploaded_files),
                 Err(e) => {
-                    error!("Failed to parse multipart: {}", e);
                     return create_response(
                         StatusCode::BAD_REQUEST,
                         "text/plain",
@@ -308,24 +303,23 @@ async fn process_request(
         (HashMap::new(), HashMap::new())
     };
 
-    // Build server variables
-    let mut server_vars = HashMap::new();
-    server_vars.insert("REQUEST_METHOD".to_string(), method.to_string());
-    server_vars.insert("REQUEST_URI".to_string(), uri.to_string());
-    server_vars.insert("QUERY_STRING".to_string(), uri.query().unwrap_or("").to_string());
-    server_vars.insert("REMOTE_ADDR".to_string(), remote_addr.ip().to_string());
-    server_vars.insert("REMOTE_PORT".to_string(), remote_addr.port().to_string());
-    server_vars.insert("SERVER_SOFTWARE".to_string(), "tokio_php/0.1.0".to_string());
-    server_vars.insert("SERVER_PROTOCOL".to_string(), "HTTP/1.1".to_string());
-    server_vars.insert("CONTENT_TYPE".to_string(), content_type);
-    if !cookie_header.is_empty() {
-        server_vars.insert("HTTP_COOKIE".to_string(), cookie_header.clone());
+    // Build server variables with capacity hint
+    let mut server_vars = HashMap::with_capacity(9);
+    server_vars.insert("REQUEST_METHOD".into(), method.to_string());
+    server_vars.insert("REQUEST_URI".into(), uri_str);
+    server_vars.insert("QUERY_STRING".into(), query_string);
+    server_vars.insert("REMOTE_ADDR".into(), remote_addr.ip().to_string());
+    server_vars.insert("REMOTE_PORT".into(), remote_addr.port().to_string());
+    server_vars.insert("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into());
+    server_vars.insert("SERVER_PROTOCOL".into(), "HTTP/1.1".into());
+    server_vars.insert("CONTENT_TYPE".into(), content_type_str);
+    if !cookie_header_str.is_empty() {
+        server_vars.insert("HTTP_COOKIE".into(), cookie_header_str);
     }
 
     // Decode URL path
     let decoded_path = percent_encoding::percent_decode_str(&uri_path)
-        .decode_utf8_lossy()
-        .to_string();
+        .decode_utf8_lossy();
 
     // Sanitize path to prevent directory traversal
     let clean_path = decoded_path
@@ -338,15 +332,15 @@ async fn process_request(
         PathBuf::from(DOCUMENT_ROOT).join(&clean_path)
     };
 
-    // Check if file exists
-    if !file_path.exists() {
-        return create_response(StatusCode::NOT_FOUND, "text/html", "404 Not Found");
-    }
-
-    // Check file extension
+    // Check file extension first (fast path)
     let extension = file_path.extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
+
+    // Check if file exists (async)
+    if tokio::fs::metadata(&file_path).await.is_err() {
+        return create_response(StatusCode::NOT_FOUND, "text/html", "404 Not Found");
+    }
 
     if extension == "php" {
         // Collect temp file paths for cleanup

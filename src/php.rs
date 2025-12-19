@@ -8,11 +8,13 @@ use std::ffi::CString;
 use std::io::{Read, Write};
 use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::io::FromRawFd;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::{UnixListener, UnixStream as StdUnixStream};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
 
 
 #[link(name = "php")]
@@ -142,7 +144,7 @@ impl PhpWorkerPool {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
-                    let _ = Self::handle_request(&mut stream);
+                    let _ = Self::handle_worker_request(&mut stream);
                 }
                 Err(e) => {
                     eprintln!("Worker {}: Accept error: {}", id, e);
@@ -155,7 +157,7 @@ impl PhpWorkerPool {
         }
     }
 
-    fn handle_request(stream: &mut UnixStream) -> Result<(), String> {
+    fn handle_worker_request(stream: &mut StdUnixStream) -> Result<(), String> {
         // Read request length (4 bytes, big-endian)
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
@@ -235,14 +237,12 @@ impl PhpWorkerPool {
 
             zend_destroy_file_handle(&mut file_handle);
 
-            // Flush output buffer and capture headers
+            // Flush output buffer and capture headers (optimized)
             let capture_code = CString::new(format!(
-                "ob_end_flush();\n\
-                 if (session_status() === PHP_SESSION_ACTIVE) session_write_close();\n\
-                 echo \"{}\";\n\
-                 $__c = http_response_code();\n\
-                 if ($__c && $__c !== 200) echo \"Status: $__c\\n\";\n\
-                 foreach (headers_list() as $h) echo $h . \"\\n\";",
+                "while(ob_get_level())ob_end_flush();\n\
+                 echo\"{}\";\n\
+                 if(($__c=http_response_code())&&$__c!=200)echo\"Status:$__c\\n\";\n\
+                 foreach(headers_list()as$h)echo$h.\"\\n\";",
                 Self::HEADER_DELIMITER
             )).unwrap();
             let name = CString::new("finalize").unwrap();
@@ -394,38 +394,27 @@ impl PhpWorkerPool {
     pub async fn execute_request(&self, request: PhpRequest) -> Result<PhpResponse, String> {
         // Round-robin worker selection
         let worker_idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        let socket_path = self.workers[worker_idx].socket_path.clone();
+        let socket_path = &self.workers[worker_idx].socket_path;
 
-        // Execute in blocking task
-        tokio::task::spawn_blocking(move || {
-            Self::send_request(&socket_path, &request)
-        })
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-    }
-
-    fn send_request(socket_path: &PathBuf, request: &PhpRequest) -> Result<PhpResponse, String> {
+        // Connect using async tokio UnixStream
         let mut stream = UnixStream::connect(socket_path)
-            .map_err(|e| format!("Failed to connect: {}", e))?;
+            .await
+            .map_err(|e| format!("Failed to connect to worker {}: {}", worker_idx, e))?;
 
-        Self::send_on_stream(&mut stream, request)
-    }
-
-    fn send_on_stream(stream: &mut UnixStream, request: &PhpRequest) -> Result<PhpResponse, String> {
         // Send request (bincode)
-        let request_bytes = bincode::serialize(request).map_err(|e| e.to_string())?;
+        let request_bytes = bincode::serialize(&request).map_err(|e| e.to_string())?;
         let len_bytes = (request_bytes.len() as u32).to_be_bytes();
-        stream.write_all(&len_bytes).map_err(|e| e.to_string())?;
-        stream.write_all(&request_bytes).map_err(|e| e.to_string())?;
+        stream.write_all(&len_bytes).await.map_err(|e| e.to_string())?;
+        stream.write_all(&request_bytes).await.map_err(|e| e.to_string())?;
 
         // Read response length
         let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+        stream.read_exact(&mut len_buf).await.map_err(|e| e.to_string())?;
         let len = u32::from_be_bytes(len_buf) as usize;
 
         // Read response
         let mut response_buf = vec![0u8; len];
-        stream.read_exact(&mut response_buf).map_err(|e| e.to_string())?;
+        stream.read_exact(&mut response_buf).await.map_err(|e| e.to_string())?;
 
         bincode::deserialize(&response_buf).map_err(|e| e.to_string())
     }
