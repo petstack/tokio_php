@@ -56,7 +56,8 @@ RUN apk add --no-cache \
     php84-pdo_pgsql \
     php84-pdo_sqlite \
     libgcc \
-    && ln -sf /usr/lib/php84/libphp.so /usr/lib/libphp.so
+    && ln -sf /usr/lib/php84/libphp.so /usr/lib/libphp.so \
+    && mkdir -p /tmp
 
 # Create app directory
 WORKDIR /app

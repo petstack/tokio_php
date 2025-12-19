@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
-use crate::php::{PhpRequest, PhpRuntime};
+use crate::php::{PhpRequest, PhpResponse, PhpRuntime};
 
 const DOCUMENT_ROOT: &str = "/var/www/html";
 
@@ -242,8 +242,8 @@ async fn execute_php_file(request: PhpRequest) -> Response<Full<Bytes>> {
     }).await;
 
     match result {
-        Ok(Ok(output)) => {
-            create_response(StatusCode::OK, "text/html; charset=utf-8", &output)
+        Ok(Ok(response)) => {
+            create_php_response(StatusCode::OK, response)
         }
         Ok(Err(e)) => {
             error!("PHP execution error: {}", e);
@@ -262,6 +262,25 @@ async fn execute_php_file(request: PhpRequest) -> Response<Full<Bytes>> {
             )
         }
     }
+}
+
+fn create_php_response(status: StatusCode, php_response: PhpResponse) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder()
+        .status(status)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .header("Server", "tokio_php/0.1.0");
+
+    // Add headers from PHP (including Set-Cookie for sessions)
+    for (name, value) in &php_response.headers {
+        // Skip Content-Type if already set, we handle it ourselves
+        if name.to_lowercase() != "content-type" {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+    }
+
+    builder
+        .body(Full::new(Bytes::from(php_response.body)))
+        .unwrap()
 }
 
 async fn serve_static_file(file_path: &Path) -> Response<Full<Bytes>> {

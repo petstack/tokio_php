@@ -40,8 +40,14 @@ pub struct PhpRequest {
     pub server_vars: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PhpResponse {
+    pub body: String,
+    pub headers: Vec<(String, String)>,
+}
+
 enum PhpCommand {
-    ExecuteRequest(PhpRequest, mpsc::Sender<Result<String, String>>),
+    ExecuteRequest(PhpRequest, mpsc::Sender<Result<PhpResponse, String>>),
     Shutdown,
 }
 
@@ -107,6 +113,9 @@ impl PhpExecutor {
     fn build_superglobals_code(request: &PhpRequest) -> String {
         let mut code = String::new();
 
+        // Start output buffering at the very beginning
+        code.push_str("if (!ob_get_level()) ob_start();\n");
+
         // Build $_GET
         code.push_str("$_GET = [");
         for (i, (key, value)) in request.get_params.iter().enumerate() {
@@ -169,8 +178,22 @@ impl PhpExecutor {
         code
     }
 
-    fn do_execute_request(request: &PhpRequest) -> Result<String, String> {
-        // Create pipe for stdout capture
+    fn do_execute_request(request: &PhpRequest) -> Result<PhpResponse, String> {
+        // First, run superglobals setup WITHOUT stdout redirection
+        // This allows ini_set and ob_start to work properly
+        unsafe {
+            let superglobals_code = Self::build_superglobals_code(request);
+            let code_c = CString::new(superglobals_code).map_err(|e| e.to_string())?;
+            let name_c = CString::new("superglobals_init").unwrap();
+
+            zend_eval_string(
+                code_c.as_ptr() as *mut c_char,
+                ptr::null_mut(),
+                name_c.as_ptr() as *mut c_char,
+            );
+        }
+
+        // Now create pipe for stdout capture
         let mut pipe_fds: [c_int; 2] = [0, 0];
         if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
             return Err("Failed to create pipe".to_string());
@@ -197,20 +220,8 @@ impl PhpExecutor {
             return Err("Failed to redirect stdout".to_string());
         }
 
-        // Execute superglobals setup and then the script
+        // Execute the script
         unsafe {
-            // First, inject superglobals
-            let superglobals_code = Self::build_superglobals_code(request);
-            let code_c = CString::new(superglobals_code).map_err(|e| e.to_string())?;
-            let name_c = CString::new("superglobals_init").unwrap();
-
-            zend_eval_string(
-                code_c.as_ptr() as *mut c_char,
-                ptr::null_mut(),
-                name_c.as_ptr() as *mut c_char,
-            );
-
-            // Now execute the actual script
             let path_c = CString::new(request.script_path.as_str()).map_err(|e| e.to_string())?;
 
             let mut file_handle: ZendFileHandle = std::mem::zeroed();
@@ -219,6 +230,31 @@ impl PhpExecutor {
             php_execute_simple_script(&mut file_handle, ptr::null_mut());
 
             zend_destroy_file_handle(&mut file_handle);
+
+            // Flush output buffer
+            let flush_ob = CString::new("ob_end_flush();").unwrap();
+            let name = CString::new("ob_flush").unwrap();
+            zend_eval_string(
+                flush_ob.as_ptr() as *mut c_char,
+                ptr::null_mut(),
+                name.as_ptr() as *mut c_char,
+            );
+        }
+
+        // Capture headers before restoring stdout
+        let headers = unsafe { Self::capture_headers() };
+
+        // Close session to ensure data is written
+        unsafe {
+            let close_session = CString::new(
+                "if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }"
+            ).unwrap();
+            let name = CString::new("session_close").unwrap();
+            zend_eval_string(
+                close_session.as_ptr() as *mut c_char,
+                ptr::null_mut(),
+                name.as_ptr() as *mut c_char,
+            );
         }
 
         // Flush and restore stdout
@@ -238,10 +274,69 @@ impl PhpExecutor {
             return Err("PHP script produced no output".to_string());
         }
 
-        Ok(output)
+        Ok(PhpResponse {
+            body: output,
+            headers,
+        })
     }
 
-    fn execute_request(&self, request: PhpRequest) -> Result<String, String> {
+    unsafe fn capture_headers() -> Vec<(String, String)> {
+        // Use a pipe to capture the output of headers_list()
+        let mut pipe_fds: [c_int; 2] = [0, 0];
+        if libc::pipe(pipe_fds.as_mut_ptr()) != 0 {
+            return Vec::new();
+        }
+
+        let read_fd = pipe_fds[0];
+        let write_fd = pipe_fds[1];
+
+        let original_stdout = libc::dup(1);
+        if original_stdout < 0 {
+            libc::close(read_fd);
+            libc::close(write_fd);
+            return Vec::new();
+        }
+
+        if libc::dup2(write_fd, 1) < 0 {
+            libc::close(read_fd);
+            libc::close(write_fd);
+            libc::close(original_stdout);
+            return Vec::new();
+        }
+
+        // Get headers using PHP's headers_list() and print them
+        let code = CString::new(
+            "foreach (headers_list() as $h) { echo $h . \"\\n\"; }"
+        ).unwrap();
+        let name = CString::new("get_headers").unwrap();
+        zend_eval_string(
+            code.as_ptr() as *mut c_char,
+            ptr::null_mut(),
+            name.as_ptr() as *mut c_char,
+        );
+
+        libc::fflush(ptr::null_mut());
+        libc::close(write_fd);
+        libc::dup2(original_stdout, 1);
+        libc::close(original_stdout);
+
+        // Read the headers output
+        let mut headers_output = String::new();
+        let mut read_file = std::fs::File::from_raw_fd(read_fd);
+        let _ = read_file.read_to_string(&mut headers_output);
+
+        // Parse headers
+        let mut headers = Vec::new();
+        for line in headers_output.lines() {
+            if let Some((name, value)) = line.split_once(':') {
+                headers.push((name.trim().to_string(), value.trim().to_string()));
+            }
+        }
+
+        headers
+    }
+
+    fn execute_request(&self, request: PhpRequest) -> Result<PhpResponse, String> {
         let (tx, rx) = mpsc::channel();
         self.sender
             .send(PhpCommand::ExecuteRequest(request, tx))
@@ -270,7 +365,7 @@ impl PhpRuntime {
         }
     }
 
-    pub fn execute_request(request: PhpRequest) -> Result<String, String> {
+    pub fn execute_request(request: PhpRequest) -> Result<PhpResponse, String> {
         let executor = PHP_EXECUTOR
             .get()
             .ok_or("PHP runtime not initialized")?;
@@ -279,7 +374,7 @@ impl PhpRuntime {
     }
 
     #[allow(dead_code)]
-    pub fn execute_file(file_path: &str) -> Result<String, String> {
+    pub fn execute_file(file_path: &str) -> Result<PhpResponse, String> {
         Self::execute_request(PhpRequest {
             script_path: file_path.to_string(),
             get_params: HashMap::new(),
