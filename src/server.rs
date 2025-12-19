@@ -1,17 +1,22 @@
 use bytes::Bytes;
+use futures_util::stream;
 use http_body_util::{BodyExt, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode, Method};
 use hyper_util::rt::TokioIo;
+use multer::Multipart;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tracing::{error, info};
+use uuid::Uuid;
 
-use crate::php::{PhpRequest, PhpResponse, PhpRuntime};
+use crate::php::{PhpRequest, PhpResponse, PhpRuntime, UploadedFile};
 
 const DOCUMENT_ROOT: &str = "/var/www/html";
 
@@ -125,6 +130,68 @@ fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
     cookies
 }
 
+async fn parse_multipart(
+    content_type: &str,
+    body: Bytes,
+) -> Result<(HashMap<String, String>, HashMap<String, UploadedFile>), String> {
+    // Extract boundary from content-type header
+    let boundary = content_type
+        .split(';')
+        .find_map(|part| {
+            let part = part.trim();
+            if part.starts_with("boundary=") {
+                Some(part[9..].trim_matches('"').to_string())
+            } else {
+                None
+            }
+        })
+        .ok_or("Missing boundary in multipart content-type")?;
+
+    let mut multipart = Multipart::new(stream::once(async { Ok::<_, std::io::Error>(body) }), boundary);
+
+    let mut params = HashMap::new();
+    let mut files = HashMap::new();
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| e.to_string())? {
+        let field_name = field.name().unwrap_or("").to_string();
+        let file_name = field.file_name().map(|s| s.to_string());
+        let content_type = field.content_type().map(|m| m.to_string()).unwrap_or_default();
+
+        if let Some(original_name) = file_name {
+            // This is a file upload
+            if original_name.is_empty() {
+                // Empty file field, skip
+                continue;
+            }
+
+            let data = field.bytes().await.map_err(|e| e.to_string())?;
+            let size = data.len() as u64;
+
+            // Generate unique temp filename
+            let tmp_name = format!("/tmp/php{}", Uuid::new_v4().to_string().replace("-", ""));
+
+            // Write file to temp location
+            let mut file = File::create(&tmp_name).await.map_err(|e| e.to_string())?;
+            file.write_all(&data).await.map_err(|e| e.to_string())?;
+            file.flush().await.map_err(|e| e.to_string())?;
+
+            files.insert(field_name, UploadedFile {
+                name: original_name,
+                mime_type: content_type,
+                tmp_name,
+                size,
+                error: 0, // UPLOAD_ERR_OK
+            });
+        } else {
+            // This is a regular form field
+            let value = field.text().await.map_err(|e| e.to_string())?;
+            params.insert(field_name, value);
+        }
+    }
+
+    Ok((params, files))
+}
+
 async fn process_request(
     req: Request<IncomingBody>,
     remote_addr: SocketAddr,
@@ -159,7 +226,7 @@ async fn process_request(
         .unwrap_or_default();
 
     // Read and parse POST body
-    let post_params = if method == Method::POST {
+    let (post_params, files) = if method == Method::POST {
         let body_bytes = match req.collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(e) => {
@@ -174,12 +241,24 @@ async fn process_request(
 
         if content_type.starts_with("application/x-www-form-urlencoded") {
             let body_str = String::from_utf8_lossy(&body_bytes);
-            parse_form_urlencoded(&body_str)
+            (parse_form_urlencoded(&body_str), HashMap::new())
+        } else if content_type.starts_with("multipart/form-data") {
+            match parse_multipart(&content_type, body_bytes).await {
+                Ok((params, uploaded_files)) => (params, uploaded_files),
+                Err(e) => {
+                    error!("Failed to parse multipart: {}", e);
+                    return create_response(
+                        StatusCode::BAD_REQUEST,
+                        "text/plain",
+                        &format!("Failed to parse multipart form: {}", e),
+                    );
+                }
+            }
         } else {
-            HashMap::new()
+            (HashMap::new(), HashMap::new())
         }
     } else {
-        HashMap::new()
+        (HashMap::new(), HashMap::new())
     };
 
     // Build server variables
@@ -229,6 +308,7 @@ async fn process_request(
             post_params,
             cookies,
             server_vars,
+            files,
         };
         execute_php_file(php_request).await
     } else {

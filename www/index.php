@@ -47,6 +47,7 @@
             <li><a href="/form.php">Form Example (POST)</a> - Test $_POST parameters</li>
             <li><a href="/cookie.php">Cookie Example</a> - Test $_COOKIE parameters</li>
             <li><a href="/session.php">Session Example</a> - Test $_SESSION with visit counter</li>
+            <li><a href="/upload.php">Upload Example</a> - Test $_FILES file uploads</li>
         </ul>
     </div>
 
@@ -57,6 +58,7 @@
             <li>✓ <code>$_POST</code> - Form POST data</li>
             <li>✓ <code>$_COOKIE</code> - HTTP cookies</li>
             <li>✓ <code>$_SESSION</code> - PHP sessions</li>
+            <li>✓ <code>$_FILES</code> - File uploads</li>
             <li>✓ <code>$_SERVER</code> - Server variables</li>
             <li>✓ <code>$_REQUEST</code> - Merged GET/POST</li>
             <li>✓ Static file serving</li>

@@ -32,12 +32,22 @@ static PHP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static PHP_EXECUTOR: OnceCell<PhpExecutor> = OnceCell::new();
 
 #[derive(Debug, Clone)]
+pub struct UploadedFile {
+    pub name: String,      // Original filename
+    pub mime_type: String, // MIME type
+    pub tmp_name: String,  // Temporary file path
+    pub size: u64,         // File size in bytes
+    pub error: u8,         // Upload error code (0 = success)
+}
+
+#[derive(Debug, Clone)]
 pub struct PhpRequest {
     pub script_path: String,
     pub get_params: HashMap<String, String>,
     pub post_params: HashMap<String, String>,
     pub cookies: HashMap<String, String>,
     pub server_vars: HashMap<String, String>,
+    pub files: HashMap<String, UploadedFile>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +184,30 @@ impl PhpExecutor {
 
         // Build $_REQUEST (merge of GET and POST, POST takes precedence)
         code.push_str("$_REQUEST = array_merge($_GET, $_POST);\n");
+
+        // Build $_FILES
+        code.push_str("$_FILES = [\n");
+        for (i, (field_name, file)) in request.files.iter().enumerate() {
+            if i > 0 {
+                code.push_str(",\n");
+            }
+            code.push_str(&format!(
+                "  '{}' => [\n\
+                 \x20   'name' => '{}',\n\
+                 \x20   'type' => '{}',\n\
+                 \x20   'tmp_name' => '{}',\n\
+                 \x20   'error' => {},\n\
+                 \x20   'size' => {}\n\
+                 \x20 ]",
+                Self::escape_php_string(field_name),
+                Self::escape_php_string(&file.name),
+                Self::escape_php_string(&file.mime_type),
+                Self::escape_php_string(&file.tmp_name),
+                file.error,
+                file.size
+            ));
+        }
+        code.push_str("\n];\n");
 
         code
     }
@@ -381,6 +415,7 @@ impl PhpRuntime {
             post_params: HashMap::new(),
             cookies: HashMap::new(),
             server_vars: HashMap::new(),
+            files: HashMap::new(),
         })
     }
 }
