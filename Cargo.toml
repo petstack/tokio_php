@@ -19,6 +19,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 multer = "3"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
+socket2 = "0.5"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+nix = { version = "0.29", features = ["process", "signal"] }
+num_cpus = "1"
 
 [build-dependencies]
 cc = "1"

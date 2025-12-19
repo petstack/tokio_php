@@ -21,11 +21,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     info!("Starting tokio_php server...");
 
-    // Initialize PHP runtime
+    // Initialize PHP runtime with worker pool
+    let num_workers = num_cpus::get();
+    info!("Initializing PHP worker pool with {} workers...", num_workers);
+
     PhpRuntime::init().map_err(|e| {
         eprintln!("Failed to initialize PHP: {}", e);
         e
     })?;
+
+    info!("PHP worker pool ready ({} workers)", PhpRuntime::worker_count());
 
     // Configure server address
     let addr: SocketAddr = std::env::var("LISTEN_ADDR")

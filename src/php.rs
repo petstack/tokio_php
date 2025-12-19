@@ -1,13 +1,18 @@
+use nix::sys::signal::{self, Signal};
+use nix::sys::wait::waitpid;
+use nix::unistd::{fork, ForkResult, Pid};
 use once_cell::sync::OnceCell;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::io::FromRawFd;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::thread;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 #[link(name = "php")]
 extern "C" {
@@ -28,19 +33,18 @@ pub struct ZendFileHandle {
     _data: [u8; 128],
 }
 
-static PHP_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static PHP_EXECUTOR: OnceCell<PhpExecutor> = OnceCell::new();
+static PHP_WORKER_POOL: OnceCell<Arc<PhpWorkerPool>> = OnceCell::new();
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadedFile {
-    pub name: String,      // Original filename
-    pub mime_type: String, // MIME type
-    pub tmp_name: String,  // Temporary file path
-    pub size: u64,         // File size in bytes
-    pub error: u8,         // Upload error code (0 = success)
+    pub name: String,
+    pub mime_type: String,
+    pub tmp_name: String,
+    pub size: u64,
+    pub error: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhpRequest {
     pub script_path: String,
     pub get_params: HashMap<String, String>,
@@ -50,59 +54,97 @@ pub struct PhpRequest {
     pub files: HashMap<String, Vec<UploadedFile>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhpResponse {
     pub body: String,
     pub headers: Vec<(String, String)>,
 }
 
-enum PhpCommand {
-    ExecuteRequest(PhpRequest, mpsc::Sender<Result<PhpResponse, String>>),
-    Shutdown,
+struct PhpWorker {
+    pid: Pid,
+    socket_path: PathBuf,
 }
 
-struct PhpExecutor {
-    sender: mpsc::Sender<PhpCommand>,
+pub struct PhpWorkerPool {
+    workers: Vec<PhpWorker>,
+    next_worker: AtomicUsize,
 }
 
-impl PhpExecutor {
-    fn new() -> Result<Self, String> {
-        let (tx, rx) = mpsc::channel::<PhpCommand>();
+impl PhpWorkerPool {
+    pub fn new(num_workers: usize) -> Result<Arc<Self>, String> {
+        let mut workers = Vec::with_capacity(num_workers);
 
-        thread::Builder::new()
-            .name("php-executor".to_string())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                Self::php_thread(rx);
-            })
-            .map_err(|e| format!("Failed to spawn PHP thread: {}", e))?;
+        for i in 0..num_workers {
+            let socket_path = PathBuf::from(format!("/tmp/php_worker_{}.sock", i));
 
-        Ok(PhpExecutor { sender: tx })
+            // Remove old socket if exists
+            let _ = std::fs::remove_file(&socket_path);
+
+            match unsafe { fork() } {
+                Ok(ForkResult::Parent { child }) => {
+                    // Parent process - wait for socket to be ready
+                    for _ in 0..100 {
+                        if socket_path.exists() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+
+                    workers.push(PhpWorker {
+                        pid: child,
+                        socket_path,
+                    });
+                    tracing::info!("Spawned PHP worker {} (PID: {})", i, child);
+                }
+                Ok(ForkResult::Child) => {
+                    // Child process - become PHP worker
+                    Self::run_worker(i, &socket_path);
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    return Err(format!("Fork failed: {}", e));
+                }
+            }
+        }
+
+        Ok(Arc::new(PhpWorkerPool {
+            workers,
+            next_worker: AtomicUsize::new(0),
+        }))
     }
 
-    fn php_thread(rx: mpsc::Receiver<PhpCommand>) {
+    fn run_worker(id: usize, socket_path: &PathBuf) {
+        // Initialize PHP in this process
         unsafe {
-            let program_name = CString::new("tokio_php").unwrap();
+            let program_name = CString::new("tokio_php_worker").unwrap();
             let mut argv: [*mut c_char; 2] = [program_name.as_ptr() as *mut c_char, ptr::null_mut()];
 
             let result = php_embed_init(1, argv.as_mut_ptr());
             if result != 0 {
-                tracing::error!("Failed to initialize PHP embed: {}", result);
+                eprintln!("Worker {}: Failed to initialize PHP embed: {}", id, result);
                 return;
             }
         }
 
-        PHP_INITIALIZED.store(true, Ordering::SeqCst);
-        tracing::info!("PHP runtime initialized");
+        // Create Unix socket listener
+        let listener = match UnixListener::bind(socket_path) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("Worker {}: Failed to bind socket: {}", id, e);
+                return;
+            }
+        };
 
-        while let Ok(cmd) = rx.recv() {
-            match cmd {
-                PhpCommand::ExecuteRequest(request, response_tx) => {
-                    let result = Self::do_execute_request(&request);
-                    let _ = response_tx.send(result);
+        eprintln!("Worker {}: PHP initialized, listening on {:?}", id, socket_path);
+
+        // Accept and handle connections (one request per connection)
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    let _ = Self::handle_request(&mut stream);
                 }
-                PhpCommand::Shutdown => {
-                    break;
+                Err(e) => {
+                    eprintln!("Worker {}: Accept error: {}", id, e);
                 }
             }
         }
@@ -110,155 +152,40 @@ impl PhpExecutor {
         unsafe {
             php_embed_shutdown();
         }
-        PHP_INITIALIZED.store(false, Ordering::SeqCst);
-        tracing::info!("PHP runtime shut down");
     }
 
-    fn escape_php_string(s: &str) -> String {
-        s.replace('\\', "\\\\")
-            .replace('\'', "\\'")
-            .replace('\0', "")
+    fn handle_request(stream: &mut UnixStream) -> Result<(), String> {
+        // Read request length (4 bytes, big-endian)
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+
+        // Read request (bincode)
+        let mut request_buf = vec![0u8; len];
+        stream.read_exact(&mut request_buf).map_err(|e| e.to_string())?;
+
+        let request: PhpRequest = bincode::deserialize(&request_buf)
+            .map_err(|e| e.to_string())?;
+
+        // Execute PHP
+        let response = Self::execute_php(&request)?;
+
+        // Send response (bincode)
+        let response_bytes = bincode::serialize(&response).map_err(|e| e.to_string())?;
+        let len_bytes = (response_bytes.len() as u32).to_be_bytes();
+        stream.write_all(&len_bytes).map_err(|e| e.to_string())?;
+        stream.write_all(&response_bytes).map_err(|e| e.to_string())?;
+
+        Ok(())
     }
 
-    fn build_superglobals_code(request: &PhpRequest) -> String {
-        let mut code = String::new();
+    const HEADER_DELIMITER: &'static str = "\n---@TOKIO_PHP_HDR@---\n";
 
-        // Clear headers from previous requests and reset response code
-        code.push_str("header_remove();\n");
-        code.push_str("http_response_code(200);\n");
+    fn execute_php(request: &PhpRequest) -> Result<PhpResponse, String> {
+        // Build superglobals code
+        let superglobals_code = Self::build_superglobals_code(request);
 
-        // Start output buffering at the very beginning
-        code.push_str("if (!ob_get_level()) ob_start();\n");
-
-        // Build $_GET
-        code.push_str("$_GET = [");
-        for (i, (key, value)) in request.get_params.iter().enumerate() {
-            if i > 0 {
-                code.push_str(", ");
-            }
-            code.push_str(&format!(
-                "'{}' => '{}'",
-                Self::escape_php_string(key),
-                Self::escape_php_string(value)
-            ));
-        }
-        code.push_str("];\n");
-
-        // Build $_POST
-        code.push_str("$_POST = [");
-        for (i, (key, value)) in request.post_params.iter().enumerate() {
-            if i > 0 {
-                code.push_str(", ");
-            }
-            code.push_str(&format!(
-                "'{}' => '{}'",
-                Self::escape_php_string(key),
-                Self::escape_php_string(value)
-            ));
-        }
-        code.push_str("];\n");
-
-        // Build $_SERVER
-        code.push_str("$_SERVER = array_merge($_SERVER ?? [], [");
-        for (i, (key, value)) in request.server_vars.iter().enumerate() {
-            if i > 0 {
-                code.push_str(", ");
-            }
-            code.push_str(&format!(
-                "'{}' => '{}'",
-                Self::escape_php_string(key),
-                Self::escape_php_string(value)
-            ));
-        }
-        code.push_str("]);\n");
-
-        // Build $_COOKIE
-        code.push_str("$_COOKIE = [");
-        for (i, (key, value)) in request.cookies.iter().enumerate() {
-            if i > 0 {
-                code.push_str(", ");
-            }
-            code.push_str(&format!(
-                "'{}' => '{}'",
-                Self::escape_php_string(key),
-                Self::escape_php_string(value)
-            ));
-        }
-        code.push_str("];\n");
-
-        // Build $_REQUEST (merge of GET and POST, POST takes precedence)
-        code.push_str("$_REQUEST = array_merge($_GET, $_POST);\n");
-
-        // Build $_FILES
-        code.push_str("$_FILES = [\n");
-        for (i, (field_name, files_vec)) in request.files.iter().enumerate() {
-            if i > 0 {
-                code.push_str(",\n");
-            }
-
-            if files_vec.len() == 1 {
-                // Single file - standard PHP format
-                let file = &files_vec[0];
-                code.push_str(&format!(
-                    "  '{}' => [\n\
-                     \x20   'name' => '{}',\n\
-                     \x20   'type' => '{}',\n\
-                     \x20   'tmp_name' => '{}',\n\
-                     \x20   'error' => {},\n\
-                     \x20   'size' => {}\n\
-                     \x20 ]",
-                    Self::escape_php_string(field_name),
-                    Self::escape_php_string(&file.name),
-                    Self::escape_php_string(&file.mime_type),
-                    Self::escape_php_string(&file.tmp_name),
-                    file.error,
-                    file.size
-                ));
-            } else {
-                // Multiple files - PHP array format
-                let names: Vec<String> = files_vec.iter()
-                    .map(|f| format!("'{}'", Self::escape_php_string(&f.name)))
-                    .collect();
-                let types: Vec<String> = files_vec.iter()
-                    .map(|f| format!("'{}'", Self::escape_php_string(&f.mime_type)))
-                    .collect();
-                let tmp_names: Vec<String> = files_vec.iter()
-                    .map(|f| format!("'{}'", Self::escape_php_string(&f.tmp_name)))
-                    .collect();
-                let errors: Vec<String> = files_vec.iter()
-                    .map(|f| f.error.to_string())
-                    .collect();
-                let sizes: Vec<String> = files_vec.iter()
-                    .map(|f| f.size.to_string())
-                    .collect();
-
-                code.push_str(&format!(
-                    "  '{}' => [\n\
-                     \x20   'name' => [{}],\n\
-                     \x20   'type' => [{}],\n\
-                     \x20   'tmp_name' => [{}],\n\
-                     \x20   'error' => [{}],\n\
-                     \x20   'size' => [{}]\n\
-                     \x20 ]",
-                    Self::escape_php_string(field_name),
-                    names.join(", "),
-                    types.join(", "),
-                    tmp_names.join(", "),
-                    errors.join(", "),
-                    sizes.join(", ")
-                ));
-            }
-        }
-        code.push_str("\n];\n");
-
-        code
-    }
-
-    fn do_execute_request(request: &PhpRequest) -> Result<PhpResponse, String> {
-        // First, run superglobals setup WITHOUT stdout redirection
-        // This allows ini_set and ob_start to work properly
         unsafe {
-            let superglobals_code = Self::build_superglobals_code(request);
             let code_c = CString::new(superglobals_code).map_err(|e| e.to_string())?;
             let name_c = CString::new("superglobals_init").unwrap();
 
@@ -269,7 +196,7 @@ impl PhpExecutor {
             );
         }
 
-        // Now create pipe for stdout capture
+        // Create pipe for stdout capture
         let mut pipe_fds: [c_int; 2] = [0, 0];
         if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
             return Err("Failed to create pipe".to_string());
@@ -307,27 +234,19 @@ impl PhpExecutor {
 
             zend_destroy_file_handle(&mut file_handle);
 
-            // Flush output buffer
-            let flush_ob = CString::new("ob_end_flush();").unwrap();
-            let name = CString::new("ob_flush").unwrap();
+            // Flush output buffer and capture headers
+            let capture_code = CString::new(format!(
+                "ob_end_flush();\n\
+                 if (session_status() === PHP_SESSION_ACTIVE) session_write_close();\n\
+                 echo \"{}\";\n\
+                 $__c = http_response_code();\n\
+                 if ($__c && $__c !== 200) echo \"Status: $__c\\n\";\n\
+                 foreach (headers_list() as $h) echo $h . \"\\n\";",
+                Self::HEADER_DELIMITER
+            )).unwrap();
+            let name = CString::new("finalize").unwrap();
             zend_eval_string(
-                flush_ob.as_ptr() as *mut c_char,
-                ptr::null_mut(),
-                name.as_ptr() as *mut c_char,
-            );
-        }
-
-        // Capture headers before restoring stdout
-        let headers = unsafe { Self::capture_headers() };
-
-        // Close session to ensure data is written
-        unsafe {
-            let close_session = CString::new(
-                "if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }"
-            ).unwrap();
-            let name = CString::new("session_close").unwrap();
-            zend_eval_string(
-                close_session.as_ptr() as *mut c_char,
+                capture_code.as_ptr() as *mut c_char,
                 ptr::null_mut(),
                 name.as_ptr() as *mut c_char,
             );
@@ -341,89 +260,183 @@ impl PhpExecutor {
             libc::close(original_stdout);
         }
 
-        // Read output
-        let mut output = String::new();
+        // Read combined output
+        let mut combined = String::new();
         let mut read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-        read_file.read_to_string(&mut output).map_err(|e| e.to_string())?;
+        read_file.read_to_string(&mut combined).map_err(|e| e.to_string())?;
 
-        // Allow empty body (e.g., for redirects)
-        Ok(PhpResponse {
-            body: output,
-            headers,
-        })
+        // Split body and headers
+        let (body, headers) = if let Some(pos) = combined.find(Self::HEADER_DELIMITER) {
+            let body = combined[..pos].to_string();
+            let headers_str = &combined[pos + Self::HEADER_DELIMITER.len()..];
+            let headers = Self::parse_headers_str(headers_str);
+            (body, headers)
+        } else {
+            (combined, Vec::new())
+        };
+
+        Ok(PhpResponse { body, headers })
     }
 
-    unsafe fn capture_headers() -> Vec<(String, String)> {
-        // Use a pipe to capture the output of headers_list() and http_response_code()
-        let mut pipe_fds: [c_int; 2] = [0, 0];
-        if libc::pipe(pipe_fds.as_mut_ptr()) != 0 {
-            return Vec::new();
+    fn escape_php_string(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\0', "")
+    }
+
+    fn build_superglobals_code(request: &PhpRequest) -> String {
+        let mut code = String::with_capacity(4096);
+
+        code.push_str("header_remove();\n");
+        code.push_str("http_response_code(200);\n");
+        code.push_str("if (!ob_get_level()) ob_start();\n");
+
+        // $_GET
+        code.push_str("$_GET = [");
+        for (i, (key, value)) in request.get_params.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)));
         }
+        code.push_str("];\n");
 
-        let read_fd = pipe_fds[0];
-        let write_fd = pipe_fds[1];
-
-        let original_stdout = libc::dup(1);
-        if original_stdout < 0 {
-            libc::close(read_fd);
-            libc::close(write_fd);
-            return Vec::new();
+        // $_POST
+        code.push_str("$_POST = [");
+        for (i, (key, value)) in request.post_params.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)));
         }
+        code.push_str("];\n");
 
-        if libc::dup2(write_fd, 1) < 0 {
-            libc::close(read_fd);
-            libc::close(write_fd);
-            libc::close(original_stdout);
-            return Vec::new();
+        // $_SERVER
+        code.push_str("$_SERVER = array_merge($_SERVER ?? [], [");
+        for (i, (key, value)) in request.server_vars.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)));
         }
+        code.push_str("]);\n");
 
-        // Get headers using PHP's headers_list() and http_response_code()
-        let code = CString::new(
-            "$code = http_response_code();\n\
-             if ($code && $code !== 200) {\n\
-                 echo \"Status: $code\\n\";\n\
-             }\n\
-             foreach (headers_list() as $h) { echo $h . \"\\n\"; }"
-        ).unwrap();
-        let name = CString::new("get_headers").unwrap();
-        zend_eval_string(
-            code.as_ptr() as *mut c_char,
-            ptr::null_mut(),
-            name.as_ptr() as *mut c_char,
-        );
+        // $_COOKIE
+        code.push_str("$_COOKIE = [");
+        for (i, (key, value)) in request.cookies.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("'{}' => '{}'",
+                Self::escape_php_string(key),
+                Self::escape_php_string(value)));
+        }
+        code.push_str("];\n");
 
-        libc::fflush(ptr::null_mut());
-        libc::close(write_fd);
-        libc::dup2(original_stdout, 1);
-        libc::close(original_stdout);
+        code.push_str("$_REQUEST = array_merge($_GET, $_POST);\n");
 
-        // Read the headers output
-        let mut headers_output = String::new();
-        let mut read_file = std::fs::File::from_raw_fd(read_fd);
-        let _ = read_file.read_to_string(&mut headers_output);
+        // $_FILES
+        code.push_str("$_FILES = [\n");
+        for (i, (field_name, files_vec)) in request.files.iter().enumerate() {
+            if i > 0 { code.push_str(",\n"); }
 
-        // Parse headers
-        let mut headers = Vec::new();
-        for line in headers_output.lines() {
-            if let Some((name, value)) = line.split_once(':') {
-                headers.push((name.trim().to_string(), value.trim().to_string()));
+            if files_vec.len() == 1 {
+                let file = &files_vec[0];
+                code.push_str(&format!(
+                    "  '{}' => ['name' => '{}', 'type' => '{}', 'tmp_name' => '{}', 'error' => {}, 'size' => {}]",
+                    Self::escape_php_string(field_name),
+                    Self::escape_php_string(&file.name),
+                    Self::escape_php_string(&file.mime_type),
+                    Self::escape_php_string(&file.tmp_name),
+                    file.error,
+                    file.size
+                ));
+            } else {
+                let names: Vec<String> = files_vec.iter()
+                    .map(|f| format!("'{}'", Self::escape_php_string(&f.name)))
+                    .collect();
+                let types: Vec<String> = files_vec.iter()
+                    .map(|f| format!("'{}'", Self::escape_php_string(&f.mime_type)))
+                    .collect();
+                let tmp_names: Vec<String> = files_vec.iter()
+                    .map(|f| format!("'{}'", Self::escape_php_string(&f.tmp_name)))
+                    .collect();
+                let errors: Vec<String> = files_vec.iter()
+                    .map(|f| f.error.to_string())
+                    .collect();
+                let sizes: Vec<String> = files_vec.iter()
+                    .map(|f| f.size.to_string())
+                    .collect();
+
+                code.push_str(&format!(
+                    "  '{}' => ['name' => [{}], 'type' => [{}], 'tmp_name' => [{}], 'error' => [{}], 'size' => [{}]]",
+                    Self::escape_php_string(field_name),
+                    names.join(", "), types.join(", "), tmp_names.join(", "),
+                    errors.join(", "), sizes.join(", ")
+                ));
             }
         }
+        code.push_str("\n];\n");
 
-        headers
+        code
     }
 
-    fn execute_request(&self, request: PhpRequest) -> Result<PhpResponse, String> {
-        let (tx, rx) = mpsc::channel();
-        self.sender
-            .send(PhpCommand::ExecuteRequest(request, tx))
-            .map_err(|e| format!("Failed to send command: {}", e))?;
-
-        rx.recv().map_err(|e| format!("Failed to receive response: {}", e))?
+    fn parse_headers_str(headers_str: &str) -> Vec<(String, String)> {
+        headers_str
+            .lines()
+            .filter_map(|line| {
+                line.split_once(':').map(|(name, value)| {
+                    (name.trim().to_string(), value.trim().to_string())
+                })
+            })
+            .collect()
     }
 
-    fn shutdown(&self) {
-        let _ = self.sender.send(PhpCommand::Shutdown);
+    pub async fn execute_request(&self, request: PhpRequest) -> Result<PhpResponse, String> {
+        // Round-robin worker selection
+        let worker_idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        let socket_path = self.workers[worker_idx].socket_path.clone();
+
+        // Execute in blocking task
+        tokio::task::spawn_blocking(move || {
+            Self::send_request(&socket_path, &request)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+    }
+
+    fn send_request(socket_path: &PathBuf, request: &PhpRequest) -> Result<PhpResponse, String> {
+        let mut stream = UnixStream::connect(socket_path)
+            .map_err(|e| format!("Failed to connect: {}", e))?;
+
+        // Send request (bincode)
+        let request_bytes = bincode::serialize(request).map_err(|e| e.to_string())?;
+        let len_bytes = (request_bytes.len() as u32).to_be_bytes();
+        stream.write_all(&len_bytes).map_err(|e| e.to_string())?;
+        stream.write_all(&request_bytes).map_err(|e| e.to_string())?;
+
+        // Read response length
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+
+        // Read response
+        let mut response_buf = vec![0u8; len];
+        stream.read_exact(&mut response_buf).map_err(|e| e.to_string())?;
+
+        bincode::deserialize(&response_buf).map_err(|e| e.to_string())
+    }
+
+    pub fn shutdown(&self) {
+        for worker in &self.workers {
+            let _ = signal::kill(worker.pid, Signal::SIGTERM);
+            let _ = waitpid(worker.pid, None);
+            let _ = std::fs::remove_file(&worker.socket_path);
+        }
+    }
+}
+
+impl Drop for PhpWorkerPool {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -431,34 +444,33 @@ pub struct PhpRuntime;
 
 impl PhpRuntime {
     pub fn init() -> Result<(), String> {
-        PHP_EXECUTOR
-            .get_or_try_init(|| PhpExecutor::new())
+        Self::init_with_workers(num_cpus::get())
+    }
+
+    pub fn init_with_workers(num_workers: usize) -> Result<(), String> {
+        PHP_WORKER_POOL
+            .get_or_try_init(|| PhpWorkerPool::new(num_workers))
             .map(|_| ())
     }
 
     pub fn shutdown() {
-        if let Some(executor) = PHP_EXECUTOR.get() {
-            executor.shutdown();
+        if let Some(pool) = PHP_WORKER_POOL.get() {
+            pool.shutdown();
         }
     }
 
-    pub fn execute_request(request: PhpRequest) -> Result<PhpResponse, String> {
-        let executor = PHP_EXECUTOR
+    pub async fn execute_request(request: PhpRequest) -> Result<PhpResponse, String> {
+        let pool = PHP_WORKER_POOL
             .get()
             .ok_or("PHP runtime not initialized")?;
 
-        executor.execute_request(request)
+        pool.execute_request(request).await
     }
 
-    #[allow(dead_code)]
-    pub fn execute_file(file_path: &str) -> Result<PhpResponse, String> {
-        Self::execute_request(PhpRequest {
-            script_path: file_path.to_string(),
-            get_params: HashMap::new(),
-            post_params: HashMap::new(),
-            cookies: HashMap::new(),
-            server_vars: HashMap::new(),
-            files: HashMap::new(),
-        })
+    pub fn worker_count() -> usize {
+        PHP_WORKER_POOL
+            .get()
+            .map(|p| p.workers.len())
+            .unwrap_or(0)
     }
 }
