@@ -754,7 +754,6 @@ dependencies = [
  "nix",
  "num_cpus",
  "once_cell",
- "parking_lot",
  "percent-encoding",
  "serde",
  "socket2 0.5.10",
