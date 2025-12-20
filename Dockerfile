@@ -44,6 +44,10 @@ FROM php:8.4-zts-alpine
 # Install runtime dependencies
 RUN apk add --no-cache libgcc
 
+# Note: OPcache does NOT work with embed SAPI (hardcoded limitation in PHP)
+# The extension loads but opcache_get_status() returns false
+# This is a known limitation: embed SAPI is designed for short-lived processes
+
 # Create app directory
 WORKDIR /app
 

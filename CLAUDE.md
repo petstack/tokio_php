@@ -33,28 +33,31 @@ docker compose down
 
 ## Key Design Decisions
 
-- Dedicated PHP executor thread with 16MB stack (PHP 8.4 requires larger stack)
-- Channel-based communication between async Tokio tasks and PHP thread
-- Output captured by redirecting stdout via pipe during PHP execution
-- Superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_REQUEST`) injected via `zend_eval_string` before script execution
+- Uses PHP 8.4 ZTS (Thread Safe) build with php-embed SAPI
+- Multi-threaded PHP worker pool (configurable via `PHP_WORKERS` env var, defaults to CPU count)
+- Single-threaded Tokio runtime (PHP workers handle blocking work)
+- Channel-based communication between async Tokio tasks and PHP worker threads
+- Output captured by redirecting stdout to temp files during PHP execution
+- Superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_REQUEST`, `$_COOKIE`, `$_FILES`) injected via `zend_eval_string` before script execution
 - Static files served directly via Tokio async I/O
 
 ## Superglobals Support
 
 The server parses HTTP requests and injects PHP superglobals:
 - `$_GET` - Query string parameters (URL decoded)
-- `$_POST` - Form data (application/x-www-form-urlencoded)
-- `$_SERVER` - REQUEST_METHOD, REQUEST_URI, QUERY_STRING, REMOTE_ADDR, etc.
+- `$_POST` - Form data (application/x-www-form-urlencoded and multipart/form-data)
+- `$_SERVER` - REQUEST_METHOD, REQUEST_URI, QUERY_STRING, REMOTE_ADDR, HTTP headers, etc.
+- `$_COOKIE` - Parsed from Cookie header
+- `$_FILES` - Uploaded files from multipart/form-data
 - `$_REQUEST` - Merged GET + POST
 
 ## Docker Environment
 
-Uses Alpine 3.21 with php84-embed. Multi-stage build:
-1. Builder stage: Rust + PHP dev headers + all build dependencies
-2. Runtime stage: Minimal Alpine with php84-embed only (~24MB)
+Uses `php:8.4-zts-alpine` (official PHP ZTS image). Multi-stage build:
+1. Builder stage: Rust + PHP dev headers + build dependencies
+2. Runtime stage: Minimal Alpine with PHP ZTS + libgcc
 
 ## Limitations
 
-- Single-threaded PHP execution (PHP is not thread-safe)
-- No `$_FILES` support (multipart/form-data not implemented)
-- No `$_COOKIE` / `$_SESSION` support yet
+- OPcache does NOT work (embed SAPI limitation - PHP hardcodes this)
+- No `$_SESSION` support (requires session handler implementation)
