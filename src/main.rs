@@ -38,9 +38,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         num_workers
     };
 
-    // Build Tokio runtime with limited worker threads
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(worker_threads)
+    // Use single-threaded Tokio runtime - PHP workers handle blocking work
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 

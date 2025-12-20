@@ -1,21 +1,18 @@
 use async_trait::async_trait;
-use nix::sys::signal::{self, Signal};
-use nix::sys::wait::waitpid;
-use nix::unistd::{fork, ForkResult, Pid};
 use std::ffi::CString;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::io::FromRawFd;
-use std::os::unix::net::{UnixListener, UnixStream as StdUnixStream};
-use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use tokio::sync::oneshot;
 
 use super::{ExecutorError, ScriptExecutor};
 use crate::types::{ScriptRequest, ScriptResponse};
 
+// PHP embed FFI bindings
 #[link(name = "php")]
 extern "C" {
     fn php_embed_init(argc: c_int, argv: *mut *mut c_char) -> c_int;
@@ -28,6 +25,13 @@ extern "C" {
     fn php_execute_simple_script(handle: *mut ZendFileHandle, retval: *mut c_void) -> c_int;
     fn zend_stream_init_filename(handle: *mut ZendFileHandle, filename: *const c_char);
     fn zend_destroy_file_handle(handle: *mut ZendFileHandle);
+
+    // ZTS-specific: Thread resource management
+    fn ts_resource_ex(id: c_int, th_id: *mut c_void) -> *mut c_void;
+
+    // Request lifecycle (needed for ZTS multi-threading)
+    fn php_request_startup() -> c_int;
+    fn php_request_shutdown(dummy: *mut c_void);
 }
 
 #[repr(C)]
@@ -35,127 +39,105 @@ struct ZendFileHandle {
     _data: [u8; 128],
 }
 
-/// Internal worker representation.
-struct PhpWorker {
-    pid: Pid,
-    socket_path: PathBuf,
+/// Request sent to PHP worker thread.
+struct WorkerRequest {
+    request: ScriptRequest,
+    response_tx: oneshot::Sender<Result<ScriptResponse, String>>,
 }
 
-/// PHP worker pool for executing PHP scripts.
-struct PhpWorkerPool {
-    workers: Vec<PhpWorker>,
-    next_worker: AtomicUsize,
+/// PHP worker thread handle.
+struct PhpWorkerThread {
+    handle: JoinHandle<()>,
 }
 
-impl PhpWorkerPool {
+/// Thread-based PHP worker pool for ZTS PHP.
+struct PhpThreadPool {
+    request_tx: mpsc::Sender<WorkerRequest>,
+    workers: Vec<PhpWorkerThread>,
+    worker_count: AtomicUsize,
+}
+
+impl PhpThreadPool {
     const HEADER_DELIMITER: &'static str = "\n---@TOKIO_PHP_HDR@---\n";
 
     fn new(num_workers: usize) -> Result<Self, String> {
-        let mut workers = Vec::with_capacity(num_workers);
-
-        for i in 0..num_workers {
-            let socket_path = PathBuf::from(format!("/tmp/php_worker_{}.sock", i));
-
-            // Remove old socket if exists
-            let _ = std::fs::remove_file(&socket_path);
-
-            match unsafe { fork() } {
-                Ok(ForkResult::Parent { child }) => {
-                    // Parent process - wait for socket to be ready
-                    for _ in 0..100 {
-                        if socket_path.exists() {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-
-                    workers.push(PhpWorker {
-                        pid: child,
-                        socket_path,
-                    });
-                    tracing::info!("Spawned PHP worker {} (PID: {})", i, child);
-                }
-                Ok(ForkResult::Child) => {
-                    // Child process - become PHP worker
-                    Self::run_worker(i, &socket_path);
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    return Err(format!("Fork failed: {}", e));
-                }
-            }
-        }
-
-        Ok(PhpWorkerPool {
-            workers,
-            next_worker: AtomicUsize::new(0),
-        })
-    }
-
-    fn run_worker(id: usize, socket_path: &PathBuf) {
-        // Initialize PHP in this process
+        // Initialize PHP once in main thread (ZTS mode)
         unsafe {
-            let program_name = CString::new("tokio_php_worker").unwrap();
+            let program_name = CString::new("tokio_php").unwrap();
             let mut argv: [*mut c_char; 2] = [program_name.as_ptr() as *mut c_char, ptr::null_mut()];
 
             let result = php_embed_init(1, argv.as_mut_ptr());
             if result != 0 {
-                eprintln!("Worker {}: Failed to initialize PHP embed: {}", id, result);
-                return;
+                return Err(format!("Failed to initialize PHP embed: {}", result));
             }
         }
+        tracing::info!("PHP ZTS initialized in main thread");
 
-        // Create Unix socket listener
-        let listener = match UnixListener::bind(socket_path) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("Worker {}: Failed to bind socket: {}", id, e);
-                return;
-            }
-        };
+        let (request_tx, request_rx) = mpsc::channel::<WorkerRequest>();
+        let request_rx = Arc::new(Mutex::new(request_rx));
 
-        eprintln!("Worker {}: PHP initialized, listening on {:?}", id, socket_path);
+        let mut workers = Vec::with_capacity(num_workers);
 
-        // Accept and handle connections (one request per connection)
-        for stream in listener.incoming() {
-            match stream {
-                Ok(mut stream) => {
-                    let _ = Self::handle_worker_request(&mut stream);
-                }
-                Err(e) => {
-                    eprintln!("Worker {}: Accept error: {}", id, e);
-                }
-            }
+        for id in 0..num_workers {
+            let rx = Arc::clone(&request_rx);
+
+            let handle = thread::Builder::new()
+                .name(format!("php-worker-{}", id))
+                .spawn(move || {
+                    Self::worker_thread_main(id, rx);
+                })
+                .map_err(|e| format!("Failed to spawn worker thread {}: {}", id, e))?;
+
+            workers.push(PhpWorkerThread { handle });
+            tracing::info!("Spawned PHP worker thread {}", id);
         }
 
-        unsafe {
-            php_embed_shutdown();
-        }
+        Ok(Self {
+            request_tx,
+            workers,
+            worker_count: AtomicUsize::new(num_workers),
+        })
     }
 
-    fn handle_worker_request(stream: &mut StdUnixStream) -> Result<(), String> {
-        // Read request length (4 bytes, big-endian)
-        let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
-        let len = u32::from_be_bytes(len_buf) as usize;
+    fn worker_thread_main(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) {
+        // For ZTS: allocate thread-local storage for this thread
+        unsafe {
+            let _ = ts_resource_ex(0, ptr::null_mut());
+        }
 
-        // Read request (bincode)
-        let mut request_buf = vec![0u8; len];
-        stream.read_exact(&mut request_buf).map_err(|e| e.to_string())?;
+        tracing::debug!("Worker {}: Thread-local storage initialized", id);
 
-        let request: ScriptRequest = bincode::deserialize(&request_buf)
-            .map_err(|e| e.to_string())?;
+        // Process requests
+        loop {
+            let work = {
+                let guard = rx.lock().unwrap();
+                guard.recv()
+            };
 
-        // Execute PHP
-        let response = Self::execute_php(&request)?;
+            match work {
+                Ok(WorkerRequest { request, response_tx }) => {
+                    // Start PHP request context for this thread
+                    let startup_ok = unsafe { php_request_startup() } == 0;
 
-        // Send response (bincode)
-        let response_bytes = bincode::serialize(&response).map_err(|e| e.to_string())?;
-        let len_bytes = (response_bytes.len() as u32).to_be_bytes();
-        stream.write_all(&len_bytes).map_err(|e| e.to_string())?;
-        stream.write_all(&response_bytes).map_err(|e| e.to_string())?;
+                    let result = if startup_ok {
+                        let res = Self::execute_php(&request);
+                        // End PHP request context
+                        unsafe { php_request_shutdown(ptr::null_mut()); }
+                        res
+                    } else {
+                        Err("Failed to start PHP request".to_string())
+                    };
 
-        Ok(())
+                    let _ = response_tx.send(result);
+                }
+                Err(_) => {
+                    // Channel closed, shutdown
+                    break;
+                }
+            }
+        }
+
+        tracing::debug!("Worker {}: Shutdown complete", id);
     }
 
     fn execute_php(request: &ScriptRequest) -> Result<ScriptResponse, String> {
@@ -173,30 +155,34 @@ impl PhpWorkerPool {
             );
         }
 
-        // Create pipe for stdout capture
-        let mut pipe_fds: [c_int; 2] = [0, 0];
-        if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
-            return Err("Failed to create pipe".to_string());
-        }
+        // Use temp file instead of pipe to avoid buffer deadlock with large output
+        let tmp_path = format!("/tmp/php_out_{:?}.tmp", std::thread::current().id());
+        let tmp_path_c = CString::new(tmp_path.as_str()).unwrap();
 
-        let read_fd = pipe_fds[0];
-        let write_fd = pipe_fds[1];
+        let write_fd = unsafe {
+            libc::open(
+                tmp_path_c.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o600,
+            )
+        };
+        if write_fd < 0 {
+            return Err("Failed to create temp file".to_string());
+        }
 
         let original_stdout = unsafe { libc::dup(1) };
         if original_stdout < 0 {
-            unsafe {
-                libc::close(read_fd);
-                libc::close(write_fd);
-            }
+            unsafe { libc::close(write_fd); }
+            let _ = std::fs::remove_file(&tmp_path);
             return Err("Failed to dup stdout".to_string());
         }
 
         if unsafe { libc::dup2(write_fd, 1) } < 0 {
             unsafe {
-                libc::close(read_fd);
                 libc::close(write_fd);
                 libc::close(original_stdout);
             }
+            let _ = std::fs::remove_file(&tmp_path);
             return Err("Failed to redirect stdout".to_string());
         }
 
@@ -211,7 +197,7 @@ impl PhpWorkerPool {
 
             zend_destroy_file_handle(&mut file_handle);
 
-            // Flush output buffer and capture headers (optimized)
+            // Flush output buffer and capture headers
             let capture_code = CString::new(format!(
                 "while(ob_get_level())ob_end_flush();\n\
                  echo\"{}\";\n\
@@ -235,10 +221,9 @@ impl PhpWorkerPool {
             libc::close(original_stdout);
         }
 
-        // Read combined output
-        let mut combined = String::new();
-        let mut read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-        read_file.read_to_string(&mut combined).map_err(|e| e.to_string())?;
+        // Read combined output from temp file
+        let combined = std::fs::read_to_string(&tmp_path).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&tmp_path);
 
         // Split body and headers
         let (body, headers) = if let Some(pos) = combined.find(Self::HEADER_DELIMITER) {
@@ -269,8 +254,8 @@ impl PhpWorkerPool {
         // $_GET
         code.push_str("$_GET = [");
         for (i, (key, value)) in request.get_params.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("'{}' => '{}'",
+            if i > 0 { code.push(','); }
+            code.push_str(&format!("'{}'=>'{}'",
                 Self::escape_php_string(key),
                 Self::escape_php_string(value)));
         }
@@ -279,8 +264,8 @@ impl PhpWorkerPool {
         // $_POST
         code.push_str("$_POST = [");
         for (i, (key, value)) in request.post_params.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("'{}' => '{}'",
+            if i > 0 { code.push(','); }
+            code.push_str(&format!("'{}'=>'{}'",
                 Self::escape_php_string(key),
                 Self::escape_php_string(value)));
         }
@@ -289,8 +274,8 @@ impl PhpWorkerPool {
         // $_SERVER
         code.push_str("$_SERVER = array_merge($_SERVER ?? [], [");
         for (i, (key, value)) in request.server_vars.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("'{}' => '{}'",
+            if i > 0 { code.push(','); }
+            code.push_str(&format!("'{}'=>'{}'",
                 Self::escape_php_string(key),
                 Self::escape_php_string(value)));
         }
@@ -299,8 +284,8 @@ impl PhpWorkerPool {
         // $_COOKIE
         code.push_str("$_COOKIE = [");
         for (i, (key, value)) in request.cookies.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("'{}' => '{}'",
+            if i > 0 { code.push(','); }
+            code.push_str(&format!("'{}'=>'{}'",
                 Self::escape_php_string(key),
                 Self::escape_php_string(value)));
         }
@@ -316,7 +301,7 @@ impl PhpWorkerPool {
             if files_vec.len() == 1 {
                 let file = &files_vec[0];
                 code.push_str(&format!(
-                    "  '{}' => ['name' => '{}', 'type' => '{}', 'tmp_name' => '{}', 'error' => {}, 'size' => {}]",
+                    "  '{}' => ['name'=>'{}','type'=>'{}','tmp_name'=>'{}','error'=>{},'size'=>{}]",
                     Self::escape_php_string(field_name),
                     Self::escape_php_string(&file.name),
                     Self::escape_php_string(&file.mime_type),
@@ -342,10 +327,10 @@ impl PhpWorkerPool {
                     .collect();
 
                 code.push_str(&format!(
-                    "  '{}' => ['name' => [{}], 'type' => [{}], 'tmp_name' => [{}], 'error' => [{}], 'size' => [{}]]",
+                    "  '{}' => ['name'=>[{}],'type'=>[{}],'tmp_name'=>[{}],'error'=>[{}],'size'=>[{}]]",
                     Self::escape_php_string(field_name),
-                    names.join(", "), types.join(", "), tmp_names.join(", "),
-                    errors.join(", "), sizes.join(", ")
+                    names.join(","), types.join(","), tmp_names.join(","),
+                    errors.join(","), sizes.join(",")
                 ));
             }
         }
@@ -366,80 +351,55 @@ impl PhpWorkerPool {
     }
 
     async fn execute_request(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
-        // Round-robin worker selection
-        let worker_idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        let socket_path = &self.workers[worker_idx].socket_path;
+        let (response_tx, response_rx) = oneshot::channel();
 
-        // Connect using async tokio UnixStream
-        let mut stream = UnixStream::connect(socket_path)
+        self.request_tx
+            .send(WorkerRequest { request, response_tx })
+            .map_err(|_| "Worker pool shut down".to_string())?;
+
+        response_rx
             .await
-            .map_err(|e| format!("Failed to connect to worker {}: {}", worker_idx, e))?;
-
-        // Send request (bincode)
-        let request_bytes = bincode::serialize(&request).map_err(|e| e.to_string())?;
-        let len_bytes = (request_bytes.len() as u32).to_be_bytes();
-        stream.write_all(&len_bytes).await.map_err(|e| e.to_string())?;
-        stream.write_all(&request_bytes).await.map_err(|e| e.to_string())?;
-
-        // Read response length
-        let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).await.map_err(|e| e.to_string())?;
-        let len = u32::from_be_bytes(len_buf) as usize;
-
-        // Read response
-        let mut response_buf = vec![0u8; len];
-        stream.read_exact(&mut response_buf).await.map_err(|e| e.to_string())?;
-
-        bincode::deserialize(&response_buf).map_err(|e| e.to_string())
+            .map_err(|_| "Worker dropped response".to_string())?
     }
 
     fn shutdown(&self) {
-        for worker in &self.workers {
-            let _ = signal::kill(worker.pid, Signal::SIGTERM);
-            let _ = waitpid(worker.pid, None);
-            let _ = std::fs::remove_file(&worker.socket_path);
-        }
+        // Drop sender will close the channel, workers will exit
     }
 
     fn worker_count(&self) -> usize {
-        self.workers.len()
+        self.worker_count.load(Ordering::Relaxed)
     }
 }
 
-impl Drop for PhpWorkerPool {
+impl Drop for PhpThreadPool {
     fn drop(&mut self) {
-        self.shutdown();
+        // Workers will exit when channel is closed (request_tx dropped)
+        // Wait for all workers to finish
+        for worker in self.workers.drain(..) {
+            let _ = worker.handle.join();
+        }
+
+        // Shutdown PHP (it was initialized in main thread)
+        unsafe {
+            php_embed_shutdown();
+        }
+        tracing::info!("PHP shutdown complete");
     }
 }
 
-/// PHP script executor using php-embed SAPI.
-///
-/// This executor spawns a pool of PHP worker processes and communicates
-/// with them via Unix domain sockets.
+/// PHP script executor using ZTS php-embed SAPI with thread pool.
 pub struct PhpExecutor {
-    pool: PhpWorkerPool,
+    pool: PhpThreadPool,
 }
 
 impl PhpExecutor {
-    /// Creates a new PHP executor with the specified number of workers.
-    ///
-    /// # Arguments
-    /// * `num_workers` - Number of PHP worker processes to spawn
-    ///
-    /// # Returns
-    /// * `Ok(PhpExecutor)` - The executor instance
-    /// * `Err(ExecutorError)` - If worker initialization failed
+    /// Creates a new PHP executor with the specified number of worker threads.
     pub fn new(num_workers: usize) -> Result<Self, ExecutorError> {
-        let pool = PhpWorkerPool::new(num_workers)?;
+        let pool = PhpThreadPool::new(num_workers)?;
         Ok(Self { pool })
     }
 
-    /// Creates a new PHP executor with auto-detected worker count (based on CPU cores).
-    pub fn auto() -> Result<Self, ExecutorError> {
-        Self::new(num_cpus::get())
-    }
-
-    /// Returns the number of worker processes.
+    /// Returns the number of worker threads.
     pub fn worker_count(&self) -> usize {
         self.pool.worker_count()
     }
@@ -455,7 +415,7 @@ impl ScriptExecutor for PhpExecutor {
     }
 
     fn name(&self) -> &'static str {
-        "php"
+        "php-zts"
     }
 
     fn shutdown(&self) {

@@ -9,8 +9,15 @@ fn main() {
         return;
     }
 
-    // Try to find PHP config
-    let php_config = env::var("PHP_CONFIG").unwrap_or_else(|_| "php-config84".to_string());
+    // Try to find PHP config (php-config for official images, php-config84 for Alpine)
+    let php_config = env::var("PHP_CONFIG").unwrap_or_else(|_| {
+        // Try php-config first (official PHP images), then php-config84 (Alpine)
+        if Command::new("php-config").arg("--version").output().is_ok() {
+            "php-config".to_string()
+        } else {
+            "php-config84".to_string()
+        }
+    });
 
     // Get PHP library directory using --ldflags
     let ldflags = Command::new(&php_config)
@@ -33,9 +40,10 @@ fn main() {
         }
     }
 
-    // Add common paths including php84 specific path
+    // Add common paths for different PHP installations
     println!("cargo:rustc-link-search=native=/usr/lib");
     println!("cargo:rustc-link-search=native=/usr/lib/php84");
+    println!("cargo:rustc-link-search=native=/usr/local/lib"); // Official PHP images
 
     // Link against php embed library
     println!("cargo:rustc-link-lib=dylib=php");

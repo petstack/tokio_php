@@ -1,33 +1,31 @@
-FROM alpine:3.21 AS builder
+FROM php:8.4-zts-alpine AS builder
 
-# Install build dependencies
+# Install Rust and build dependencies (including PHP library dependencies)
 RUN apk add --no-cache \
     rust \
     cargo \
     musl-dev \
     pkgconfig \
-    php84-dev \
-    php84-embed \
     clang \
     llvm \
     make \
-    autoconf \
     g++ \
-    libffi-dev \
-    libxml2-dev \
-    argon2-dev \
-    openssl-dev \
+    # Libraries required by PHP
+    readline-dev \
+    ncurses-dev \
     curl-dev \
     oniguruma-dev \
     sqlite-dev \
-    zlib-dev
+    argon2-dev \
+    libxml2-dev \
+    zlib-dev \
+    openssl-dev \
+    gnu-libiconv-dev
 
-# Set up PHP paths
-ENV PHP_CONFIG=/usr/bin/php-config84
-ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig
-
-# Create symlink for libphp (library is in /usr/lib/php84/)
-RUN ln -sf /usr/lib/php84/libphp.so /usr/lib/libphp.so
+# PHP paths are already set in this image:
+# - libphp.so at /usr/local/lib/libphp.so
+# - headers at /usr/local/include/php/
+# - php-config at /usr/local/bin/php-config
 
 # Create working directory
 WORKDIR /app
@@ -40,24 +38,11 @@ COPY build.rs ./
 # Build the application
 RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
 
-# Runtime stage
-FROM alpine:3.21
+# Runtime stage - use same ZTS image
+FROM php:8.4-zts-alpine
 
 # Install runtime dependencies
-RUN apk add --no-cache \
-    php84-embed \
-    php84-common \
-    php84-session \
-    php84-mbstring \
-    php84-openssl \
-    php84-curl \
-    php84-pdo \
-    php84-pdo_mysql \
-    php84-pdo_pgsql \
-    php84-pdo_sqlite \
-    libgcc \
-    && ln -sf /usr/lib/php84/libphp.so /usr/lib/libphp.so \
-    && mkdir -p /tmp
+RUN apk add --no-cache libgcc
 
 # Create app directory
 WORKDIR /app
