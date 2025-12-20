@@ -8,6 +8,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::php::PhpRuntime;
 use crate::server::Server;
 
+/// Number of PHP workers. Set to 0 for auto-detection (CPU cores count).
+const PHP_WORKERS: usize = 0;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize logging
@@ -21,11 +24,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     info!("Starting tokio_php server...");
 
-    // Initialize PHP runtime with worker pool
-    let num_workers = num_cpus::get();
+    // Determine number of workers (0 = auto-detect from CPU cores)
+    let num_workers = if PHP_WORKERS == 0 {
+        num_cpus::get()
+    } else {
+        PHP_WORKERS
+    };
+
+    // Also check environment variable (overrides constant)
+    let num_workers = std::env::var("PHP_WORKERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| if n == 0 { num_cpus::get() } else { n })
+        .unwrap_or(num_workers);
+
     info!("Initializing PHP worker pool with {} workers...", num_workers);
 
-    PhpRuntime::init().map_err(|e| {
+    PhpRuntime::init_with_workers(num_workers).map_err(|e| {
         eprintln!("Failed to initialize PHP: {}", e);
         e
     })?;

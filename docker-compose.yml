@@ -8,6 +8,8 @@ services:
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
       - RUST_LOG=tokio_php=info
+      # PHP_WORKERS: number of PHP worker processes (0 = auto-detect from CPU cores)
+      - PHP_WORKERS=${PHP_WORKERS:-0}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
