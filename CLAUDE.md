@@ -34,7 +34,9 @@ docker compose down
 ## Key Design Decisions
 
 - Uses PHP 8.4 ZTS (Thread Safe) build with php-embed SAPI
-- OPcache enabled by overriding SAPI name to "cli-server" before php_embed_init (~2x performance boost)
+- OPcache + JIT enabled by overriding SAPI name to "cli-server" before php_embed_init
+  - OPcache: ~2x performance boost for I/O workloads
+  - JIT (tracing mode): up to 4x for CPU-intensive code (Fibonacci, math, etc.)
 - Multi-threaded PHP worker pool (configurable via `PHP_WORKERS` env var, defaults to CPU count)
 - Single-threaded Tokio runtime (PHP workers handle blocking work)
 - Channel-based communication between async Tokio tasks and PHP worker threads
@@ -61,4 +63,3 @@ Uses `php:8.4-zts-alpine` (official PHP ZTS image). Multi-stage build:
 ## Limitations
 
 - No `$_SESSION` support (requires session handler implementation)
-- JIT is disabled (enabled OPcache uses shared memory, JIT requires additional setup)
