@@ -13,11 +13,7 @@ use crate::executor::PhpExecutor;
 
 use crate::executor::StubExecutor;
 
-/// Number of PHP workers. Set to 0 for auto-detection (CPU cores count).
-const PHP_WORKERS: usize = 0;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize logging
     tracing_subscriber::registry()
         .with(
@@ -29,12 +25,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     info!("Starting tokio_php server...");
 
+    // Get worker count from env (0 = auto-detect)
+    let num_workers = std::env::var("PHP_WORKERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    // Resolve 0 to actual CPU count
+    let worker_threads = if num_workers == 0 {
+        num_cpus::get()
+    } else {
+        num_workers
+    };
+
+    // Build Tokio runtime with limited worker threads
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async_main(num_workers, worker_threads))
+}
+
+async fn async_main(
+    num_workers: usize,
+    worker_threads: usize,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Configure server address
     let addr: SocketAddr = std::env::var("LISTEN_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
         .parse()?;
 
-    let config = ServerConfig::new(addr);
+    let config = ServerConfig::new(addr).with_workers(num_workers);
 
     // Check for stub mode (via env var or feature)
     let use_stub = std::env::var("USE_STUB")
@@ -52,11 +74,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         #[cfg(feature = "php")]
         {
-            // Determine number of workers
-            let num_workers = get_worker_count();
-            info!("Initializing PHP executor with {} workers...", num_workers);
+            info!(
+                "Initializing PHP executor with {} workers...",
+                worker_threads
+            );
 
-            let executor = PhpExecutor::new(num_workers).map_err(|e| {
+            let executor = PhpExecutor::new(worker_threads).map_err(|e| {
                 eprintln!("Failed to initialize PHP: {}", e);
                 e
             })?;
@@ -98,22 +121,3 @@ async fn run_server<E: crate::executor::ScriptExecutor + 'static>(
     Ok(())
 }
 
-#[cfg(feature = "php")]
-fn get_worker_count() -> usize {
-    // Check environment variable first
-    if let Ok(val) = std::env::var("PHP_WORKERS") {
-        if let Ok(n) = val.parse::<usize>() {
-            if n == 0 {
-                return num_cpus::get();
-            }
-            return n;
-        }
-    }
-
-    // Fall back to constant or auto-detect
-    if PHP_WORKERS == 0 {
-        num_cpus::get()
-    } else {
-        PHP_WORKERS
-    }
-}

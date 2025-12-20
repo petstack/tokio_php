@@ -9,7 +9,7 @@ services:
       - LISTEN_ADDR=0.0.0.0:8080
       - RUST_LOG=tokio_php=info
       # PHP_WORKERS: number of PHP worker processes (0 = auto-detect from CPU cores)
-      - PHP_WORKERS=${PHP_WORKERS:-0}
+      - PHP_WORKERS=${PHP_WORKERS:-1}
       # USE_STUB: set to 1 or true to disable PHP and return empty responses
       - USE_STUB=${USE_STUB:-0}
     volumes:

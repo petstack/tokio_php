@@ -45,6 +45,8 @@ fn empty_stub_response() -> Response<Full<Bytes>> {
 pub struct ServerConfig {
     pub addr: SocketAddr,
     pub document_root: Arc<str>,
+    /// Number of accept loop workers. 0 = auto-detect from CPU cores.
+    pub num_workers: usize,
 }
 
 impl ServerConfig {
@@ -52,11 +54,17 @@ impl ServerConfig {
         Self {
             addr,
             document_root: Arc::from("/var/www/html"),
+            num_workers: 0, // auto-detect
         }
     }
 
     pub fn with_document_root(mut self, path: &str) -> Self {
         self.document_root = Arc::from(path);
+        self
+    }
+
+    pub fn with_workers(mut self, num: usize) -> Self {
+        self.num_workers = num;
         self
     }
 }
@@ -75,66 +83,122 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         }
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let listener = TcpListener::bind(self.config.addr).await?;
+    /// Creates a socket with SO_REUSEPORT for multi-threaded accept.
+    fn create_reuse_port_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
+        use socket2::{Domain, Protocol, Socket, Type};
 
-        // Set socket options for better performance
-        let std_listener = listener.into_std()?;
-        let socket = socket2::Socket::from(std_listener);
+        let domain = if addr.is_ipv6() {
+            Domain::IPV6
+        } else {
+            Domain::IPV4
+        };
+
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
         socket.set_reuse_address(true)?;
-        socket.set_nodelay(true)?;
-        let std_listener = std::net::TcpListener::from(socket);
-        let listener = TcpListener::from_std(std_listener)?;
+
+        // SO_REUSEPORT allows multiple sockets to bind to the same port
+        // The kernel will load-balance incoming connections across all listeners
+        #[cfg(unix)]
+        socket.set_reuse_port(true)?;
+
+        socket.set_nonblocking(true)?;
+        socket.bind(&addr.into())?;
+        socket.listen(1024)?;
+
+        Ok(socket.into())
+    }
+
+    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let num_workers = if self.config.num_workers == 0 {
+            num_cpus::get()
+        } else {
+            self.config.num_workers
+        };
 
         info!(
-            "Server listening on http://{} (executor: {})",
+            "Server listening on http://{} (executor: {}, workers: {})",
             self.config.addr,
-            self.executor.name()
+            self.executor.name(),
+            num_workers
         );
 
-        // Pre-compute skip_file_check once
-        let skip_file_check = self.executor.skip_file_check();
+        // Spawn accept loops on multiple threads
+        let mut handles = Vec::with_capacity(num_workers);
 
-        loop {
-            let (stream, remote_addr) = match listener.accept().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    error!("Accept error: {}", e);
-                    continue;
-                }
-            };
-
-            // Optimize TCP settings
-            if let Err(e) = stream.set_nodelay(true) {
-                debug!("Failed to set TCP_NODELAY: {}", e);
-            }
-
-            let io = TokioIo::new(stream);
+        for worker_id in 0..num_workers {
+            let addr = self.config.addr;
             let executor = Arc::clone(&self.executor);
             let document_root = Arc::clone(&self.config.document_root);
+            let skip_file_check = self.executor.skip_file_check();
 
-            tokio::task::spawn(async move {
-                let service = service_fn(move |req| {
+            let handle = tokio::spawn(async move {
+                // Each worker creates its own listener with SO_REUSEPORT
+                let std_listener = match Self::create_reuse_port_listener(addr) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        error!("Worker {}: Failed to create listener: {}", worker_id, e);
+                        return;
+                    }
+                };
+
+                let listener = match TcpListener::from_std(std_listener) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        error!("Worker {}: Failed to convert listener: {}", worker_id, e);
+                        return;
+                    }
+                };
+
+                debug!("Worker {} started", worker_id);
+
+                loop {
+                    let (stream, remote_addr) = match listener.accept().await {
+                        Ok(conn) => conn,
+                        Err(e) => {
+                            error!("Worker {}: Accept error: {}", worker_id, e);
+                            continue;
+                        }
+                    };
+
+                    let _ = stream.set_nodelay(true);
+
+                    let io = TokioIo::new(stream);
                     let executor = Arc::clone(&executor);
-                    let doc_root = Arc::clone(&document_root);
-                    async move {
-                        handle_request(req, remote_addr, executor, doc_root, skip_file_check).await
-                    }
-                });
+                    let document_root = Arc::clone(&document_root);
 
-                if let Err(err) = http1::Builder::new()
-                    .keep_alive(true)
-                    .pipeline_flush(true)
-                    .serve_connection(io, service)
-                    .await
-                {
-                    let err_str = format!("{:?}", err);
-                    if !is_connection_error(&err_str) {
-                        debug!("Connection error: {:?}", err);
-                    }
+                    tokio::task::spawn(async move {
+                        let service = service_fn(move |req| {
+                            let executor = Arc::clone(&executor);
+                            let doc_root = Arc::clone(&document_root);
+                            async move {
+                                handle_request(req, remote_addr, executor, doc_root, skip_file_check).await
+                            }
+                        });
+
+                        if let Err(err) = http1::Builder::new()
+                            .keep_alive(true)
+                            .pipeline_flush(true)
+                            .serve_connection(io, service)
+                            .await
+                        {
+                            let err_str = format!("{:?}", err);
+                            if !is_connection_error(&err_str) {
+                                debug!("Connection error: {:?}", err);
+                            }
+                        }
+                    });
                 }
             });
+
+            handles.push(handle);
         }
+
+        // Wait for all workers (they run forever unless cancelled)
+        for handle in handles {
+            let _ = handle.await;
+        }
+
+        Ok(())
     }
 
     pub fn shutdown(&self) {
