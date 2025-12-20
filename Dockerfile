@@ -44,9 +44,14 @@ FROM php:8.4-zts-alpine
 # Install runtime dependencies
 RUN apk add --no-cache libgcc
 
-# Note: OPcache does NOT work with embed SAPI (hardcoded limitation in PHP)
-# The extension loads but opcache_get_status() returns false
-# This is a known limitation: embed SAPI is designed for short-lived processes
+# Configure OPcache - works by overriding SAPI name to "cli-server" before init
+RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.interned_strings_buffer=16" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.max_accelerated_files=10000" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.revalidate_freq=0" >> /usr/local/etc/php/conf.d/opcache.ini
 
 # Create app directory
 WORKDIR /app
