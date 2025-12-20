@@ -1,9 +1,7 @@
+use async_trait::async_trait;
 use nix::sys::signal::{self, Signal};
 use nix::sys::wait::waitpid;
 use nix::unistd::{fork, ForkResult, Pid};
-use once_cell::sync::OnceCell;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::ffi::CString;
 use std::io::{Read, Write};
 use std::os::raw::{c_char, c_int, c_void};
@@ -12,10 +10,11 @@ use std::os::unix::net::{UnixListener, UnixStream as StdUnixStream};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
+use super::{ExecutorError, ScriptExecutor};
+use crate::types::{ScriptRequest, ScriptResponse};
 
 #[link(name = "php")]
 extern "C" {
@@ -32,49 +31,26 @@ extern "C" {
 }
 
 #[repr(C)]
-pub struct ZendFileHandle {
+struct ZendFileHandle {
     _data: [u8; 128],
 }
 
-static PHP_WORKER_POOL: OnceCell<Arc<PhpWorkerPool>> = OnceCell::new();
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UploadedFile {
-    pub name: String,
-    pub mime_type: String,
-    pub tmp_name: String,
-    pub size: u64,
-    pub error: u8,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PhpRequest {
-    pub script_path: String,
-    pub get_params: HashMap<String, String>,
-    pub post_params: HashMap<String, String>,
-    pub cookies: HashMap<String, String>,
-    pub server_vars: HashMap<String, String>,
-    pub files: HashMap<String, Vec<UploadedFile>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PhpResponse {
-    pub body: String,
-    pub headers: Vec<(String, String)>,
-}
-
+/// Internal worker representation.
 struct PhpWorker {
     pid: Pid,
     socket_path: PathBuf,
 }
 
-pub struct PhpWorkerPool {
+/// PHP worker pool for executing PHP scripts.
+struct PhpWorkerPool {
     workers: Vec<PhpWorker>,
     next_worker: AtomicUsize,
 }
 
 impl PhpWorkerPool {
-    pub fn new(num_workers: usize) -> Result<Arc<Self>, String> {
+    const HEADER_DELIMITER: &'static str = "\n---@TOKIO_PHP_HDR@---\n";
+
+    fn new(num_workers: usize) -> Result<Self, String> {
         let mut workers = Vec::with_capacity(num_workers);
 
         for i in 0..num_workers {
@@ -110,10 +86,10 @@ impl PhpWorkerPool {
             }
         }
 
-        Ok(Arc::new(PhpWorkerPool {
+        Ok(PhpWorkerPool {
             workers,
             next_worker: AtomicUsize::new(0),
-        }))
+        })
     }
 
     fn run_worker(id: usize, socket_path: &PathBuf) {
@@ -167,7 +143,7 @@ impl PhpWorkerPool {
         let mut request_buf = vec![0u8; len];
         stream.read_exact(&mut request_buf).map_err(|e| e.to_string())?;
 
-        let request: PhpRequest = bincode::deserialize(&request_buf)
+        let request: ScriptRequest = bincode::deserialize(&request_buf)
             .map_err(|e| e.to_string())?;
 
         // Execute PHP
@@ -182,9 +158,7 @@ impl PhpWorkerPool {
         Ok(())
     }
 
-    const HEADER_DELIMITER: &'static str = "\n---@TOKIO_PHP_HDR@---\n";
-
-    fn execute_php(request: &PhpRequest) -> Result<PhpResponse, String> {
+    fn execute_php(request: &ScriptRequest) -> Result<ScriptResponse, String> {
         // Build superglobals code
         let superglobals_code = Self::build_superglobals_code(request);
 
@@ -276,7 +250,7 @@ impl PhpWorkerPool {
             (combined, Vec::new())
         };
 
-        Ok(PhpResponse { body, headers })
+        Ok(ScriptResponse { body, headers })
     }
 
     fn escape_php_string(s: &str) -> String {
@@ -285,7 +259,7 @@ impl PhpWorkerPool {
             .replace('\0', "")
     }
 
-    fn build_superglobals_code(request: &PhpRequest) -> String {
+    fn build_superglobals_code(request: &ScriptRequest) -> String {
         let mut code = String::with_capacity(4096);
 
         code.push_str("header_remove();\n");
@@ -391,7 +365,7 @@ impl PhpWorkerPool {
             .collect()
     }
 
-    pub async fn execute_request(&self, request: PhpRequest) -> Result<PhpResponse, String> {
+    async fn execute_request(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
         // Round-robin worker selection
         let worker_idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
         let socket_path = &self.workers[worker_idx].socket_path;
@@ -419,12 +393,16 @@ impl PhpWorkerPool {
         bincode::deserialize(&response_buf).map_err(|e| e.to_string())
     }
 
-    pub fn shutdown(&self) {
+    fn shutdown(&self) {
         for worker in &self.workers {
             let _ = signal::kill(worker.pid, Signal::SIGTERM);
             let _ = waitpid(worker.pid, None);
             let _ = std::fs::remove_file(&worker.socket_path);
         }
+    }
+
+    fn worker_count(&self) -> usize {
+        self.workers.len()
     }
 }
 
@@ -434,37 +412,53 @@ impl Drop for PhpWorkerPool {
     }
 }
 
-pub struct PhpRuntime;
+/// PHP script executor using php-embed SAPI.
+///
+/// This executor spawns a pool of PHP worker processes and communicates
+/// with them via Unix domain sockets.
+pub struct PhpExecutor {
+    pool: PhpWorkerPool,
+}
 
-impl PhpRuntime {
-    pub fn init() -> Result<(), String> {
-        Self::init_with_workers(num_cpus::get())
+impl PhpExecutor {
+    /// Creates a new PHP executor with the specified number of workers.
+    ///
+    /// # Arguments
+    /// * `num_workers` - Number of PHP worker processes to spawn
+    ///
+    /// # Returns
+    /// * `Ok(PhpExecutor)` - The executor instance
+    /// * `Err(ExecutorError)` - If worker initialization failed
+    pub fn new(num_workers: usize) -> Result<Self, ExecutorError> {
+        let pool = PhpWorkerPool::new(num_workers)?;
+        Ok(Self { pool })
     }
 
-    pub fn init_with_workers(num_workers: usize) -> Result<(), String> {
-        PHP_WORKER_POOL
-            .get_or_try_init(|| PhpWorkerPool::new(num_workers))
-            .map(|_| ())
+    /// Creates a new PHP executor with auto-detected worker count (based on CPU cores).
+    pub fn auto() -> Result<Self, ExecutorError> {
+        Self::new(num_cpus::get())
     }
 
-    pub fn shutdown() {
-        if let Some(pool) = PHP_WORKER_POOL.get() {
-            pool.shutdown();
-        }
+    /// Returns the number of worker processes.
+    pub fn worker_count(&self) -> usize {
+        self.pool.worker_count()
+    }
+}
+
+#[async_trait]
+impl ScriptExecutor for PhpExecutor {
+    async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, ExecutorError> {
+        self.pool
+            .execute_request(request)
+            .await
+            .map_err(ExecutorError::from)
     }
 
-    pub async fn execute_request(request: PhpRequest) -> Result<PhpResponse, String> {
-        let pool = PHP_WORKER_POOL
-            .get()
-            .ok_or("PHP runtime not initialized")?;
-
-        pool.execute_request(request).await
+    fn name(&self) -> &'static str {
+        "php"
     }
 
-    pub fn worker_count() -> usize {
-        PHP_WORKER_POOL
-            .get()
-            .map(|p| p.workers.len())
-            .unwrap_or(0)
+    fn shutdown(&self) {
+        self.pool.shutdown();
     }
 }

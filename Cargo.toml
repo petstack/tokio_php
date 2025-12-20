@@ -3,6 +3,11 @@ name = "tokio_php"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["php"]
+php = []
+stub = []
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["full"] }
@@ -23,6 +28,14 @@ serde = { version = "1", features = ["derive"] }
 bincode = "1"
 nix = { version = "0.29", features = ["process", "signal"] }
 num_cpus = "1"
+async-trait = "0.1"
 
 [build-dependencies]
 cc = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+strip = true

@@ -4,6 +4,11 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Only link PHP when the "php" feature is enabled
+    if env::var("CARGO_FEATURE_PHP").is_err() {
+        return;
+    }
+
     // Try to find PHP config
     let php_config = env::var("PHP_CONFIG").unwrap_or_else(|_| "php-config84".to_string());
 
