@@ -520,6 +520,15 @@ async fn process_request<E: ScriptExecutor>(
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
+    // Check if file exists (sync - fast for stat syscall)
+    if !skip_file_check && !file_path.exists() {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("Content-Type", "text/html")
+            .body(Full::new(NOT_FOUND_BODY.clone()))
+            .unwrap();
+    }
+
     if extension == "php" {
         let temp_files: Vec<String> = files.iter()
             .flat_map(|(_, file_vec)| file_vec.iter().map(|f| f.tmp_name.clone()))
