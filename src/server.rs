@@ -222,9 +222,18 @@ async fn handle_request<E: ScriptExecutor>(
     document_root: Arc<str>,
     skip_file_check: bool,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    let is_head = *req.method() == Method::HEAD;
+
     let response = match *req.method() {
-        Method::GET | Method::POST => {
-            process_request(req, remote_addr, executor, document_root, skip_file_check).await
+        Method::GET | Method::POST | Method::HEAD => {
+            let mut resp = process_request(req, remote_addr, executor, document_root, skip_file_check).await;
+
+            // HEAD: return headers only, no body
+            if is_head {
+                let (parts, _) = resp.into_parts();
+                resp = Response::from_parts(parts, Full::new(EMPTY_BODY.clone()));
+            }
+            resp
         }
         _ => Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
