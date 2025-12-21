@@ -185,38 +185,21 @@ impl PhpSapiPool {
         php_startup_us: u64,
     ) -> Result<ScriptResponse, String> {
         let mut superglobals_build_us = 0u64;
-        let mut superglobals_eval_us = 0u64;
         let mut memfd_setup_us = 0u64;
+        let mut script_exec_us = 0u64;
         let mut finalize_eval_us = 0u64;
         let mut stdout_restore_us = 0u64;
         let mut output_read_us = 0u64;
         let mut output_parse_us = 0u64;
 
-        // Build superglobals code
+        // Build combined code: superglobals + require script (single eval instead of eval + php_execute_script)
         let build_start = Instant::now();
-        let superglobals_code = Self::build_superglobals_code(request);
+        let combined_code = Self::build_combined_code(request);
         if profiling {
             superglobals_build_us = build_start.elapsed().as_micros() as u64;
         }
 
-        // Execute superglobals code
-        let eval_start = Instant::now();
-        unsafe {
-            let code_c = CString::new(superglobals_code).map_err(|e| e.to_string())?;
-            let name_c = CString::new("superglobals_init").unwrap();
-
-            zend_eval_string(
-                code_c.as_ptr() as *mut c_char,
-                ptr::null_mut(),
-                name_c.as_ptr() as *mut c_char,
-            );
-        }
-        if profiling {
-            superglobals_eval_us = eval_start.elapsed().as_micros() as u64;
-        }
-        let superglobals_us = superglobals_build_us + superglobals_eval_us;
-
-        // Set up memfd for stdout capture
+        // Set up memfd for stdout capture BEFORE script execution
         let memfd_start = Instant::now();
         let write_fd = unsafe {
             libc::syscall(
@@ -246,23 +229,23 @@ impl PhpSapiPool {
             memfd_setup_us = memfd_start.elapsed().as_micros() as u64;
         }
 
-        // Execute the script
+        // Execute combined code (superglobals + script) in single eval
         let script_start = Instant::now();
         unsafe {
-            let path_c = CString::new(request.script_path.as_str()).map_err(|e| e.to_string())?;
+            let code_c = CString::new(combined_code).map_err(|e| e.to_string())?;
+            let name_c = CString::new("x").unwrap();
 
-            let mut file_handle: ZendFileHandle = std::mem::zeroed();
-            zend_stream_init_filename(&mut file_handle, path_c.as_ptr());
-
-            php_execute_script(&mut file_handle);
-
-            zend_destroy_file_handle(&mut file_handle);
+            zend_eval_string(
+                code_c.as_ptr() as *mut c_char,
+                ptr::null_mut(),
+                name_c.as_ptr() as *mut c_char,
+            );
         }
-        let script_exec_us = if profiling {
-            script_start.elapsed().as_micros() as u64
-        } else {
-            0
-        };
+        if profiling {
+            script_exec_us = script_start.elapsed().as_micros() as u64;
+        }
+        // superglobals_eval is now part of script_exec (combined)
+        let superglobals_us = superglobals_build_us; // eval time is in script_exec_us now
 
         // Flush output buffers
         let finalize_start = Instant::now();
@@ -342,7 +325,7 @@ impl PhpSapiPool {
                 php_startup_us,
                 superglobals_us,
                 superglobals_build_us,
-                superglobals_eval_us,
+                superglobals_eval_us: 0, // Now part of script_exec_us (combined eval)
                 memfd_setup_us,
                 script_exec_us,
                 output_capture_us,
@@ -528,6 +511,17 @@ impl PhpSapiPool {
             code.push_str("];");
         }
 
+        code
+    }
+
+    /// Build combined code: superglobals + require script
+    /// Single eval instead of separate eval + php_execute_script
+    fn build_combined_code(request: &ScriptRequest) -> String {
+        let mut code = Self::build_superglobals_code(request);
+        // Add require for the script (escaped path)
+        code.push_str("require'");
+        Self::write_escaped(&mut code, &request.script_path);
+        code.push_str("';");
         code
     }
 
