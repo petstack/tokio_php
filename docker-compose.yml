@@ -14,6 +14,8 @@ services:
       - USE_STUB=${USE_STUB:-0}
       # PROFILE: set to 1 or true to enable profiling (requires X-Profile: 1 header)
       - PROFILE=${PROFILE:-0}
+      # USE_SAPI: set to 1 or true to use custom SAPI executor
+      - USE_SAPI=${USE_SAPI:-0}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped

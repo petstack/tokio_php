@@ -12,6 +12,9 @@ use crate::server::{Server, ServerConfig};
 #[cfg(feature = "php")]
 use crate::executor::PhpExecutor;
 
+#[cfg(feature = "php")]
+use crate::executor::PhpSapiExecutor;
+
 use crate::executor::StubExecutor;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -77,20 +80,42 @@ async fn async_main(
     } else {
         #[cfg(feature = "php")]
         {
-            info!(
-                "Initializing PHP executor with {} workers...",
-                worker_threads
-            );
+            // Check for custom SAPI mode
+            let use_custom_sapi = std::env::var("USE_SAPI")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(false);
 
-            let executor = PhpExecutor::new(worker_threads).map_err(|e| {
-                eprintln!("Failed to initialize PHP: {}", e);
-                e
-            })?;
+            if use_custom_sapi {
+                info!(
+                    "Initializing PHP SAPI executor with {} workers...",
+                    worker_threads
+                );
 
-            info!("PHP executor ready ({} workers)", executor.worker_count());
+                let executor = PhpSapiExecutor::new(worker_threads).map_err(|e| {
+                    eprintln!("Failed to initialize PHP SAPI: {}", e);
+                    e
+                })?;
 
-            let server = Server::new(config, executor);
-            run_server(server).await
+                info!("PHP SAPI executor ready ({} workers)", executor.worker_count());
+
+                let server = Server::new(config, executor);
+                run_server(server).await
+            } else {
+                info!(
+                    "Initializing PHP executor with {} workers...",
+                    worker_threads
+                );
+
+                let executor = PhpExecutor::new(worker_threads).map_err(|e| {
+                    eprintln!("Failed to initialize PHP: {}", e);
+                    e
+                })?;
+
+                info!("PHP executor ready ({} workers)", executor.worker_count());
+
+                let server = Server::new(config, executor);
+                run_server(server).await
+            }
         }
 
         #[cfg(not(feature = "php"))]

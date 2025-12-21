@@ -9,56 +9,90 @@ tokio_php is an async web server written in Rust that executes PHP scripts via p
 ## Build Commands
 
 ```bash
-# Build with Docker (recommended)
+# Build and run with Docker (recommended)
 docker compose build
-docker compose up
-
-# Run in background
 docker compose up -d
+
+# Rebuild without cache
+docker compose build --no-cache
 
 # View logs
 docker compose logs -f
 
-# Stop
-docker compose down
+# Stop and remove volumes
+docker compose down -v
+
+# Run with environment variables
+PHP_WORKERS=4 docker compose up -d      # Set worker count
+USE_STUB=1 docker compose up -d          # Stub mode (no PHP, for benchmarks)
+USE_SAPI=1 docker compose up -d          # Alternative SAPI executor
+PROFILE=1 docker compose up -d           # Enable profiling
+
+# Benchmark
+wrk -t4 -c100 -d10s http://localhost:8080/index.php
 ```
 
 ## Architecture
 
-- `src/main.rs` - Entry point, initializes PHP runtime and starts HTTP server
-- `src/server.rs` - Hyper-based async HTTP server, parses GET/POST, routes requests
-- `src/php.rs` - PHP embed FFI bindings, superglobals injection, dedicated executor thread
-- `build.rs` - Links against libphp
-- `www/` - Document root for PHP files (mounted as volume in Docker)
+### Core Components
 
-## Key Design Decisions
+- `src/main.rs` - Entry point, runtime initialization, executor selection based on env vars
+- `src/server.rs` - Hyper-based HTTP server, request parsing (GET/POST/multipart), routing
+- `src/executor/` - Script execution backends (trait-based, pluggable)
+- `src/types.rs` - ScriptRequest/ScriptResponse data structures
+- `src/profiler.rs` - Request timing profiler (enabled via `PROFILE=1` + `X-Profile: 1` header)
 
-- Uses PHP 8.4 ZTS (Thread Safe) build with php-embed SAPI
-- OPcache + JIT enabled by overriding SAPI name to "cli-server" before php_embed_init
-  - OPcache: ~2x performance boost for I/O workloads
-  - JIT (tracing mode): up to 4x for CPU-intensive code (Fibonacci, math, etc.)
-- Multi-threaded PHP worker pool (configurable via `PHP_WORKERS` env var, defaults to CPU count)
+### Executor System
+
+The `ScriptExecutor` trait (`src/executor/mod.rs`) defines the interface for script execution:
+
+- `PhpExecutor` (`php.rs`) - Main PHP executor using php-embed with worker pool
+- `PhpSapiExecutor` (`php_sapi.rs`) - Alternative PHP executor with SAPI module init
+- `StubExecutor` (`stub.rs`) - Returns empty responses for benchmarking
+
+Selection order in main.rs:
+1. `USE_STUB=1` → StubExecutor
+2. `USE_SAPI=1` → PhpSapiExecutor
+3. Default → PhpExecutor
+
+### PHP Worker Pool
+
+- Multi-threaded worker pool (threads = `PHP_WORKERS` or CPU count)
+- Channel-based work distribution (`mpsc::channel` → workers)
+- Each worker: `php_request_startup()` → execute → `php_request_shutdown()`
+- Output captured via memfd + stdout redirection
+- Superglobals injected via `zend_eval_string` before script execution
+
+### Key Technical Details
+
+- SAPI name set to "cli-server" before `php_embed_init` for OPcache/JIT compatibility
+- PHP 8.4 ZTS (Thread Safe) build required
 - Single-threaded Tokio runtime (PHP workers handle blocking work)
-- Channel-based communication between async Tokio tasks and PHP worker threads
-- Output captured by redirecting stdout to temp files during PHP execution
-- Superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_REQUEST`, `$_COOKIE`, `$_FILES`) injected via `zend_eval_string` before script execution
-- Static files served directly via Tokio async I/O
+- OPcache settings in Dockerfile: `opcache.jit=tracing`, `opcache.validate_timestamps=0`
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
+| `PHP_WORKERS` | `0` (auto) | Worker count (0 = CPU cores) |
+| `USE_STUB` | `0` | Disable PHP, return empty responses |
+| `USE_SAPI` | `0` | Use alternative SAPI executor |
+| `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
+| `RUST_LOG` | `tokio_php=info` | Log level |
+
+## Profiling
+
+With `PROFILE=1`, requests with `X-Profile: 1` header return timing data:
+```bash
+curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep X-Profile
+```
+
+Returns headers: `X-Profile-Total-Us`, `X-Profile-PHP-Startup-Us`, `X-Profile-Script-Us`, etc.
 
 ## Superglobals Support
 
-The server parses HTTP requests and injects PHP superglobals:
-- `$_GET` - Query string parameters (URL decoded)
-- `$_POST` - Form data (application/x-www-form-urlencoded and multipart/form-data)
-- `$_SERVER` - REQUEST_METHOD, REQUEST_URI, QUERY_STRING, REMOTE_ADDR, HTTP headers, etc.
-- `$_COOKIE` - Parsed from Cookie header
-- `$_FILES` - Uploaded files from multipart/form-data
-- `$_REQUEST` - Merged GET + POST
-
-## Docker Environment
-
-Uses `php:8.4-zts-alpine` (official PHP ZTS image). Multi-stage build:
-1. Builder stage: Rust + PHP dev headers + build dependencies
-2. Runtime stage: Minimal Alpine with PHP ZTS + libgcc
+Full superglobals: `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST`
 
 ## Limitations
 
