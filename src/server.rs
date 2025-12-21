@@ -6,7 +6,6 @@ use hyper::service::service_fn;
 use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode, Method};
 use hyper_util::rt::TokioIo;
 use multer::Multipart;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -19,6 +18,7 @@ use uuid::Uuid;
 use http_body_util::BodyExt;
 
 use crate::executor::ScriptExecutor;
+use crate::profiler;
 use crate::types::{ScriptRequest, ScriptResponse, UploadedFile};
 
 const MAX_UPLOAD_SIZE: u64 = 10 * 1024 * 1024;
@@ -236,28 +236,35 @@ async fn handle_request<E: ScriptExecutor>(
     Ok(response)
 }
 
+/// Fast percent decode - only allocates if '%' is present
 #[inline]
-fn parse_query_string(query: &str) -> HashMap<String, String> {
-    let mut params = HashMap::new();
+fn fast_percent_decode(s: &str) -> String {
+    if s.contains('%') {
+        percent_encoding::percent_decode_str(s)
+            .decode_utf8_lossy()
+            .into_owned()
+    } else {
+        s.to_string()
+    }
+}
+
+#[inline]
+fn parse_query_string(query: &str) -> Vec<(String, String)> {
+    let pair_count = query.matches('&').count() + 1;
+    let mut params = Vec::with_capacity(pair_count.min(16));
 
     for pair in query.split('&') {
         if pair.is_empty() {
             continue;
         }
 
-        let mut parts = pair.splitn(2, '=');
-        let key = parts.next().unwrap_or("");
-        let value = parts.next().unwrap_or("");
-
-        let key = percent_encoding::percent_decode_str(key)
-            .decode_utf8_lossy()
-            .into_owned();
-        let value = percent_encoding::percent_decode_str(value)
-            .decode_utf8_lossy()
-            .into_owned();
+        let (key, value) = match pair.find('=') {
+            Some(pos) => (&pair[..pos], &pair[pos + 1..]),
+            None => (pair, ""),
+        };
 
         if !key.is_empty() {
-            params.insert(key, value);
+            params.push((fast_percent_decode(key), fast_percent_decode(value)));
         }
     }
 
@@ -265,8 +272,9 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
 }
 
 #[inline]
-fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
-    let mut cookies = HashMap::new();
+fn parse_cookies(cookie_header: &str) -> Vec<(String, String)> {
+    let cookie_count = cookie_header.matches(';').count() + 1;
+    let mut cookies = Vec::with_capacity(cookie_count.min(16));
 
     for cookie in cookie_header.split(';') {
         let cookie = cookie.trim();
@@ -274,15 +282,13 @@ fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
             continue;
         }
 
-        let mut parts = cookie.splitn(2, '=');
-        let name = parts.next().unwrap_or("").trim();
-        let value = parts.next().unwrap_or("").trim();
+        let (name, value) = match cookie.find('=') {
+            Some(pos) => (cookie[..pos].trim(), cookie[pos + 1..].trim()),
+            None => continue,
+        };
 
         if !name.is_empty() {
-            let value = percent_encoding::percent_decode_str(value)
-                .decode_utf8_lossy()
-                .into_owned();
-            cookies.insert(name.to_string(), value);
+            cookies.push((name.to_string(), fast_percent_decode(value)));
         }
     }
 
@@ -292,7 +298,7 @@ fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
 async fn parse_multipart(
     content_type: &str,
     body: Bytes,
-) -> Result<(HashMap<String, String>, HashMap<String, Vec<UploadedFile>>), String> {
+) -> Result<(Vec<(String, String)>, Vec<(String, Vec<UploadedFile>)>), String> {
     let boundary = content_type
         .split(';')
         .find_map(|part| {
@@ -307,13 +313,13 @@ async fn parse_multipart(
 
     let mut multipart = Multipart::new(stream::once(async { Ok::<_, std::io::Error>(body) }), boundary);
 
-    let mut params = HashMap::new();
-    let mut files: HashMap<String, Vec<UploadedFile>> = HashMap::new();
+    let mut params = Vec::new();
+    let mut files: Vec<(String, Vec<UploadedFile>)> = Vec::new();
 
     while let Some(field) = multipart.next_field().await.map_err(|e| e.to_string())? {
         let field_name = field.name().unwrap_or("").to_string();
         let file_name = field.file_name().map(|s| s.to_string());
-        let content_type = field.content_type().map(|m| m.to_string()).unwrap_or_default();
+        let field_content_type = field.content_type().map(|m| m.to_string()).unwrap_or_default();
 
         if let Some(original_name) = file_name {
             if original_name.is_empty() {
@@ -329,33 +335,39 @@ async fn parse_multipart(
                 field_name
             };
 
-            if size > MAX_UPLOAD_SIZE {
-                files.entry(normalized_name).or_default().push(UploadedFile {
+            let uploaded_file = if size > MAX_UPLOAD_SIZE {
+                UploadedFile {
                     name: original_name,
-                    mime_type: content_type,
+                    mime_type: field_content_type,
                     tmp_name: String::new(),
                     size,
                     error: 1,
-                });
-                continue;
+                }
+            } else {
+                let tmp_name = format!("/tmp/php{}", Uuid::new_v4().simple());
+
+                let mut file = File::create(&tmp_name).await.map_err(|e| e.to_string())?;
+                file.write_all(&data).await.map_err(|e| e.to_string())?;
+                file.flush().await.map_err(|e| e.to_string())?;
+
+                UploadedFile {
+                    name: original_name,
+                    mime_type: field_content_type,
+                    tmp_name,
+                    size,
+                    error: 0,
+                }
+            };
+
+            // Find existing entry or create new one
+            if let Some(entry) = files.iter_mut().find(|(name, _)| name == &normalized_name) {
+                entry.1.push(uploaded_file);
+            } else {
+                files.push((normalized_name, vec![uploaded_file]));
             }
-
-            let tmp_name = format!("/tmp/php{}", Uuid::new_v4().simple());
-
-            let mut file = File::create(&tmp_name).await.map_err(|e| e.to_string())?;
-            file.write_all(&data).await.map_err(|e| e.to_string())?;
-            file.flush().await.map_err(|e| e.to_string())?;
-
-            files.entry(normalized_name).or_default().push(UploadedFile {
-                name: original_name,
-                mime_type: content_type,
-                tmp_name,
-                size,
-                error: 0,
-            });
         } else {
             let value = field.text().await.map_err(|e| e.to_string())?;
-            params.insert(field_name, value);
+            params.push((field_name, value));
         }
     }
 
@@ -369,10 +381,22 @@ async fn process_request<E: ScriptExecutor>(
     document_root: Arc<str>,
     skip_file_check: bool,
 ) -> Response<Full<Bytes>> {
+    let parse_start = std::time::Instant::now();
+
     let method = req.method().clone();
     let uri = req.uri().clone();
     let uri_path = uri.path();
     let query_string = uri.query().unwrap_or("");
+
+    // Check for profiling header
+    let profile_requested = req
+        .headers()
+        .get("x-profile")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+
+    let profiling_enabled = profile_requested && profiler::is_enabled();
 
     // Fast path for stub: minimal processing
     if skip_file_check {
@@ -403,13 +427,13 @@ async fn process_request<E: ScriptExecutor>(
         .to_string();
 
     let cookies = if cookie_header_str.is_empty() {
-        HashMap::new()
+        Vec::new()
     } else {
         parse_cookies(&cookie_header_str)
     };
 
     let get_params = if query_string.is_empty() {
-        HashMap::new()
+        Vec::new()
     } else {
         parse_query_string(query_string)
     };
@@ -428,7 +452,7 @@ async fn process_request<E: ScriptExecutor>(
 
         if content_type_str.starts_with("application/x-www-form-urlencoded") {
             let body_str = String::from_utf8_lossy(&body_bytes);
-            (parse_query_string(&body_str), HashMap::new())
+            (parse_query_string(&body_str), Vec::new())
         } else if content_type_str.starts_with("multipart/form-data") {
             match parse_multipart(&content_type_str, body_bytes).await {
                 Ok((params, uploaded_files)) => (params, uploaded_files),
@@ -441,24 +465,28 @@ async fn process_request<E: ScriptExecutor>(
                 }
             }
         } else {
-            (HashMap::new(), HashMap::new())
+            (Vec::new(), Vec::new())
         }
     } else {
-        (HashMap::new(), HashMap::new())
+        (Vec::new(), Vec::new())
     };
 
-    // Build server variables
-    let mut server_vars = HashMap::with_capacity(9);
-    server_vars.insert("REQUEST_METHOD".into(), method.to_string());
-    server_vars.insert("REQUEST_URI".into(), uri.to_string());
-    server_vars.insert("QUERY_STRING".into(), query_string.to_string());
-    server_vars.insert("REMOTE_ADDR".into(), remote_addr.ip().to_string());
-    server_vars.insert("REMOTE_PORT".into(), remote_addr.port().to_string());
-    server_vars.insert("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into());
-    server_vars.insert("SERVER_PROTOCOL".into(), "HTTP/1.1".into());
-    server_vars.insert("CONTENT_TYPE".into(), content_type_str);
-    if !cookie_header_str.is_empty() {
-        server_vars.insert("HTTP_COOKIE".into(), cookie_header_str);
+    // Build server variables - use Vec with pre-allocated capacity
+    let has_cookie = !cookie_header_str.is_empty();
+    let capacity = if has_cookie { 9 } else { 8 };
+    let mut server_vars = Vec::with_capacity(capacity);
+
+    // Use method.as_str() to avoid allocation for common methods
+    server_vars.push(("REQUEST_METHOD".into(), method.as_str().to_string()));
+    server_vars.push(("REQUEST_URI".into(), uri.to_string()));
+    server_vars.push(("QUERY_STRING".into(), query_string.to_string()));
+    server_vars.push(("REMOTE_ADDR".into(), remote_addr.ip().to_string()));
+    server_vars.push(("REMOTE_PORT".into(), remote_addr.port().to_string()));
+    server_vars.push(("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into()));
+    server_vars.push(("SERVER_PROTOCOL".into(), "HTTP/1.1".into()));
+    server_vars.push(("CONTENT_TYPE".into(), content_type_str));
+    if has_cookie {
+        server_vars.push(("HTTP_COOKIE".into(), cookie_header_str));
     }
 
     // Decode URL path
@@ -493,10 +521,16 @@ async fn process_request<E: ScriptExecutor>(
     }
 
     if extension == "php" {
-        let temp_files: Vec<String> = files.values()
-            .flat_map(|file_vec| file_vec.iter().map(|f| f.tmp_name.clone()))
+        let temp_files: Vec<String> = files.iter()
+            .flat_map(|(_, file_vec)| file_vec.iter().map(|f| f.tmp_name.clone()))
             .filter(|path| !path.is_empty())
             .collect();
+
+        let parse_request_us = if profiling_enabled {
+            parse_start.elapsed().as_micros() as u64
+        } else {
+            0
+        };
 
         let script_request = ScriptRequest {
             script_path: file_path.to_string_lossy().into_owned(),
@@ -505,10 +539,19 @@ async fn process_request<E: ScriptExecutor>(
             cookies,
             server_vars,
             files,
+            profile: profiling_enabled,
         };
 
         let response = match executor.execute(script_request).await {
-            Ok(resp) => create_script_response_fast(resp),
+            Ok(mut resp) => {
+                // Add parse time to profile data if profiling
+                if profiling_enabled {
+                    if let Some(ref mut profile) = resp.profile {
+                        profile.parse_request_us = parse_request_us;
+                    }
+                }
+                create_script_response_fast(resp, profiling_enabled)
+            }
             Err(e) => {
                 error!("Script execution error: {}", e);
                 Response::builder()
@@ -531,9 +574,9 @@ async fn process_request<E: ScriptExecutor>(
 }
 
 #[inline]
-fn create_script_response_fast(script_response: ScriptResponse) -> Response<Full<Bytes>> {
-    // Fast path: no headers to process
-    if script_response.headers.is_empty() {
+fn create_script_response_fast(script_response: ScriptResponse, profiling: bool) -> Response<Full<Bytes>> {
+    // Fast path: no headers to process and no profiling
+    if script_response.headers.is_empty() && !profiling {
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/html; charset=utf-8")
@@ -609,6 +652,15 @@ fn create_script_response_fast(script_response: ScriptResponse) -> Response<Full
 
     for (name, value) in custom_headers {
         builder = builder.header(name, value);
+    }
+
+    // Add profiling headers if profiling is enabled
+    if profiling {
+        if let Some(ref profile) = script_response.profile {
+            for (name, value) in profile.to_headers() {
+                builder = builder.header(name, value);
+            }
+        }
     }
 
     builder

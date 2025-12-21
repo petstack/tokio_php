@@ -1,5 +1,8 @@
+use crate::profiler::ProfileData;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+/// Key-value pair type for parameters (faster than HashMap for small collections)
+pub type ParamList = Vec<(String, String)>;
 
 /// Represents an uploaded file from multipart form data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,11 +18,14 @@ pub struct UploadedFile {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScriptRequest {
     pub script_path: String,
-    pub get_params: HashMap<String, String>,
-    pub post_params: HashMap<String, String>,
-    pub cookies: HashMap<String, String>,
-    pub server_vars: HashMap<String, String>,
-    pub files: HashMap<String, Vec<UploadedFile>>,
+    pub get_params: ParamList,
+    pub post_params: ParamList,
+    pub cookies: ParamList,
+    pub server_vars: ParamList,
+    pub files: Vec<(String, Vec<UploadedFile>)>,
+    /// Enable profiling for this request
+    #[serde(skip)]
+    pub profile: bool,
 }
 
 impl ScriptRequest {
@@ -31,10 +37,12 @@ impl ScriptRequest {
 }
 
 /// Script execution response.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ScriptResponse {
     pub body: String,
     pub headers: Vec<(String, String)>,
+    /// Profiling data (if profiling was enabled)
+    pub profile: Option<ProfileData>,
 }
 
 impl ScriptResponse {
@@ -48,6 +56,7 @@ impl ScriptResponse {
         Self {
             body: body.into(),
             headers: Vec::new(),
+            profile: None,
         }
     }
 
@@ -56,6 +65,7 @@ impl ScriptResponse {
         Self {
             body: body.into(),
             headers,
+            profile: None,
         }
     }
 }

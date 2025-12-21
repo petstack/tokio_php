@@ -1,4 +1,5 @@
 mod executor;
+pub mod profiler;
 mod server;
 mod types;
 
@@ -22,6 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    // Initialize profiler
+    profiler::init();
 
     info!("Starting tokio_php server...");
 

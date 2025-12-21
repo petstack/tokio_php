@@ -12,6 +12,8 @@ services:
       - PHP_WORKERS=${PHP_WORKERS:-0}
       # USE_STUB: set to 1 or true to disable PHP and return empty responses
       - USE_STUB=${USE_STUB:-0}
+      # PROFILE: set to 1 or true to enable profiling (requires X-Profile: 1 header)
+      - PROFILE=${PROFILE:-0}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
