@@ -390,7 +390,19 @@ async fn process_request<E: ScriptExecutor>(
     document_root: Arc<str>,
     skip_file_check: bool,
 ) -> Response<Full<Bytes>> {
-    let parse_start = std::time::Instant::now();
+    use std::time::Instant;
+
+    let parse_start = Instant::now();
+
+    // Profile timing variables
+    let mut headers_extract_us = 0u64;
+    let mut query_parse_us = 0u64;
+    let mut cookies_parse_us = 0u64;
+    let mut body_read_us = 0u64;
+    let mut body_parse_us = 0u64;
+    let mut server_vars_us = 0u64;
+    let mut path_resolve_us = 0u64;
+    let mut file_check_us = 0u64;
 
     let method = req.method().clone();
     let uri = req.uri().clone();
@@ -402,7 +414,7 @@ async fn process_request<E: ScriptExecutor>(
         .headers()
         .get("x-profile")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
     let profiling_enabled = profile_requested && profiler::is_enabled();
@@ -421,6 +433,7 @@ async fn process_request<E: ScriptExecutor>(
     }
 
     // Full processing path - extract headers before consuming body
+    let headers_start = Instant::now();
     let content_type_str = req
         .headers()
         .get("content-type")
@@ -434,20 +447,35 @@ async fn process_request<E: ScriptExecutor>(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
+    if profiling_enabled {
+        headers_extract_us = headers_start.elapsed().as_micros() as u64;
+    }
 
+    // Parse cookies
+    let cookies_start = Instant::now();
     let cookies = if cookie_header_str.is_empty() {
         Vec::new()
     } else {
         parse_cookies(&cookie_header_str)
     };
+    if profiling_enabled {
+        cookies_parse_us = cookies_start.elapsed().as_micros() as u64;
+    }
 
+    // Parse query string
+    let query_start = Instant::now();
     let get_params = if query_string.is_empty() {
         Vec::new()
     } else {
         parse_query_string(query_string)
     };
+    if profiling_enabled {
+        query_parse_us = query_start.elapsed().as_micros() as u64;
+    }
 
+    // Handle POST body
     let (post_params, files) = if method == Method::POST {
+        let body_read_start = Instant::now();
         let body_bytes = match req.collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(_) => {
@@ -458,8 +486,12 @@ async fn process_request<E: ScriptExecutor>(
                     .unwrap();
             }
         };
+        if profiling_enabled {
+            body_read_us = body_read_start.elapsed().as_micros() as u64;
+        }
 
-        if content_type_str.starts_with("application/x-www-form-urlencoded") {
+        let body_parse_start = Instant::now();
+        let result = if content_type_str.starts_with("application/x-www-form-urlencoded") {
             let body_str = String::from_utf8_lossy(&body_bytes);
             (parse_query_string(&body_str), Vec::new())
         } else if content_type_str.starts_with("multipart/form-data") {
@@ -475,17 +507,21 @@ async fn process_request<E: ScriptExecutor>(
             }
         } else {
             (Vec::new(), Vec::new())
+        };
+        if profiling_enabled {
+            body_parse_us = body_parse_start.elapsed().as_micros() as u64;
         }
+        result
     } else {
         (Vec::new(), Vec::new())
     };
 
-    // Build server variables - use Vec with pre-allocated capacity
+    // Build server variables
+    let server_vars_start = Instant::now();
     let has_cookie = !cookie_header_str.is_empty();
     let capacity = if has_cookie { 9 } else { 8 };
     let mut server_vars = Vec::with_capacity(capacity);
 
-    // Use method.as_str() to avoid allocation for common methods
     server_vars.push(("REQUEST_METHOD".into(), method.as_str().to_string()));
     server_vars.push(("REQUEST_URI".into(), uri.to_string()));
     server_vars.push(("QUERY_STRING".into(), query_string.to_string()));
@@ -497,12 +533,15 @@ async fn process_request<E: ScriptExecutor>(
     if has_cookie {
         server_vars.push(("HTTP_COOKIE".into(), cookie_header_str));
     }
+    if profiling_enabled {
+        server_vars_us = server_vars_start.elapsed().as_micros() as u64;
+    }
 
-    // Decode URL path
+    // Decode URL path and resolve file
+    let path_start = Instant::now();
     let decoded_path = percent_encoding::percent_decode_str(uri_path)
         .decode_utf8_lossy();
 
-    // Sanitize path
     let clean_path = decoded_path
         .trim_start_matches('/')
         .replace("..", "");
@@ -515,18 +554,24 @@ async fn process_request<E: ScriptExecutor>(
 
     let file_path = Path::new(&file_path);
 
-    // Check extension
     let extension = file_path.extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
+    if profiling_enabled {
+        path_resolve_us = path_start.elapsed().as_micros() as u64;
+    }
 
     // Check if file exists (sync - fast for stat syscall)
+    let file_check_start = Instant::now();
     if !skip_file_check && !file_path.exists() {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header("Content-Type", "text/html")
             .body(Full::new(NOT_FOUND_BODY.clone()))
             .unwrap();
+    }
+    if profiling_enabled {
+        file_check_us = file_check_start.elapsed().as_micros() as u64;
     }
 
     if extension == "php" {
@@ -553,10 +598,18 @@ async fn process_request<E: ScriptExecutor>(
 
         let response = match executor.execute(script_request).await {
             Ok(mut resp) => {
-                // Add parse time to profile data if profiling
+                // Add parse breakdown to profile data if profiling
                 if profiling_enabled {
                     if let Some(ref mut profile) = resp.profile {
                         profile.parse_request_us = parse_request_us;
+                        profile.headers_extract_us = headers_extract_us;
+                        profile.query_parse_us = query_parse_us;
+                        profile.cookies_parse_us = cookies_parse_us;
+                        profile.body_read_us = body_read_us;
+                        profile.body_parse_us = body_parse_us;
+                        profile.server_vars_us = server_vars_us;
+                        profile.path_resolve_us = path_resolve_us;
+                        profile.file_check_us = file_check_us;
                     }
                 }
                 create_script_response_fast(resp, profiling_enabled)

@@ -184,10 +184,23 @@ impl PhpSapiPool {
         queue_wait_us: u64,
         php_startup_us: u64,
     ) -> Result<ScriptResponse, String> {
-        // Build and execute superglobals code
-        let superglobals_start = Instant::now();
-        let superglobals_code = Self::build_superglobals_code(request);
+        let mut superglobals_build_us = 0u64;
+        let mut superglobals_eval_us = 0u64;
+        let mut memfd_setup_us = 0u64;
+        let mut finalize_eval_us = 0u64;
+        let mut stdout_restore_us = 0u64;
+        let mut output_read_us = 0u64;
+        let mut output_parse_us = 0u64;
 
+        // Build superglobals code
+        let build_start = Instant::now();
+        let superglobals_code = Self::build_superglobals_code(request);
+        if profiling {
+            superglobals_build_us = build_start.elapsed().as_micros() as u64;
+        }
+
+        // Execute superglobals code
+        let eval_start = Instant::now();
         unsafe {
             let code_c = CString::new(superglobals_code).map_err(|e| e.to_string())?;
             let name_c = CString::new("superglobals_init").unwrap();
@@ -198,13 +211,13 @@ impl PhpSapiPool {
                 name_c.as_ptr() as *mut c_char,
             );
         }
-        let superglobals_us = if profiling {
-            superglobals_start.elapsed().as_micros() as u64
-        } else {
-            0
-        };
+        if profiling {
+            superglobals_eval_us = eval_start.elapsed().as_micros() as u64;
+        }
+        let superglobals_us = superglobals_build_us + superglobals_eval_us;
 
         // Set up memfd for stdout capture
+        let memfd_start = Instant::now();
         let write_fd = unsafe {
             libc::syscall(
                 libc::SYS_memfd_create,
@@ -229,6 +242,9 @@ impl PhpSapiPool {
             }
             return Err("Failed to redirect stdout".to_string());
         }
+        if profiling {
+            memfd_setup_us = memfd_start.elapsed().as_micros() as u64;
+        }
 
         // Execute the script
         let script_start = Instant::now();
@@ -248,22 +264,33 @@ impl PhpSapiPool {
             0
         };
 
-        // Flush output buffers and restore stdout
-        let output_start = Instant::now();
+        // Flush output buffers
+        let finalize_start = Instant::now();
         unsafe {
             zend_eval_string(
                 FINALIZE_CODE.as_ptr() as *mut c_char,
                 ptr::null_mut(),
                 FINALIZE_NAME.as_ptr() as *mut c_char,
             );
+        }
+        if profiling {
+            finalize_eval_us = finalize_start.elapsed().as_micros() as u64;
+        }
 
+        // Restore stdout
+        let restore_start = Instant::now();
+        unsafe {
             libc::fflush(ptr::null_mut());
             libc::dup2(original_stdout, 1);
             libc::close(original_stdout);
         }
+        if profiling {
+            stdout_restore_us = restore_start.elapsed().as_micros() as u64;
+        }
 
-        // Read output from memfd and parse headers
-        let (body, headers) = unsafe {
+        // Read output from memfd
+        let read_start = Instant::now();
+        let raw_output = unsafe {
             libc::lseek(write_fd, 0, libc::SEEK_SET);
 
             let mut output = Vec::new();
@@ -277,34 +304,52 @@ impl PhpSapiPool {
             }
 
             libc::close(write_fd);
-            let combined = String::from_utf8_lossy(&output);
-
-            // Split body and headers
-            if let Some(pos) = combined.find(HEADER_DELIMITER) {
-                let body = combined[..pos].to_string();
-                let headers_str = &combined[pos + HEADER_DELIMITER.len()..];
-                let headers = Self::parse_headers_str(headers_str);
-                (body, headers)
-            } else {
-                (combined.into_owned(), Vec::new())
-            }
+            String::from_utf8_lossy(&output).into_owned()
         };
+        if profiling {
+            output_read_us = read_start.elapsed().as_micros() as u64;
+        }
 
-        let output_capture_us = if profiling {
-            output_start.elapsed().as_micros() as u64
+        // Parse body and headers
+        let parse_start = Instant::now();
+        let (body, headers) = if let Some(pos) = raw_output.find(HEADER_DELIMITER) {
+            let body = raw_output[..pos].to_string();
+            let headers_str = &raw_output[pos + HEADER_DELIMITER.len()..];
+            let headers = Self::parse_headers_str(headers_str);
+            (body, headers)
         } else {
-            0
+            (raw_output, Vec::new())
         };
+        if profiling {
+            output_parse_us = parse_start.elapsed().as_micros() as u64;
+        }
+
+        let output_capture_us = finalize_eval_us + stdout_restore_us + output_read_us + output_parse_us;
 
         let profile = if profiling {
             Some(ProfileData {
                 total_us: 0,
                 parse_request_us: 0,
+                headers_extract_us: 0,
+                query_parse_us: 0,
+                cookies_parse_us: 0,
+                body_read_us: 0,
+                body_parse_us: 0,
+                server_vars_us: 0,
+                path_resolve_us: 0,
+                file_check_us: 0,
                 queue_wait_us,
                 php_startup_us,
                 superglobals_us,
+                superglobals_build_us,
+                superglobals_eval_us,
+                memfd_setup_us,
                 script_exec_us,
                 output_capture_us,
+                finalize_eval_us,
+                stdout_restore_us,
+                output_read_us,
+                output_parse_us,
                 php_shutdown_us: 0,
                 response_build_us: 0,
             })
