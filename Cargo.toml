@@ -9,13 +9,12 @@ php = []
 stub = []
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-hyper = { version = "1", features = ["full"] }
-hyper-util = { version = "0.1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "fs", "sync", "signal", "macros"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 libc = "0.2"
-once_cell = "1"
 mime_guess = "2"
 percent-encoding = "2"
 tracing = "0.1"
@@ -24,14 +23,8 @@ multer = "3"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 socket2 = { version = "0.5", features = ["all"] }
-serde = { version = "1", features = ["derive"] }
-bincode = "1"
-nix = { version = "0.29", features = ["process", "signal"] }
 num_cpus = "1"
 async-trait = "0.1"
-
-[build-dependencies]
-cc = "1"
 
 [profile.release]
 lto = true

@@ -1,11 +1,10 @@
 use crate::profiler::ProfileData;
-use serde::{Deserialize, Serialize};
 
 /// Key-value pair type for parameters (faster than HashMap for small collections)
 pub type ParamList = Vec<(String, String)>;
 
 /// Represents an uploaded file from multipart form data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct UploadedFile {
     pub name: String,
     pub mime_type: String,
@@ -15,7 +14,7 @@ pub struct UploadedFile {
 }
 
 /// Script execution request containing all HTTP request data.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ScriptRequest {
     pub script_path: String,
     pub get_params: ParamList,
@@ -24,7 +23,6 @@ pub struct ScriptRequest {
     pub server_vars: ParamList,
     pub files: Vec<(String, Vec<UploadedFile>)>,
     /// Enable profiling for this request
-    #[serde(skip)]
     pub profile: bool,
 }
 
