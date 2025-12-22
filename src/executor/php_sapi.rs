@@ -335,6 +335,8 @@ impl PhpSapiPool {
                 output_parse_us,
                 php_shutdown_us: 0,
                 response_build_us: 0,
+                // TLS/connection info filled in by server
+                ..Default::default()
             })
         } else {
             None

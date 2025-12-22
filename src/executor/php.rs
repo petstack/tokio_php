@@ -390,6 +390,8 @@ impl PhpThreadPool {
                 output_parse_us,
                 php_shutdown_us: 0, // Will be filled in by caller
                 response_build_us: 0, // Filled in by server
+                // TLS/connection info filled in by server
+                ..Default::default()
             })
         } else {
             None

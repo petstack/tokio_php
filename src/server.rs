@@ -27,6 +27,14 @@ use crate::types::{ScriptRequest, ScriptResponse, UploadedFile};
 
 const MAX_UPLOAD_SIZE: u64 = 10 * 1024 * 1024;
 
+/// TLS connection information for profiling
+#[derive(Clone, Default)]
+struct TlsInfo {
+    handshake_us: u64,
+    protocol: String,
+    alpn: String,
+}
+
 // Pre-allocated static bytes for common responses
 static EMPTY_BODY: Bytes = Bytes::from_static(b"");
 static NOT_FOUND_BODY: Bytes = Bytes::from_static(b"404 Not Found");
@@ -236,18 +244,35 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                     let tls_acceptor = tls_acceptor.clone();
 
                     tokio::task::spawn(async move {
-                        let service = service_fn(move |req| {
-                            let executor = Arc::clone(&executor);
-                            let doc_root = Arc::clone(&document_root);
-                            async move {
-                                handle_request(req, remote_addr, executor, doc_root, skip_file_check).await
-                            }
-                        });
-
                         // Handle TLS or plain TCP
                         if let Some(acceptor) = tls_acceptor {
+                            // Measure TLS handshake time
+                            let tls_start = std::time::Instant::now();
                             match acceptor.accept(stream).await {
                                 Ok(tls_stream) => {
+                                    let handshake_us = tls_start.elapsed().as_micros() as u64;
+
+                                    // Extract TLS info from the connection
+                                    let (_, server_conn) = tls_stream.get_ref();
+                                    let tls_info = TlsInfo {
+                                        handshake_us,
+                                        protocol: server_conn.protocol_version()
+                                            .map(|v| format!("{:?}", v))
+                                            .unwrap_or_default(),
+                                        alpn: server_conn.alpn_protocol()
+                                            .map(|p| String::from_utf8_lossy(p).to_string())
+                                            .unwrap_or_default(),
+                                    };
+
+                                    let service = service_fn(move |req| {
+                                        let executor = Arc::clone(&executor);
+                                        let doc_root = Arc::clone(&document_root);
+                                        let tls = tls_info.clone();
+                                        async move {
+                                            handle_request(req, remote_addr, executor, doc_root, skip_file_check, Some(tls)).await
+                                        }
+                                    });
+
                                     let io = TokioIo::new(tls_stream);
                                     if let Err(err) = auto::Builder::new(TokioExecutor::new())
                                         .http1()
@@ -268,6 +293,14 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                                 }
                             }
                         } else {
+                            let service = service_fn(move |req| {
+                                let executor = Arc::clone(&executor);
+                                let doc_root = Arc::clone(&document_root);
+                                async move {
+                                    handle_request(req, remote_addr, executor, doc_root, skip_file_check, None).await
+                                }
+                            });
+
                             let io = TokioIo::new(stream);
                             if let Err(err) = auto::Builder::new(TokioExecutor::new())
                                 .http1()
@@ -318,12 +351,13 @@ async fn handle_request<E: ScriptExecutor>(
     executor: Arc<E>,
     document_root: Arc<str>,
     skip_file_check: bool,
+    tls_info: Option<TlsInfo>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let is_head = *req.method() == Method::HEAD;
 
     let response = match *req.method() {
         Method::GET | Method::POST | Method::HEAD => {
-            let mut resp = process_request(req, remote_addr, executor, document_root, skip_file_check).await;
+            let mut resp = process_request(req, remote_addr, executor, document_root, skip_file_check, tls_info).await;
 
             // HEAD: return headers only, no body
             if is_head {
@@ -486,6 +520,7 @@ async fn process_request<E: ScriptExecutor>(
     executor: Arc<E>,
     document_root: Arc<str>,
     skip_file_check: bool,
+    tls_info: Option<TlsInfo>,
 ) -> Response<Full<Bytes>> {
     use std::time::Instant;
 
@@ -502,7 +537,13 @@ async fn process_request<E: ScriptExecutor>(
     let mut file_check_us = 0u64;
 
     let method = req.method().clone();
-    let version = req.version();
+    let http_version = match req.version() {
+        hyper::Version::HTTP_2 => "HTTP/2.0",
+        hyper::Version::HTTP_11 => "HTTP/1.1",
+        hyper::Version::HTTP_10 => "HTTP/1.0",
+        hyper::Version::HTTP_3 => "HTTP/3.0",
+        _ => "HTTP/1.1",
+    }.to_string();
     let uri = req.uri().clone();
     let uri_path = uri.path();
     let query_string = uri.query().unwrap_or("");
@@ -626,13 +667,7 @@ async fn process_request<E: ScriptExecutor>(
     server_vars.push(("REMOTE_ADDR".into(), remote_addr.ip().to_string()));
     server_vars.push(("REMOTE_PORT".into(), remote_addr.port().to_string()));
     server_vars.push(("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into()));
-    let protocol = match version {
-        hyper::Version::HTTP_2 => "HTTP/2.0",
-        hyper::Version::HTTP_11 => "HTTP/1.1",
-        hyper::Version::HTTP_10 => "HTTP/1.0",
-        _ => "HTTP/1.1",
-    };
-    server_vars.push(("SERVER_PROTOCOL".into(), protocol.into()));
+    server_vars.push(("SERVER_PROTOCOL".into(), http_version.clone()));
     server_vars.push(("CONTENT_TYPE".into(), content_type_str));
     if has_cookie {
         server_vars.push(("HTTP_COOKIE".into(), cookie_header_str));
@@ -705,6 +740,15 @@ async fn process_request<E: ScriptExecutor>(
                 // Add parse breakdown to profile data if profiling
                 if profiling_enabled {
                     if let Some(ref mut profile) = resp.profile {
+                        // TLS and connection info
+                        profile.http_version = http_version.clone();
+                        if let Some(ref tls) = tls_info {
+                            profile.tls_handshake_us = tls.handshake_us;
+                            profile.tls_protocol = tls.protocol.clone();
+                            profile.tls_alpn = tls.alpn.clone();
+                        }
+
+                        // Parse timing breakdown
                         profile.parse_request_us = parse_request_us;
                         profile.headers_extract_us = headers_extract_us;
                         profile.query_parse_us = query_parse_us;

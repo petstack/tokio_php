@@ -28,6 +28,12 @@ pub struct ProfileData {
     // Total time
     pub total_us: u64,
 
+    // === Connection & TLS (server.rs) ===
+    pub tls_handshake_us: u64,       // TLS handshake time (0 for plain HTTP)
+    pub http_version: String,        // HTTP/1.0, HTTP/1.1, HTTP/2.0
+    pub tls_protocol: String,        // TLS 1.2, TLS 1.3, or empty for plain HTTP
+    pub tls_alpn: String,            // ALPN negotiated protocol (h2, http/1.1)
+
     // === Server-side parsing (server.rs) ===
     pub parse_request_us: u64,       // Total parse time
     pub headers_extract_us: u64,     // Extract HTTP headers from request
@@ -72,11 +78,27 @@ pub struct ProfileData {
 impl ProfileData {
     /// Convert to HTTP header format
     pub fn to_headers(&self) -> Vec<(String, String)> {
-        vec![
+        let mut headers = vec![
             // Summary
             ("X-Profile-Total-Us".to_string(), self.total_us.to_string()),
 
-            // Parse breakdown
+            // Connection & TLS
+            ("X-Profile-HTTP-Version".to_string(), self.http_version.clone()),
+        ];
+
+        // Only include TLS headers if TLS was used
+        if self.tls_handshake_us > 0 {
+            headers.push(("X-Profile-TLS-Handshake-Us".to_string(), self.tls_handshake_us.to_string()));
+        }
+        if !self.tls_protocol.is_empty() {
+            headers.push(("X-Profile-TLS-Protocol".to_string(), self.tls_protocol.clone()));
+        }
+        if !self.tls_alpn.is_empty() {
+            headers.push(("X-Profile-TLS-ALPN".to_string(), self.tls_alpn.clone()));
+        }
+
+        // Parse breakdown
+        headers.extend([
             ("X-Profile-Parse-Us".to_string(), self.parse_request_us.to_string()),
             ("X-Profile-Parse-Headers-Us".to_string(), self.headers_extract_us.to_string()),
             ("X-Profile-Parse-Query-Us".to_string(), self.query_parse_us.to_string()),
@@ -116,14 +138,24 @@ impl ProfileData {
 
             // Response
             ("X-Profile-Response-Us".to_string(), self.response_build_us.to_string()),
-        ]
+        ]);
+
+        headers
     }
 
     /// Format as human-readable string (summary only)
     pub fn to_summary(&self) -> String {
+        let tls_info = if self.tls_handshake_us > 0 {
+            format!(" tls={}us", self.tls_handshake_us)
+        } else {
+            String::new()
+        };
+
         format!(
-            "total={}us parse={}us queue={}us php_start={}us globals={}us script={}us output={}us php_end={}us resp={}us",
+            "total={}us{} http={} parse={}us queue={}us php_start={}us globals={}us script={}us output={}us php_end={}us resp={}us",
             self.total_us,
+            tls_info,
+            self.http_version,
             self.parse_request_us,
             self.queue_wait_us,
             self.php_startup_us,
