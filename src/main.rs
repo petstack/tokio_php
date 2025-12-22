@@ -62,7 +62,16 @@ async fn async_main(
         .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
         .parse()?;
 
-    let config = ServerConfig::new(addr).with_workers(num_workers);
+    // TLS configuration
+    let tls_cert = std::env::var("TLS_CERT").ok();
+    let tls_key = std::env::var("TLS_KEY").ok();
+
+    let mut config = ServerConfig::new(addr).with_workers(num_workers);
+
+    if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
+        info!("TLS enabled: cert={}, key={}", cert, key);
+        config = config.with_tls(cert, key);
+    }
 
     // Check for stub mode (via env var or feature)
     let use_stub = std::env::var("USE_STUB")

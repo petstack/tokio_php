@@ -40,3 +40,48 @@ services:
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
+
+  # HTTPS/TLS variants
+  tokio_php_embed_tls:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8443:8443"
+    environment:
+      - LISTEN_ADDR=0.0.0.0:8443
+      - RUST_LOG=tokio_php=info
+      - PHP_WORKERS=${PHP_WORKERS:-0}
+      - USE_STUB=${USE_STUB:-0}
+      - PROFILE=${PROFILE:-1}
+      - USE_SAPI=${USE_SAPI:-0}
+      - TLS_CERT=/certs/cert.pem
+      - TLS_KEY=/certs/key.pem
+    volumes:
+      - ./www:/var/www/html:ro
+      - ./certs:/certs:ro
+    restart: unless-stopped
+    profiles:
+      - tls
+
+  tokio_php_sapi_tls:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8444:8443"
+    environment:
+      - LISTEN_ADDR=0.0.0.0:8443
+      - RUST_LOG=tokio_php=info
+      - PHP_WORKERS=${PHP_WORKERS:-0}
+      - USE_STUB=${USE_STUB:-0}
+      - PROFILE=${PROFILE:-1}
+      - USE_SAPI=${USE_SAPI:-1}
+      - TLS_CERT=/certs/cert.pem
+      - TLS_KEY=/certs/key.pem
+    volumes:
+      - ./www:/var/www/html:ro
+      - ./certs:/certs:ro
+    restart: unless-stopped
+    profiles:
+      - tls

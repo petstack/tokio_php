@@ -7,13 +7,17 @@ use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode, Metho
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use multer::Multipart;
 use std::convert::Infallible;
+use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tracing::{error, info, debug};
+use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::rustls::ServerConfig as RustlsConfig;
+use tracing::{error, info, debug, warn};
 use uuid::Uuid;
 use http_body_util::BodyExt;
 
@@ -47,6 +51,10 @@ pub struct ServerConfig {
     pub document_root: Arc<str>,
     /// Number of accept loop workers. 0 = auto-detect from CPU cores.
     pub num_workers: usize,
+    /// TLS certificate file path (PEM format)
+    pub tls_cert: Option<String>,
+    /// TLS private key file path (PEM format)
+    pub tls_key: Option<String>,
 }
 
 impl ServerConfig {
@@ -55,6 +63,8 @@ impl ServerConfig {
             addr,
             document_root: Arc::from("/var/www/html"),
             num_workers: 0, // auto-detect
+            tls_cert: None,
+            tls_key: None,
         }
     }
 
@@ -67,20 +77,76 @@ impl ServerConfig {
         self.num_workers = num;
         self
     }
+
+    pub fn with_tls(mut self, cert_path: String, key_path: String) -> Self {
+        self.tls_cert = Some(cert_path);
+        self.tls_key = Some(key_path);
+        self
+    }
+
+    pub fn has_tls(&self) -> bool {
+        self.tls_cert.is_some() && self.tls_key.is_some()
+    }
 }
 
 /// HTTP server with pluggable script executor.
 pub struct Server<E: ScriptExecutor> {
     config: ServerConfig,
     executor: Arc<E>,
+    tls_acceptor: Option<TlsAcceptor>,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
     pub fn new(config: ServerConfig, executor: E) -> Self {
+        let tls_acceptor = if config.has_tls() {
+            match Self::load_tls_config(&config) {
+                Ok(tls_config) => Some(TlsAcceptor::from(Arc::new(tls_config))),
+                Err(e) => {
+                    warn!("Failed to load TLS config: {}. Running without TLS.", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             config,
             executor: Arc::new(executor),
+            tls_acceptor,
         }
+    }
+
+    fn load_tls_config(config: &ServerConfig) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+        let cert_path = config.tls_cert.as_ref().ok_or("TLS cert path not set")?;
+        let key_path = config.tls_key.as_ref().ok_or("TLS key path not set")?;
+
+        // Load certificate chain
+        let cert_file = std::fs::File::open(cert_path)?;
+        let mut cert_reader = BufReader::new(cert_file);
+        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if certs.is_empty() {
+            return Err("No certificates found in cert file".into());
+        }
+
+        // Load private key
+        let key_file = std::fs::File::open(key_path)?;
+        let mut key_reader = BufReader::new(key_file);
+        let key = rustls_pemfile::private_key(&mut key_reader)?
+            .ok_or("No private key found in key file")?;
+
+        // Build TLS config with ALPN for HTTP/2
+        let mut tls_config = RustlsConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)?;
+
+        // Enable ALPN for HTTP/2 and HTTP/1.1
+        tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+        Ok(tls_config)
     }
 
     /// Creates a socket with SO_REUSEPORT for multi-threaded accept.
@@ -115,8 +181,10 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             self.config.num_workers
         };
 
+        let protocol = if self.tls_acceptor.is_some() { "https" } else { "http" };
         info!(
-            "Server listening on http://{} (executor: {}, workers: {})",
+            "Server listening on {}://{} (executor: {}, workers: {})",
+            protocol,
             self.config.addr,
             self.executor.name(),
             num_workers
@@ -130,6 +198,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             let executor = Arc::clone(&self.executor);
             let document_root = Arc::clone(&self.config.document_root);
             let skip_file_check = self.executor.skip_file_check();
+            let tls_acceptor = self.tls_acceptor.clone();
 
             let handle = tokio::spawn(async move {
                 // Each worker creates its own listener with SO_REUSEPORT
@@ -162,9 +231,9 @@ impl<E: ScriptExecutor + 'static> Server<E> {
 
                     let _ = stream.set_nodelay(true);
 
-                    let io = TokioIo::new(stream);
                     let executor = Arc::clone(&executor);
                     let document_root = Arc::clone(&document_root);
+                    let tls_acceptor = tls_acceptor.clone();
 
                     tokio::task::spawn(async move {
                         let service = service_fn(move |req| {
@@ -175,17 +244,43 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                             }
                         });
 
-                        if let Err(err) = auto::Builder::new(TokioExecutor::new())
-                            .http1()
-                            .keep_alive(true)
-                            .http2()
-                            .max_concurrent_streams(250)
-                            .serve_connection(io, service)
-                            .await
-                        {
-                            let err_str = format!("{:?}", err);
-                            if !is_connection_error(&err_str) {
-                                debug!("Connection error: {:?}", err);
+                        // Handle TLS or plain TCP
+                        if let Some(acceptor) = tls_acceptor {
+                            match acceptor.accept(stream).await {
+                                Ok(tls_stream) => {
+                                    let io = TokioIo::new(tls_stream);
+                                    if let Err(err) = auto::Builder::new(TokioExecutor::new())
+                                        .http1()
+                                        .keep_alive(true)
+                                        .http2()
+                                        .max_concurrent_streams(250)
+                                        .serve_connection(io, service)
+                                        .await
+                                    {
+                                        let err_str = format!("{:?}", err);
+                                        if !is_connection_error(&err_str) {
+                                            debug!("TLS connection error: {:?}", err);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    debug!("TLS handshake failed: {:?}", e);
+                                }
+                            }
+                        } else {
+                            let io = TokioIo::new(stream);
+                            if let Err(err) = auto::Builder::new(TokioExecutor::new())
+                                .http1()
+                                .keep_alive(true)
+                                .http2()
+                                .max_concurrent_streams(250)
+                                .serve_connection(io, service)
+                                .await
+                            {
+                                let err_str = format!("{:?}", err);
+                                if !is_connection_error(&err_str) {
+                                    debug!("Connection error: {:?}", err);
+                                }
                             }
                         }
                     });
