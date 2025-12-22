@@ -16,6 +16,8 @@ services:
       - PROFILE=${PROFILE:-1}
       # USE_SAPI: set to 1 or true to use custom SAPI executor
       - USE_SAPI=${USE_SAPI:-0}
+      # INDEX_FILE: single entry point mode (e.g., index.php)
+      - INDEX_FILE=${INDEX_FILE:-}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -37,6 +39,8 @@ services:
       - PROFILE=${PROFILE:-1}
       # USE_SAPI: set to 1 or true to use custom SAPI executor
       - USE_SAPI=${USE_SAPI:-1}
+      # INDEX_FILE: single entry point mode (e.g., index.php)
+      - INDEX_FILE=${INDEX_FILE:-}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -55,6 +59,7 @@ services:
       - USE_STUB=${USE_STUB:-0}
       - PROFILE=${PROFILE:-1}
       - USE_SAPI=${USE_SAPI:-0}
+      - INDEX_FILE=${INDEX_FILE:-}
       - TLS_CERT=/certs/cert.pem
       - TLS_KEY=/certs/key.pem
     volumes:
@@ -77,6 +82,7 @@ services:
       - USE_STUB=${USE_STUB:-0}
       - PROFILE=${PROFILE:-1}
       - USE_SAPI=${USE_SAPI:-1}
+      - INDEX_FILE=${INDEX_FILE:-}
       - TLS_CERT=/certs/cert.pem
       - TLS_KEY=/certs/key.pem
     volumes:

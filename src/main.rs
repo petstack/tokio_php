@@ -66,11 +66,21 @@ async fn async_main(
     let tls_cert = std::env::var("TLS_CERT").ok();
     let tls_key = std::env::var("TLS_KEY").ok();
 
+    // Index file for single entry point mode (Laravel/Symfony style routing)
+    // Filter out empty strings
+    let index_file = std::env::var("INDEX_FILE")
+        .ok()
+        .filter(|s| !s.is_empty());
+
     let mut config = ServerConfig::new(addr).with_workers(num_workers);
 
     if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
         info!("TLS enabled: cert={}, key={}", cert, key);
         config = config.with_tls(cert, key);
+    }
+
+    if let Some(ref idx) = index_file {
+        config = config.with_index_file(idx.clone());
     }
 
     // Check for stub mode (via env var or feature)
@@ -84,7 +94,7 @@ async fn async_main(
     if use_stub {
         info!("Running in STUB mode (PHP disabled)");
         let executor = StubExecutor::new();
-        let server = Server::new(config, executor);
+        let server = Server::new(config, executor)?;
         run_server(server).await
     } else {
         #[cfg(feature = "php")]
@@ -107,7 +117,7 @@ async fn async_main(
 
                 info!("PHP SAPI executor ready ({} workers)", executor.worker_count());
 
-                let server = Server::new(config, executor);
+                let server = Server::new(config, executor)?;
                 run_server(server).await
             } else {
                 info!(
@@ -122,7 +132,7 @@ async fn async_main(
 
                 info!("PHP executor ready ({} workers)", executor.worker_count());
 
-                let server = Server::new(config, executor);
+                let server = Server::new(config, executor)?;
                 run_server(server).await
             }
         }
@@ -131,7 +141,7 @@ async fn async_main(
         {
             info!("PHP feature not enabled, falling back to stub mode");
             let executor = StubExecutor::new();
-            let server = Server::new(config, executor);
+            let server = Server::new(config, executor)?;
             run_server(server).await
         }
     }

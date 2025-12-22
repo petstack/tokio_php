@@ -63,6 +63,9 @@ pub struct ServerConfig {
     pub tls_cert: Option<String>,
     /// TLS private key file path (PEM format)
     pub tls_key: Option<String>,
+    /// Index file for single entry point mode (e.g., "index.php")
+    /// When set: all requests route to this file, direct access returns 404
+    pub index_file: Option<String>,
 }
 
 impl ServerConfig {
@@ -73,6 +76,7 @@ impl ServerConfig {
             num_workers: 0, // auto-detect
             tls_cert: None,
             tls_key: None,
+            index_file: None,
         }
     }
 
@@ -92,6 +96,11 @@ impl ServerConfig {
         self
     }
 
+    pub fn with_index_file(mut self, index_file: String) -> Self {
+        self.index_file = Some(index_file);
+        self
+    }
+
     pub fn has_tls(&self) -> bool {
         self.tls_cert.is_some() && self.tls_key.is_some()
     }
@@ -102,10 +111,27 @@ pub struct Server<E: ScriptExecutor> {
     config: ServerConfig,
     executor: Arc<E>,
     tls_acceptor: Option<TlsAcceptor>,
+    /// Pre-validated index file path (full path, validated at startup)
+    index_file_path: Option<Arc<str>>,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
-    pub fn new(config: ServerConfig, executor: E) -> Self {
+    pub fn new(config: ServerConfig, executor: E) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Validate index file at startup if configured
+        let index_file_path = if let Some(ref index_file) = config.index_file {
+            let full_path = format!("{}/{}", config.document_root, index_file);
+            if !Path::new(&full_path).exists() {
+                return Err(format!(
+                    "Index file not found: {} (INDEX_FILE={})",
+                    full_path, index_file
+                ).into());
+            }
+            info!("Single entry point mode: all requests -> {}", index_file);
+            Some(Arc::from(full_path.as_str()))
+        } else {
+            None
+        };
+
         let tls_acceptor = if config.has_tls() {
             match Self::load_tls_config(&config) {
                 Ok(tls_config) => Some(TlsAcceptor::from(Arc::new(tls_config))),
@@ -118,11 +144,12 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             None
         };
 
-        Self {
+        Ok(Self {
             config,
             executor: Arc::new(executor),
             tls_acceptor,
-        }
+            index_file_path,
+        })
     }
 
     fn load_tls_config(config: &ServerConfig) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
@@ -201,12 +228,17 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         // Spawn accept loops on multiple threads
         let mut handles = Vec::with_capacity(num_workers);
 
+        // Index file name for blocking direct access (e.g., "index.php")
+        let index_file_name = self.config.index_file.as_ref().map(|s| Arc::from(s.as_str()));
+
         for worker_id in 0..num_workers {
             let addr = self.config.addr;
             let executor = Arc::clone(&self.executor);
             let document_root = Arc::clone(&self.config.document_root);
-            let skip_file_check = self.executor.skip_file_check();
+            let skip_file_check = self.executor.skip_file_check() || self.index_file_path.is_some();
             let tls_acceptor = self.tls_acceptor.clone();
+            let index_file_path = self.index_file_path.clone();
+            let index_file_name = index_file_name.clone();
 
             let handle = tokio::spawn(async move {
                 // Each worker creates its own listener with SO_REUSEPORT
@@ -242,6 +274,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                     let executor = Arc::clone(&executor);
                     let document_root = Arc::clone(&document_root);
                     let tls_acceptor = tls_acceptor.clone();
+                    let index_file_path = index_file_path.clone();
+                    let index_file_name = index_file_name.clone();
 
                     tokio::task::spawn(async move {
                         // Handle TLS or plain TCP
@@ -268,8 +302,10 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                                         let executor = Arc::clone(&executor);
                                         let doc_root = Arc::clone(&document_root);
                                         let tls = tls_info.clone();
+                                        let idx_path = index_file_path.clone();
+                                        let idx_name = index_file_name.clone();
                                         async move {
-                                            handle_request(req, remote_addr, executor, doc_root, skip_file_check, Some(tls)).await
+                                            handle_request(req, remote_addr, executor, doc_root, skip_file_check, Some(tls), idx_path, idx_name).await
                                         }
                                     });
 
@@ -296,8 +332,10 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                             let service = service_fn(move |req| {
                                 let executor = Arc::clone(&executor);
                                 let doc_root = Arc::clone(&document_root);
+                                let idx_path = index_file_path.clone();
+                                let idx_name = index_file_name.clone();
                                 async move {
-                                    handle_request(req, remote_addr, executor, doc_root, skip_file_check, None).await
+                                    handle_request(req, remote_addr, executor, doc_root, skip_file_check, None, idx_path, idx_name).await
                                 }
                             });
 
@@ -352,12 +390,14 @@ async fn handle_request<E: ScriptExecutor>(
     document_root: Arc<str>,
     skip_file_check: bool,
     tls_info: Option<TlsInfo>,
+    index_file_path: Option<Arc<str>>,
+    index_file_name: Option<Arc<str>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let is_head = *req.method() == Method::HEAD;
 
     let response = match *req.method() {
         Method::GET | Method::POST | Method::HEAD => {
-            let mut resp = process_request(req, remote_addr, executor, document_root, skip_file_check, tls_info).await;
+            let mut resp = process_request(req, remote_addr, executor, document_root, skip_file_check, tls_info, index_file_path, index_file_name).await;
 
             // HEAD: return headers only, no body
             if is_head {
@@ -521,6 +561,8 @@ async fn process_request<E: ScriptExecutor>(
     document_root: Arc<str>,
     skip_file_check: bool,
     tls_info: Option<TlsInfo>,
+    index_file_path: Option<Arc<str>>,
+    index_file_name: Option<Arc<str>>,
 ) -> Response<Full<Bytes>> {
     use std::time::Instant;
 
@@ -547,6 +589,19 @@ async fn process_request<E: ScriptExecutor>(
     let uri = req.uri().clone();
     let uri_path = uri.path();
     let query_string = uri.query().unwrap_or("");
+
+    // Block direct access to index file in single entry point mode
+    // e.g., /index.php -> 404 when INDEX_FILE=index.php
+    if let Some(ref idx_name) = index_file_name {
+        let direct_path = format!("/{}", idx_name.as_ref());
+        if uri_path == direct_path || uri_path.starts_with(&format!("{}/", direct_path)) {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("Content-Type", "text/html")
+                .body(Full::new(NOT_FOUND_BODY.clone()))
+                .unwrap();
+        }
+    }
 
     // Check for profiling header
     let profile_requested = req
@@ -678,20 +733,26 @@ async fn process_request<E: ScriptExecutor>(
 
     // Decode URL path and resolve file
     let path_start = Instant::now();
-    let decoded_path = percent_encoding::percent_decode_str(uri_path)
-        .decode_utf8_lossy();
 
-    let clean_path = decoded_path
-        .trim_start_matches('/')
-        .replace("..", "");
-
-    let file_path = if clean_path.is_empty() || clean_path.ends_with('/') {
-        format!("{}/{}/index.php", document_root, clean_path)
+    // In single entry point mode, always use the pre-validated index file
+    let file_path_string = if let Some(ref idx_path) = index_file_path {
+        idx_path.to_string()
     } else {
-        format!("{}/{}", document_root, clean_path)
+        let decoded_path = percent_encoding::percent_decode_str(uri_path)
+            .decode_utf8_lossy();
+
+        let clean_path = decoded_path
+            .trim_start_matches('/')
+            .replace("..", "");
+
+        if clean_path.is_empty() || clean_path.ends_with('/') {
+            format!("{}/{}/index.php", document_root, clean_path)
+        } else {
+            format!("{}/{}", document_root, clean_path)
+        }
     };
 
-    let file_path = Path::new(&file_path);
+    let file_path = Path::new(&file_path_string);
 
     let extension = file_path.extension()
         .and_then(|e| e.to_str())

@@ -99,6 +99,7 @@ Selection order in main.rs:
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
 | `TLS_CERT` | - | Path to TLS certificate (PEM) |
 | `TLS_KEY` | - | Path to TLS private key (PEM) |
+| `INDEX_FILE` | - | Single entry point mode (e.g., `index.php`) |
 | `RUST_LOG` | `tokio_php=info` | Log level |
 
 ## Profiling
@@ -157,6 +158,20 @@ curl -k https://localhost:8443/index.php  # $_SERVER['SERVER_PROTOCOL'] = HTTP/2
 ## Superglobals Support
 
 Full superglobals: `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST`
+
+## Single Entry Point Mode
+
+For Laravel/Symfony-style routing, set `INDEX_FILE` to route all requests through a single script:
+
+```bash
+INDEX_FILE=index.php docker compose up -d
+```
+
+Behavior:
+- All requests route to the specified file (e.g., `/api/users` -> `index.php`)
+- Direct access to the index file returns 404 (e.g., `/index.php` -> 404)
+- File existence validated at startup (server exits if missing)
+- Skips per-request file existence checks (performance optimization)
 
 ## Limitations
 
