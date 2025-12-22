@@ -1,10 +1,10 @@
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::Full;
-use hyper::server::conn::http1;
+use hyper_util::server::conn::auto;
 use hyper::service::service_fn;
 use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode, Method};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use multer::Multipart;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -175,9 +175,11 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                             }
                         });
 
-                        if let Err(err) = http1::Builder::new()
+                        if let Err(err) = auto::Builder::new(TokioExecutor::new())
+                            .http1()
                             .keep_alive(true)
-                            .pipeline_flush(true)
+                            .http2()
+                            .max_concurrent_streams(250)
                             .serve_connection(io, service)
                             .await
                         {
@@ -405,6 +407,7 @@ async fn process_request<E: ScriptExecutor>(
     let mut file_check_us = 0u64;
 
     let method = req.method().clone();
+    let version = req.version();
     let uri = req.uri().clone();
     let uri_path = uri.path();
     let query_string = uri.query().unwrap_or("");
@@ -528,7 +531,13 @@ async fn process_request<E: ScriptExecutor>(
     server_vars.push(("REMOTE_ADDR".into(), remote_addr.ip().to_string()));
     server_vars.push(("REMOTE_PORT".into(), remote_addr.port().to_string()));
     server_vars.push(("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into()));
-    server_vars.push(("SERVER_PROTOCOL".into(), "HTTP/1.1".into()));
+    let protocol = match version {
+        hyper::Version::HTTP_2 => "HTTP/2.0",
+        hyper::Version::HTTP_11 => "HTTP/1.1",
+        hyper::Version::HTTP_10 => "HTTP/1.0",
+        _ => "HTTP/1.1",
+    };
+    server_vars.push(("SERVER_PROTOCOL".into(), protocol.into()));
     server_vars.push(("CONTENT_TYPE".into(), content_type_str));
     if has_cookie {
         server_vars.push(("HTTP_COOKIE".into(), cookie_header_str));

@@ -10,8 +10,8 @@ stub = []
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "net", "io-util", "fs", "sync", "signal", "macros"] }
-hyper = { version = "1", features = ["server", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 http-body-util = "0.1"
 bytes = "1"
 libc = "0.2"
