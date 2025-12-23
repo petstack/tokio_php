@@ -741,6 +741,13 @@ async fn process_request<E: ScriptExecutor>(
 ) -> Response<Full<Bytes>> {
     use std::time::Instant;
 
+    // Capture request timestamp at the very start
+    let request_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let request_time_secs = request_time.as_secs();
+    let request_time_float = request_time.as_secs_f64();
+
     let parse_start = Instant::now();
 
     // Profile timing variables
@@ -811,19 +818,53 @@ async fn process_request<E: ScriptExecutor>(
 
     // Full processing path - extract headers before consuming body
     let headers_start = Instant::now();
-    let content_type_str = req
-        .headers()
+    let headers = req.headers();
+
+    let content_type_str = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
 
-    let cookie_header_str = req
-        .headers()
+    let cookie_header_str = headers
         .get("cookie")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
+
+    // Extract additional HTTP headers for $_SERVER
+    // For HTTP/2, the :authority pseudo-header is in uri.authority()
+    let host_header = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| uri.authority().map(|a| a.to_string()))
+        .unwrap_or_default();
+
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let referer = headers
+        .get("referer")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let accept_language = headers
+        .get("accept-language")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let accept = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
     if profiling_enabled {
         headers_extract_us = headers_start.elapsed().as_micros() as u64;
     }
@@ -893,28 +934,7 @@ async fn process_request<E: ScriptExecutor>(
         (Vec::new(), Vec::new())
     };
 
-    // Build server variables
-    let server_vars_start = Instant::now();
-    let has_cookie = !cookie_header_str.is_empty();
-    let capacity = if has_cookie { 9 } else { 8 };
-    let mut server_vars = Vec::with_capacity(capacity);
-
-    server_vars.push(("REQUEST_METHOD".into(), method.as_str().to_string()));
-    server_vars.push(("REQUEST_URI".into(), uri.to_string()));
-    server_vars.push(("QUERY_STRING".into(), query_string.to_string()));
-    server_vars.push(("REMOTE_ADDR".into(), remote_addr.ip().to_string()));
-    server_vars.push(("REMOTE_PORT".into(), remote_addr.port().to_string()));
-    server_vars.push(("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into()));
-    server_vars.push(("SERVER_PROTOCOL".into(), http_version.clone()));
-    server_vars.push(("CONTENT_TYPE".into(), content_type_str));
-    if has_cookie {
-        server_vars.push(("HTTP_COOKIE".into(), cookie_header_str));
-    }
-    if profiling_enabled {
-        server_vars_us = server_vars_start.elapsed().as_micros() as u64;
-    }
-
-    // Decode URL path and resolve file
+    // Decode URL path and resolve file (moved before server_vars)
     let path_start = Instant::now();
 
     // In single entry point mode, always use the pre-validated index file
@@ -955,6 +975,107 @@ async fn process_request<E: ScriptExecutor>(
     }
     if profiling_enabled {
         file_check_us = file_check_start.elapsed().as_micros() as u64;
+    }
+
+    // Build server variables (after path resolution for SCRIPT_* vars)
+    let server_vars_start = Instant::now();
+
+    // Parse Host header for SERVER_NAME and SERVER_PORT
+    let (server_name, server_port) = if !host_header.is_empty() {
+        if let Some(colon_pos) = host_header.rfind(':') {
+            // Check if it's not an IPv6 address without port
+            if host_header.starts_with('[') && !host_header.contains("]:") {
+                (host_header.clone(), if tls_info.is_some() { "443" } else { "80" }.to_string())
+            } else {
+                (host_header[..colon_pos].to_string(), host_header[colon_pos + 1..].to_string())
+            }
+        } else {
+            (host_header.clone(), if tls_info.is_some() { "443" } else { "80" }.to_string())
+        }
+    } else {
+        ("localhost".to_string(), if tls_info.is_some() { "443" } else { "80" }.to_string())
+    };
+
+    // Calculate SCRIPT_NAME and PHP_SELF (path relative to document root)
+    let script_name = file_path_string
+        .strip_prefix(document_root.as_ref())
+        .unwrap_or(&file_path_string)
+        .to_string();
+    let script_name = if script_name.starts_with('/') {
+        script_name
+    } else {
+        format!("/{}", script_name)
+    };
+
+    // PATH_INFO: additional path after script name (for now, empty - requires PATH_TRANSLATED logic)
+    let path_info = String::new();
+
+    // Estimate capacity for server_vars
+    let mut server_vars = Vec::with_capacity(32);
+
+    // Request timing
+    server_vars.push(("REQUEST_TIME".into(), request_time_secs.to_string()));
+    server_vars.push(("REQUEST_TIME_FLOAT".into(), format!("{:.6}", request_time_float)));
+
+    // Request method and URI
+    server_vars.push(("REQUEST_METHOD".into(), method.as_str().to_string()));
+    server_vars.push(("REQUEST_URI".into(), uri.to_string()));
+    server_vars.push(("QUERY_STRING".into(), query_string.to_string()));
+
+    // Client info
+    server_vars.push(("REMOTE_ADDR".into(), remote_addr.ip().to_string()));
+    server_vars.push(("REMOTE_PORT".into(), remote_addr.port().to_string()));
+
+    // Server info
+    server_vars.push(("SERVER_NAME".into(), server_name));
+    server_vars.push(("SERVER_PORT".into(), server_port));
+    server_vars.push(("SERVER_ADDR".into(), "0.0.0.0".into())); // Bound address
+    server_vars.push(("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into()));
+    server_vars.push(("SERVER_PROTOCOL".into(), http_version.clone()));
+    server_vars.push(("DOCUMENT_ROOT".into(), document_root.to_string()));
+    server_vars.push(("GATEWAY_INTERFACE".into(), "CGI/1.1".into()));
+
+    // Script paths
+    server_vars.push(("SCRIPT_NAME".into(), script_name.clone()));
+    server_vars.push(("SCRIPT_FILENAME".into(), file_path_string.clone()));
+    server_vars.push(("PHP_SELF".into(), script_name.clone()));
+    if !path_info.is_empty() {
+        server_vars.push(("PATH_INFO".into(), path_info));
+    }
+
+    // Content info
+    server_vars.push(("CONTENT_TYPE".into(), content_type_str));
+
+    // HTTP headers (with HTTP_ prefix)
+    if !host_header.is_empty() {
+        server_vars.push(("HTTP_HOST".into(), host_header));
+    }
+    if !cookie_header_str.is_empty() {
+        server_vars.push(("HTTP_COOKIE".into(), cookie_header_str));
+    }
+    if !user_agent.is_empty() {
+        server_vars.push(("HTTP_USER_AGENT".into(), user_agent));
+    }
+    if !referer.is_empty() {
+        server_vars.push(("HTTP_REFERER".into(), referer));
+    }
+    if !accept_language.is_empty() {
+        server_vars.push(("HTTP_ACCEPT_LANGUAGE".into(), accept_language));
+    }
+    if !accept.is_empty() {
+        server_vars.push(("HTTP_ACCEPT".into(), accept));
+    }
+
+    // HTTPS/TLS info
+    if let Some(ref tls) = tls_info {
+        server_vars.push(("HTTPS".into(), "on".into()));
+        if !tls.protocol.is_empty() {
+            server_vars.push(("SSL_PROTOCOL".into(), tls.protocol.clone()));
+        }
+    }
+
+    if profiling_enabled {
+        server_vars_us = server_vars_start.elapsed().as_micros() as u64;
     }
 
     if extension == "php" {
