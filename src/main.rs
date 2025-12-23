@@ -72,7 +72,17 @@ async fn async_main(
         .ok()
         .filter(|s| !s.is_empty());
 
-    let mut config = ServerConfig::new(addr).with_workers(num_workers);
+    // Document root (default: /var/www/html)
+    let document_root = std::env::var("DOCUMENT_ROOT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/var/www/html".to_string());
+
+    info!("Document root: {}", document_root);
+
+    let mut config = ServerConfig::new(addr)
+        .with_workers(num_workers)
+        .with_document_root(&document_root);
 
     if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
         info!("TLS enabled: cert={}, key={}", cert, key);

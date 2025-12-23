@@ -18,6 +18,8 @@ services:
       - USE_SAPI=${USE_SAPI:-0}
       # INDEX_FILE: single entry point mode (e.g., index.php)
       - INDEX_FILE=${INDEX_FILE:-}
+      # DOCUMENT_ROOT: web root directory (default: /var/www/html)
+      - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -41,6 +43,8 @@ services:
       - USE_SAPI=${USE_SAPI:-1}
       # INDEX_FILE: single entry point mode (e.g., index.php)
       - INDEX_FILE=${INDEX_FILE:-}
+      # DOCUMENT_ROOT: web root directory (default: /var/www/html)
+      - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -60,6 +64,7 @@ services:
       - PROFILE=${PROFILE:-1}
       - USE_SAPI=${USE_SAPI:-0}
       - INDEX_FILE=${INDEX_FILE:-}
+      - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - TLS_CERT=/certs/cert.pem
       - TLS_KEY=/certs/key.pem
     volumes:
@@ -83,6 +88,7 @@ services:
       - PROFILE=${PROFILE:-1}
       - USE_SAPI=${USE_SAPI:-1}
       - INDEX_FILE=${INDEX_FILE:-}
+      - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - TLS_CERT=/certs/cert.pem
       - TLS_KEY=/certs/key.pem
     volumes:

@@ -100,6 +100,7 @@ Selection order in main.rs:
 | `TLS_CERT` | - | Path to TLS certificate (PEM) |
 | `TLS_KEY` | - | Path to TLS private key (PEM) |
 | `INDEX_FILE` | - | Single entry point mode (e.g., `index.php`) |
+| `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
 | `RUST_LOG` | `tokio_php=info` | Log level |
 
 ## Profiling
