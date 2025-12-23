@@ -7,7 +7,7 @@ use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode, Metho
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use multer::Multipart;
 use std::convert::Infallible;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -40,6 +40,70 @@ static EMPTY_BODY: Bytes = Bytes::from_static(b"");
 static NOT_FOUND_BODY: Bytes = Bytes::from_static(b"404 Not Found");
 static METHOD_NOT_ALLOWED_BODY: Bytes = Bytes::from_static(b"Method Not Allowed");
 static BAD_REQUEST_BODY: Bytes = Bytes::from_static(b"Failed to read request body");
+
+/// Minimum size to consider compression (smaller bodies don't benefit)
+const MIN_COMPRESSION_SIZE: usize = 256;
+
+/// Brotli compression quality (0-11, higher = better compression but slower)
+const BROTLI_QUALITY: u32 = 4;
+
+/// Brotli compression window size (10-24, affects memory usage)
+const BROTLI_WINDOW: u32 = 20;
+
+/// Check if the client accepts Brotli encoding
+#[inline]
+fn accepts_brotli(accept_encoding: &str) -> bool {
+    accept_encoding.split(',')
+        .any(|enc| enc.trim().starts_with("br"))
+}
+
+/// Check if the MIME type should be compressed
+#[inline]
+fn should_compress_mime(content_type: &str) -> bool {
+    let ct = content_type.split(';').next().unwrap_or("").trim();
+    matches!(ct,
+        // Text types
+        "text/html" |
+        "text/css" |
+        "text/plain" |
+        "text/xml" |
+        "text/javascript" |
+        // Application types
+        "application/javascript" |
+        "application/json" |
+        "application/xml" |
+        "application/xhtml+xml" |
+        "application/rss+xml" |
+        "application/atom+xml" |
+        "application/manifest+json" |
+        "application/ld+json" |
+        // SVG
+        "image/svg+xml" |
+        // Fonts (uncompressed formats - WOFF/WOFF2 are already compressed)
+        "font/ttf" |
+        "font/otf" |
+        "application/x-font-ttf" |
+        "application/x-font-opentype" |
+        "application/vnd.ms-fontobject"
+    )
+}
+
+/// Compress data using Brotli
+#[inline]
+fn compress_brotli(data: &[u8]) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(data.len() / 2);
+    let mut input = std::io::Cursor::new(data);
+    let params = brotli::enc::BrotliEncoderParams {
+        quality: BROTLI_QUALITY as i32,
+        lgwin: BROTLI_WINDOW as i32,
+        ..Default::default()
+    };
+
+    match brotli::BrotliCompress(&mut input, &mut output, &params) {
+        Ok(_) if output.len() < data.len() => Some(output),
+        _ => None,
+    }
+}
 
 // Pre-built empty response for stub mode
 fn empty_stub_response() -> Response<Full<Bytes>> {
@@ -613,6 +677,14 @@ async fn process_request<E: ScriptExecutor>(
 
     let profiling_enabled = profile_requested && profiler::is_enabled();
 
+    // Check if client accepts Brotli compression
+    let use_brotli = req
+        .headers()
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(accepts_brotli)
+        .unwrap_or(false);
+
     // Fast path for stub: minimal processing
     if skip_file_check {
         // Only need to check if it's a PHP file for the response
@@ -821,7 +893,7 @@ async fn process_request<E: ScriptExecutor>(
                         profile.file_check_us = file_check_us;
                     }
                 }
-                create_script_response_fast(resp, profiling_enabled)
+                create_script_response_fast(resp, profiling_enabled, use_brotli)
             }
             Err(e) => {
                 error!("Script execution error: {}", e);
@@ -840,17 +912,19 @@ async fn process_request<E: ScriptExecutor>(
 
         response
     } else {
-        serve_static_file(file_path).await
+        serve_static_file(file_path, use_brotli).await
     }
 }
 
 #[inline]
-fn create_script_response_fast(script_response: ScriptResponse, profiling: bool) -> Response<Full<Bytes>> {
-    // Fast path: no headers to process and no profiling
-    if script_response.headers.is_empty() && !profiling {
+fn create_script_response_fast(script_response: ScriptResponse, profiling: bool, use_brotli: bool) -> Response<Full<Bytes>> {
+    let default_content_type = "text/html; charset=utf-8";
+
+    // Fast path: no headers to process, no profiling, no compression
+    if script_response.headers.is_empty() && !profiling && !use_brotli {
         return Response::builder()
             .status(StatusCode::OK)
-            .header("Content-Type", "text/html; charset=utf-8")
+            .header("Content-Type", default_content_type)
             .header("Server", "tokio_php/0.1.0")
             .body(Full::new(if script_response.body.is_empty() {
                 EMPTY_BODY.clone()
@@ -862,7 +936,7 @@ fn create_script_response_fast(script_response: ScriptResponse, profiling: bool)
 
     // Full header processing
     let mut status = StatusCode::OK;
-    let mut content_type = "text/html; charset=utf-8";
+    let mut actual_content_type = default_content_type.to_string();
     let mut custom_headers: Vec<(&str, String)> = Vec::with_capacity(script_response.headers.len());
 
     for (name, value) in &script_response.headers {
@@ -883,7 +957,7 @@ fn create_script_response_fast(script_response: ScriptResponse, profiling: bool)
 
         match name_lower.as_str() {
             "content-type" => {
-                // Use the value as-is, we'll copy it when building
+                actual_content_type = value.clone();
                 custom_headers.push(("Content-Type", value.clone()));
             }
             "location" => {
@@ -911,14 +985,37 @@ fn create_script_response_fast(script_response: ScriptResponse, profiling: bool)
         }
     }
 
+    // Determine body and compression
+    let body_bytes = script_response.body;
+    let should_compress = use_brotli
+        && body_bytes.len() >= MIN_COMPRESSION_SIZE
+        && should_compress_mime(&actual_content_type);
+
+    let (final_body, is_compressed) = if should_compress {
+        match compress_brotli(body_bytes.as_bytes()) {
+            Some(compressed) => (Bytes::from(compressed), true),
+            None => (Bytes::from(body_bytes), false),
+        }
+    } else if body_bytes.is_empty() {
+        (EMPTY_BODY.clone(), false)
+    } else {
+        (Bytes::from(body_bytes), false)
+    };
+
     let mut builder = Response::builder()
         .status(status)
         .header("Server", "tokio_php/0.1.0");
 
+    // Add Content-Encoding if compressed
+    if is_compressed {
+        builder = builder.header("Content-Encoding", "br");
+        builder = builder.header("Vary", "Accept-Encoding");
+    }
+
     // Check if content-type was set
     let has_content_type = custom_headers.iter().any(|(n, _)| *n == "Content-Type");
     if !has_content_type {
-        builder = builder.header("Content-Type", content_type);
+        builder = builder.header("Content-Type", default_content_type);
     }
 
     for (name, value) in custom_headers {
@@ -935,11 +1032,7 @@ fn create_script_response_fast(script_response: ScriptResponse, profiling: bool)
     }
 
     builder
-        .body(Full::new(if script_response.body.is_empty() {
-            EMPTY_BODY.clone()
-        } else {
-            Bytes::from(script_response.body)
-        }))
+        .body(Full::new(final_body))
         .unwrap()
 }
 
@@ -951,18 +1044,40 @@ fn is_valid_header_name(name: &str) -> bool {
     })
 }
 
-async fn serve_static_file(file_path: &Path) -> Response<Full<Bytes>> {
+async fn serve_static_file(file_path: &Path, use_brotli: bool) -> Response<Full<Bytes>> {
     match tokio::fs::read(file_path).await {
         Ok(contents) => {
             let mime = mime_guess::from_path(file_path)
                 .first_or_octet_stream()
                 .to_string();
 
-            Response::builder()
+            // Check if we should compress this file
+            let should_compress = use_brotli
+                && contents.len() >= MIN_COMPRESSION_SIZE
+                && should_compress_mime(&mime);
+
+            let (final_body, is_compressed) = if should_compress {
+                if let Some(compressed) = compress_brotli(&contents) {
+                    (Bytes::from(compressed), true)
+                } else {
+                    (Bytes::from(contents), false)
+                }
+            } else {
+                (Bytes::from(contents), false)
+            };
+
+            let mut builder = Response::builder()
                 .status(StatusCode::OK)
-                .header("Content-Type", mime)
-                .body(Full::new(Bytes::from(contents)))
-                .unwrap()
+                .header("Content-Type", &mime)
+                .header("Server", "tokio_php/0.1.0");
+
+            if is_compressed {
+                builder = builder
+                    .header("Content-Encoding", "br")
+                    .header("Vary", "Accept-Encoding");
+            }
+
+            builder.body(Full::new(final_body)).unwrap()
         }
         Err(e) => {
             error!("Failed to read file {:?}: {}", file_path, e);

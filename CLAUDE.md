@@ -159,6 +159,26 @@ curl -k https://localhost:8443/index.php  # $_SERVER['SERVER_PROTOCOL'] = HTTP/2
 
 Full superglobals: `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST`
 
+## Compression
+
+Brotli compression is automatically applied when:
+- Client sends `Accept-Encoding: br` header
+- Response body >= 256 bytes
+- Content-Type is compressible (text/html, text/css, application/json, etc.)
+
+Compressed responses include:
+- `Content-Encoding: br` header
+- `Vary: Accept-Encoding` header for proper caching
+
+Supported MIME types:
+- `text/html`, `text/css`, `text/plain`, `text/xml`, `text/javascript`
+- `application/javascript`, `application/json`, `application/xml`
+- `application/xhtml+xml`, `application/rss+xml`, `application/atom+xml`
+- `application/manifest+json`, `application/ld+json`, `image/svg+xml`
+- `font/ttf`, `font/otf`, `application/vnd.ms-fontobject` (EOT)
+
+Note: WOFF/WOFF2 fonts are not compressed (already use internal compression).
+
 ## Single Entry Point Mode
 
 For Laravel/Symfony-style routing, set `INDEX_FILE` to route all requests through a single script:

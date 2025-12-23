@@ -27,6 +27,7 @@ num_cpus = "1"
 async-trait = "0.1"
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
+brotli = "7"
 
 [profile.release]
 lto = true
