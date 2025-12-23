@@ -11,6 +11,7 @@ use std::io::{BufReader, Read};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
@@ -130,6 +131,8 @@ pub struct ServerConfig {
     /// Index file for single entry point mode (e.g., "index.php")
     /// When set: all requests route to this file, direct access returns 404
     pub index_file: Option<String>,
+    /// Internal server address for /health and /metrics (e.g., "0.0.0.0:9000")
+    pub internal_addr: Option<SocketAddr>,
 }
 
 impl ServerConfig {
@@ -141,6 +144,7 @@ impl ServerConfig {
             tls_cert: None,
             tls_key: None,
             index_file: None,
+            internal_addr: None,
         }
     }
 
@@ -165,6 +169,11 @@ impl ServerConfig {
         self
     }
 
+    pub fn with_internal_addr(mut self, addr: SocketAddr) -> Self {
+        self.internal_addr = Some(addr);
+        self
+    }
+
     pub fn has_tls(&self) -> bool {
         self.tls_cert.is_some() && self.tls_key.is_some()
     }
@@ -177,6 +186,8 @@ pub struct Server<E: ScriptExecutor> {
     tls_acceptor: Option<TlsAcceptor>,
     /// Pre-validated index file path (full path, validated at startup)
     index_file_path: Option<Arc<str>>,
+    /// Active connections counter
+    active_connections: Arc<AtomicUsize>,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
@@ -213,7 +224,13 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             executor: Arc::new(executor),
             tls_acceptor,
             index_file_path,
+            active_connections: Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    /// Get current active connections count
+    pub fn active_connections(&self) -> usize {
+        self.active_connections.load(Ordering::Relaxed)
     }
 
     fn load_tls_config(config: &ServerConfig) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
@@ -290,7 +307,19 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         );
 
         // Spawn accept loops on multiple threads
-        let mut handles = Vec::with_capacity(num_workers);
+        let mut handles = Vec::with_capacity(num_workers + 1);
+
+        // Spawn internal server if configured
+        if let Some(internal_addr) = self.config.internal_addr {
+            let active_connections = Arc::clone(&self.active_connections);
+            let handle = tokio::spawn(async move {
+                if let Err(e) = run_internal_server(internal_addr, active_connections).await {
+                    error!("Internal server error: {}", e);
+                }
+            });
+            handles.push(handle);
+            info!("Internal server listening on http://{}", internal_addr);
+        }
 
         // Index file name for blocking direct access (e.g., "index.php")
         let index_file_name = self.config.index_file.as_ref().map(|s| Arc::from(s.as_str()));
@@ -303,6 +332,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             let tls_acceptor = self.tls_acceptor.clone();
             let index_file_path = self.index_file_path.clone();
             let index_file_name = index_file_name.clone();
+            let active_connections = Arc::clone(&self.active_connections);
 
             let handle = tokio::spawn(async move {
                 // Each worker creates its own listener with SO_REUSEPORT
@@ -340,8 +370,12 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                     let tls_acceptor = tls_acceptor.clone();
                     let index_file_path = index_file_path.clone();
                     let index_file_name = index_file_name.clone();
+                    let conn_counter = Arc::clone(&active_connections);
 
                     tokio::task::spawn(async move {
+                        // Increment active connections
+                        conn_counter.fetch_add(1, Ordering::Relaxed);
+
                         // Handle TLS or plain TCP
                         if let Some(acceptor) = tls_acceptor {
                             // Measure TLS handshake time
@@ -418,6 +452,9 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                                 }
                             }
                         }
+
+                        // Decrement active connections
+                        conn_counter.fetch_sub(1, Ordering::Relaxed);
                     });
                 }
             });
@@ -445,6 +482,80 @@ fn is_connection_error(err_str: &str) -> bool {
         || err_str.contains("Connection reset")
         || err_str.contains("os error 104")
         || err_str.contains("os error 32")
+}
+
+/// Internal HTTP server for /health and /metrics endpoints
+async fn run_internal_server(
+    addr: SocketAddr,
+    active_connections: Arc<AtomicUsize>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = TcpListener::bind(addr).await?;
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let _ = stream.set_nodelay(true);
+        let connections = Arc::clone(&active_connections);
+
+        tokio::spawn(async move {
+            let service = service_fn(move |req| {
+                let conns = connections.load(Ordering::Relaxed);
+                async move { handle_internal_request(req, conns).await }
+            });
+
+            let io = TokioIo::new(stream);
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(io, service)
+                .await;
+        });
+    }
+}
+
+/// Handle internal server requests (/health, /metrics)
+async fn handle_internal_request(
+    req: Request<IncomingBody>,
+    active_connections: usize,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    let path = req.uri().path();
+
+    let response = match path {
+        "/health" => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let body = format!(
+                r#"{{"status":"ok","timestamp":{},"active_connections":{}}}"#,
+                now.as_secs(), active_connections
+            );
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Full::new(Bytes::from(body)))
+                .unwrap()
+        }
+        "/metrics" => {
+            // Stub for now - will be expanded later
+            let body = format!(
+                "# HELP tokio_php_active_connections Current number of active connections\n\
+                 # TYPE tokio_php_active_connections gauge\n\
+                 tokio_php_active_connections {}\n",
+                active_connections
+            );
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/plain; version=0.0.4")
+                .body(Full::new(Bytes::from(body)))
+                .unwrap()
+        }
+        _ => {
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("Content-Type", "text/plain")
+                .body(Full::new(Bytes::from("Not Found")))
+                .unwrap()
+        }
+    };
+
+    Ok(response)
 }
 
 async fn handle_request<E: ScriptExecutor>(

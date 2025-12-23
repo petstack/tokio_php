@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+      - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
       - RUST_LOG=tokio_php=info
@@ -20,6 +21,8 @@ services:
       - INDEX_FILE=${INDEX_FILE:-}
       # DOCUMENT_ROOT: web root directory (default: /var/www/html)
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
+      # INTERNAL_ADDR: internal server for /health and /metrics
+      - INTERNAL_ADDR=0.0.0.0:9090
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -30,6 +33,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8081:8080"
+      - "9091:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
       - RUST_LOG=tokio_php=info
@@ -45,6 +49,8 @@ services:
       - INDEX_FILE=${INDEX_FILE:-}
       # DOCUMENT_ROOT: web root directory (default: /var/www/html)
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
+      # INTERNAL_ADDR: internal server for /health and /metrics
+      - INTERNAL_ADDR=0.0.0.0:9090
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped

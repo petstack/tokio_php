@@ -101,6 +101,7 @@ Selection order in main.rs:
 | `TLS_KEY` | - | Path to TLS private key (PEM) |
 | `INDEX_FILE` | - | Single entry point mode (e.g., `index.php`) |
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
+| `INTERNAL_ADDR` | - | Internal server address for /health and /metrics |
 | `RUST_LOG` | `tokio_php=info` | Log level |
 
 ## Profiling
@@ -193,6 +194,35 @@ Behavior:
 - Direct access to the index file returns 404 (e.g., `/index.php` -> 404)
 - File existence validated at startup (server exits if missing)
 - Skips per-request file existence checks (performance optimization)
+
+## Internal Server
+
+Optional internal HTTP server for health checks and metrics. Enable by setting `INTERNAL_ADDR`:
+
+```bash
+INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
+```
+
+### Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/health` | Health check with timestamp and active connections (JSON) |
+| `/metrics` | Prometheus-compatible metrics (stub) |
+
+### Example responses
+
+```bash
+# Health check
+curl http://localhost:9090/health
+{"status":"ok","timestamp":1703361234,"active_connections":5}
+
+# Metrics
+curl http://localhost:9090/metrics
+# HELP tokio_php_active_connections Current number of active connections
+# TYPE tokio_php_active_connections gauge
+tokio_php_active_connections 5
+```
 
 ## Limitations
 

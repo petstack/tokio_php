@@ -93,6 +93,15 @@ async fn async_main(
         config = config.with_index_file(idx.clone());
     }
 
+    // Internal server for /health and /metrics
+    if let Some(internal_addr) = std::env::var("INTERNAL_ADDR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+    {
+        config = config.with_internal_addr(internal_addr);
+    }
+
     // Check for stub mode (via env var or feature)
     let use_stub = std::env::var("USE_STUB")
         .map(|v| v == "1" || v.to_lowercase() == "true")
