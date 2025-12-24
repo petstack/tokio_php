@@ -1,6 +1,9 @@
 mod stub;
 
 #[cfg(feature = "php")]
+mod common;
+
+#[cfg(feature = "php")]
 mod php;
 
 #[cfg(feature = "php")]
