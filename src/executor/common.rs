@@ -12,6 +12,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use tokio::sync::oneshot;
 
+use crate::executor::sapi;
 use crate::profiler::{self, ProfileData};
 use crate::types::{ScriptRequest, ScriptResponse};
 
@@ -36,12 +37,9 @@ extern "C" {
 // Constants
 // =============================================================================
 
-/// PHP code to finalize output: flush buffers, output headers
-pub static FINALIZE_CODE: &[u8] = b"while(ob_get_level())ob_end_flush();echo\"\\n---@TOKIO_PHP_HDR@---\\n\";if(($__c=http_response_code())&&$__c!=200)echo\"Status:$__c\\n\";foreach(headers_list()as$h)echo$h.\"\\n\";\0";
+/// PHP code to finalize output - just flush buffers
+pub static FINALIZE_CODE: &[u8] = b"1;\0";
 pub static FINALIZE_NAME: &[u8] = b"f\0";
-
-/// Delimiter between body and headers in captured output
-pub const HEADER_DELIMITER: &str = "\n---@TOKIO_PHP_HDR@---\n";
 
 /// Name for memfd
 pub static MEMFD_NAME: &[u8] = b"php_out\0";
@@ -301,22 +299,6 @@ pub fn build_combined_code(request: &ScriptRequest) -> String {
 }
 
 // =============================================================================
-// Output Parsing
-// =============================================================================
-
-/// Parses headers from the captured output string
-pub fn parse_headers_str(headers_str: &str) -> Vec<(String, String)> {
-    headers_str
-        .lines()
-        .filter_map(|line| {
-            line.split_once(':').map(|(name, value)| {
-                (name.trim().to_string(), value.trim().to_string())
-            })
-        })
-        .collect()
-}
-
-// =============================================================================
 // PHP Execution
 // =============================================================================
 
@@ -332,70 +314,110 @@ pub struct ExecutionTiming {
     pub output_parse_us: u64,
 }
 
-/// Executes PHP script with the given request, capturing output via memfd.
-/// Returns the response body, headers, and optional timing data.
-pub fn execute_php_script(
+/// Stdout capture state - keeps stdout redirected until finalized
+pub struct StdoutCapture {
+    write_fd: libc::c_int,
+    original_stdout: libc::c_int,
+}
+
+impl StdoutCapture {
+    /// Sets up stdout capture, redirecting to memfd
+    pub fn new() -> Result<Self, String> {
+        #[cfg(target_os = "linux")]
+        let write_fd = unsafe {
+            libc::syscall(
+                libc::SYS_memfd_create,
+                MEMFD_NAME.as_ptr(),
+                0 as libc::c_uint,
+            ) as libc::c_int
+        };
+        #[cfg(not(target_os = "linux"))]
+        let write_fd = unsafe {
+            let f = libc::tmpfile();
+            if f.is_null() { -1 } else { libc::fileno(f) }
+        };
+
+        if write_fd < 0 {
+            return Err("Failed to create memfd".to_string());
+        }
+
+        let original_stdout = unsafe { libc::dup(1) };
+        if original_stdout < 0 {
+            unsafe { libc::close(write_fd); }
+            return Err("Failed to dup stdout".to_string());
+        }
+
+        if unsafe { libc::dup2(write_fd, 1) } < 0 {
+            unsafe {
+                libc::close(write_fd);
+                libc::close(original_stdout);
+            }
+            return Err("Failed to redirect stdout".to_string());
+        }
+
+        Ok(Self { write_fd, original_stdout })
+    }
+
+    /// Restores stdout and reads captured output
+    pub fn finalize(self) -> String {
+        unsafe {
+            libc::fflush(ptr::null_mut());
+            libc::dup2(self.original_stdout, 1);
+            libc::close(self.original_stdout);
+        }
+
+        OUTPUT_BUFFER.with(|buf| {
+            let mut buf = buf.borrow_mut();
+            buf.clear();
+
+            unsafe {
+                libc::lseek(self.write_fd, 0, libc::SEEK_SET);
+
+                let mut chunk = [0u8; 8192];
+                loop {
+                    let n = libc::read(self.write_fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len());
+                    if n <= 0 { break; }
+                    buf.extend_from_slice(&chunk[..n as usize]);
+                }
+
+                libc::close(self.write_fd);
+            }
+
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    }
+}
+
+/// Executes PHP script, returns capture handle for later finalization
+/// IMPORTANT: Caller must call php_request_shutdown() before finalizing capture!
+pub fn execute_php_script_start(
     request: &ScriptRequest,
     profiling: bool,
-    queue_wait_us: u64,
-    php_startup_us: u64,
-) -> Result<ScriptResponse, String> {
+) -> Result<(StdoutCapture, ExecutionTiming), String> {
     let mut timing = ExecutionTiming::default();
 
-    // Build combined code: superglobals + require script
+    // Clear captured headers from previous request
+    sapi::clear_captured_headers();
+
+    // Build combined code
     let build_start = Instant::now();
     let combined_code = build_combined_code(request);
     if profiling {
         timing.superglobals_build_us = build_start.elapsed().as_micros() as u64;
     }
 
-    // Set up memfd for stdout capture (Linux-specific, uses tmpfile on other platforms)
+    // Set up stdout capture
     let memfd_start = Instant::now();
-    #[cfg(target_os = "linux")]
-    let write_fd = unsafe {
-        libc::syscall(
-            libc::SYS_memfd_create,
-            MEMFD_NAME.as_ptr(),
-            0 as libc::c_uint,
-        ) as libc::c_int
-    };
-    #[cfg(not(target_os = "linux"))]
-    let write_fd = unsafe {
-        // Fallback for non-Linux (e.g., macOS) - use tmpfile
-        let f = libc::tmpfile();
-        if f.is_null() {
-            -1
-        } else {
-            libc::fileno(f)
-        }
-    };
-    if write_fd < 0 {
-        return Err("Failed to create memfd".to_string());
-    }
-
-    let original_stdout = unsafe { libc::dup(1) };
-    if original_stdout < 0 {
-        unsafe { libc::close(write_fd); }
-        return Err("Failed to dup stdout".to_string());
-    }
-
-    if unsafe { libc::dup2(write_fd, 1) } < 0 {
-        unsafe {
-            libc::close(write_fd);
-            libc::close(original_stdout);
-        }
-        return Err("Failed to redirect stdout".to_string());
-    }
+    let capture = StdoutCapture::new()?;
     if profiling {
         timing.memfd_setup_us = memfd_start.elapsed().as_micros() as u64;
     }
 
-    // Execute combined code in single eval
+    // Execute script
     let script_start = Instant::now();
     unsafe {
         let code_c = CString::new(combined_code).map_err(|e| e.to_string())?;
         let name_c = CString::new("x").unwrap();
-
         zend_eval_string(
             code_c.as_ptr() as *mut c_char,
             ptr::null_mut(),
@@ -406,7 +428,7 @@ pub fn execute_php_script(
         timing.script_exec_us = script_start.elapsed().as_micros() as u64;
     }
 
-    // Flush output buffers and capture headers
+    // Run finalize code (flush buffers, output headers)
     let finalize_start = Instant::now();
     unsafe {
         zend_eval_string(
@@ -419,54 +441,36 @@ pub fn execute_php_script(
         timing.finalize_eval_us = finalize_start.elapsed().as_micros() as u64;
     }
 
-    // Restore stdout
+    Ok((capture, timing))
+}
+
+/// Finalizes script execution after php_request_shutdown
+pub fn execute_php_script_finish(
+    capture: StdoutCapture,
+    mut timing: ExecutionTiming,
+    profiling: bool,
+    queue_wait_us: u64,
+    php_startup_us: u64,
+) -> Result<ScriptResponse, String> {
+    // Restore stdout and read output
     let restore_start = Instant::now();
-    unsafe {
-        libc::fflush(ptr::null_mut());
-        libc::dup2(original_stdout, 1);
-        libc::close(original_stdout);
-    }
+    let body = capture.finalize();
     if profiling {
         timing.stdout_restore_us = restore_start.elapsed().as_micros() as u64;
+        timing.output_read_us = 0; // Included in restore
     }
 
-    // Read output from memfd
-    let read_start = Instant::now();
-    let raw_output = OUTPUT_BUFFER.with(|buf| {
-        let mut buf = buf.borrow_mut();
-        buf.clear();
-
-        unsafe {
-            libc::lseek(write_fd, 0, libc::SEEK_SET);
-
-            let mut chunk = [0u8; 8192];
-            loop {
-                let n = libc::read(write_fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len());
-                if n <= 0 {
-                    break;
-                }
-                buf.extend_from_slice(&chunk[..n as usize]);
-            }
-
-            libc::close(write_fd);
-        }
-
-        String::from_utf8_lossy(&buf).into_owned()
-    });
-    if profiling {
-        timing.output_read_us = read_start.elapsed().as_micros() as u64;
-    }
-
-    // Parse body and headers
+    // Get headers captured via SAPI header_handler
     let parse_start = Instant::now();
-    let (body, headers) = if let Some(pos) = raw_output.find(HEADER_DELIMITER) {
-        let body = raw_output[..pos].to_string();
-        let headers_str = &raw_output[pos + HEADER_DELIMITER.len()..];
-        let headers = parse_headers_str(headers_str);
-        (body, headers)
-    } else {
-        (raw_output, Vec::new())
-    };
+    let mut headers = sapi::get_captured_headers();
+
+    // Add Status header if http_response_code was set to non-200
+    let status = sapi::get_captured_status();
+    if status != 200 {
+        // Insert Status at the beginning so it's processed first
+        headers.insert(0, ("Status".to_string(), status.to_string()));
+    }
+
     if profiling {
         timing.output_parse_us = parse_start.elapsed().as_micros() as u64;
     }
@@ -475,24 +479,14 @@ pub fn execute_php_script(
         + timing.output_read_us + timing.output_parse_us;
     let superglobals_us = timing.superglobals_build_us;
 
-    // Build profile data if profiling
     let profile = if profiling {
         Some(ProfileData {
-            total_us: 0, // Filled by caller after shutdown
-            parse_request_us: 0,
-            headers_extract_us: 0,
-            query_parse_us: 0,
-            cookies_parse_us: 0,
-            body_read_us: 0,
-            body_parse_us: 0,
-            server_vars_us: 0,
-            path_resolve_us: 0,
-            file_check_us: 0,
+            total_us: 0,
             queue_wait_us,
             php_startup_us,
             superglobals_us,
             superglobals_build_us: timing.superglobals_build_us,
-            superglobals_eval_us: 0, // Part of script_exec_us now
+            superglobals_eval_us: 0,
             memfd_setup_us: timing.memfd_setup_us,
             script_exec_us: timing.script_exec_us,
             output_capture_us,
@@ -500,7 +494,7 @@ pub fn execute_php_script(
             stdout_restore_us: timing.stdout_restore_us,
             output_read_us: timing.output_read_us,
             output_parse_us: timing.output_parse_us,
-            php_shutdown_us: 0, // Filled by caller
+            php_shutdown_us: 0,
             response_build_us: 0,
             ..Default::default()
         })
@@ -509,6 +503,18 @@ pub fn execute_php_script(
     };
 
     Ok(ScriptResponse { body, headers, profile })
+}
+
+/// Legacy wrapper - executes PHP script with immediate finalization
+/// Note: This doesn't capture shutdown handler output correctly!
+pub fn execute_php_script(
+    request: &ScriptRequest,
+    profiling: bool,
+    queue_wait_us: u64,
+    php_startup_us: u64,
+) -> Result<ScriptResponse, String> {
+    let (capture, timing) = execute_php_script_start(request, profiling)?;
+    execute_php_script_finish(capture, timing, profiling, queue_wait_us, php_startup_us)
 }
 
 /// Worker thread main loop - processes requests until channel closes
@@ -550,29 +556,40 @@ pub fn worker_main_loop(
                 };
 
                 let result = if startup_ok {
-                    let res = execute_php_script(&request, profiling, queue_wait_us, php_startup_us);
+                    // Execute script, get capture handle (stdout still redirected)
+                    match execute_php_script_start(&request, profiling) {
+                        Ok((capture, timing)) => {
+                            // Call php_request_shutdown WHILE stdout is still captured
+                            // This ensures shutdown handlers output goes to memfd
+                            let shutdown_start = Instant::now();
+                            unsafe { php_request_shutdown(ptr::null_mut()); }
+                            let php_shutdown_us = if profiling {
+                                shutdown_start.elapsed().as_micros() as u64
+                            } else {
+                                0
+                            };
 
-                    let shutdown_start = Instant::now();
-                    unsafe { php_request_shutdown(ptr::null_mut()); }
-
-                    // Add shutdown time to profile
-                    if profiling {
-                        if let Ok(mut resp) = res {
-                            if let Some(ref mut profile) = resp.profile {
-                                profile.php_shutdown_us = shutdown_start.elapsed().as_micros() as u64;
-                                profile.total_us = profile.queue_wait_us
-                                    + profile.php_startup_us
-                                    + profile.superglobals_us
-                                    + profile.script_exec_us
-                                    + profile.output_capture_us
-                                    + profile.php_shutdown_us;
+                            // NOW finalize capture (restore stdout, read output)
+                            match execute_php_script_finish(capture, timing, profiling, queue_wait_us, php_startup_us) {
+                                Ok(mut resp) => {
+                                    if let Some(ref mut profile) = resp.profile {
+                                        profile.php_shutdown_us = php_shutdown_us;
+                                        profile.total_us = profile.queue_wait_us
+                                            + profile.php_startup_us
+                                            + profile.superglobals_us
+                                            + profile.script_exec_us
+                                            + profile.output_capture_us
+                                            + profile.php_shutdown_us;
+                                    }
+                                    Ok(resp)
+                                }
+                                Err(e) => Err(e)
                             }
-                            Ok(resp)
-                        } else {
-                            res
                         }
-                    } else {
-                        res
+                        Err(e) => {
+                            unsafe { php_request_shutdown(ptr::null_mut()); }
+                            Err(e)
+                        }
                     }
                 } else {
                     Err("Failed to start PHP request".to_string())
