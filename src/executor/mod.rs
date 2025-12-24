@@ -9,18 +9,12 @@ mod php;
 #[cfg(feature = "php")]
 pub mod sapi;
 
-#[cfg(feature = "php")]
-mod php_sapi;
-
 use async_trait::async_trait;
 
 pub use stub::StubExecutor;
 
 #[cfg(feature = "php")]
 pub use php::PhpExecutor;
-
-#[cfg(feature = "php")]
-pub use php_sapi::PhpSapiExecutor;
 
 use crate::types::{ScriptRequest, ScriptResponse};
 

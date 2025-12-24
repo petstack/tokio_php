@@ -1,68 +1,37 @@
-//! PHP executor using embed SAPI with SAPI name override for OPcache compatibility.
+//! PHP script executor using custom SAPI initialization.
+//!
+//! This executor provides PHP script execution with custom SAPI callbacks
+//! for proper header handling via the sapi module.
 
 use async_trait::async_trait;
-use std::ffi::{c_char, c_int, CString};
-use std::ptr;
 
 use super::common::{self, WorkerPool};
+use super::sapi;
 use super::{ExecutorError, ScriptExecutor};
 use crate::types::{ScriptRequest, ScriptResponse};
 
 // =============================================================================
-// PHP Embed FFI Bindings (specific to this executor)
+// PHP Pool
 // =============================================================================
 
-#[link(name = "php")]
-extern "C" {
-    fn php_embed_init(argc: c_int, argv: *mut *mut c_char) -> c_int;
-    fn php_embed_shutdown();
-
-    // php_embed_module is the embed SAPI module used by php_embed_init
-    static mut php_embed_module: SapiModuleStub;
-}
-
-#[repr(C)]
-struct SapiModuleStub {
-    name: *mut c_char,
-    pretty_name: *mut c_char,
-}
-
-/// SAPI name for OPcache/JIT compatibility
-static SAPI_NAME_CLI_SERVER: &[u8] = b"cli-server\0";
-
-// =============================================================================
-// PHP Thread Pool with Embed SAPI
-// =============================================================================
-
-struct PhpThreadPool {
+struct PhpPool {
     pool: WorkerPool,
 }
 
-impl PhpThreadPool {
+impl PhpPool {
     fn new(num_workers: usize) -> Result<Self, String> {
-        // Initialize PHP using embed SAPI with name override
-        unsafe {
-            // Override SAPI name BEFORE initialization for OPcache compatibility
-            php_embed_module.name = SAPI_NAME_CLI_SERVER.as_ptr() as *mut c_char;
+        // Initialize custom SAPI
+        sapi::init()?;
 
-            let program_name = CString::new("tokio_php").unwrap();
-            let mut argv: [*mut c_char; 2] = [program_name.as_ptr() as *mut c_char, ptr::null_mut()];
-
-            let result = php_embed_init(1, argv.as_mut_ptr());
-            if result != 0 {
-                return Err(format!("Failed to initialize PHP embed: {}", result));
-            }
-
-            tracing::info!("PHP initialized with SAPI 'cli-server' (OPcache compatible)");
-        }
-
-        let pool = WorkerPool::new(num_workers, "php-worker", |id, rx| {
+        let pool = WorkerPool::new(num_workers, "php", |id, rx| {
             common::worker_main_loop(id, rx);
         })?;
 
         for id in 0..num_workers {
-            tracing::info!("Spawned PHP worker thread {}", id);
+            tracing::debug!("Spawned PHP worker thread {}", id);
         }
+
+        tracing::info!("PHP pool initialized with {} workers", num_workers);
 
         Ok(Self { pool })
     }
@@ -76,14 +45,10 @@ impl PhpThreadPool {
     }
 }
 
-impl Drop for PhpThreadPool {
+impl Drop for PhpPool {
     fn drop(&mut self) {
         self.pool.join_all();
-
-        unsafe {
-            php_embed_shutdown();
-        }
-        tracing::info!("PHP shutdown complete");
+        sapi::shutdown();
     }
 }
 
@@ -91,15 +56,15 @@ impl Drop for PhpThreadPool {
 // Public Executor Interface
 // =============================================================================
 
-/// PHP script executor using embed SAPI with SAPI name override for OPcache.
+/// PHP script executor using custom SAPI initialization.
 pub struct PhpExecutor {
-    pool: PhpThreadPool,
+    pool: PhpPool,
 }
 
 impl PhpExecutor {
     /// Creates a new PHP executor with the specified number of worker threads.
     pub fn new(num_workers: usize) -> Result<Self, ExecutorError> {
-        let pool = PhpThreadPool::new(num_workers)?;
+        let pool = PhpPool::new(num_workers)?;
         Ok(Self { pool })
     }
 
@@ -119,7 +84,7 @@ impl ScriptExecutor for PhpExecutor {
     }
 
     fn name(&self) -> &'static str {
-        "php-zts"
+        "php"
     }
 
     fn shutdown(&self) {
