@@ -25,7 +25,7 @@ docker compose down -v
 # Run with environment variables
 PHP_WORKERS=4 docker compose up -d      # Set worker count
 USE_STUB=1 docker compose up -d          # Stub mode (no PHP, for benchmarks)
-USE_SAPI=1 docker compose up -d          # Alternative SAPI executor
+USE_EXT=1 docker compose up -d           # ExtExecutor with tokio_sapi extension
 PROFILE=1 docker compose up -d           # Enable profiling
 
 # Run with TLS/HTTPS (ports 8443, 8444)
@@ -58,13 +58,20 @@ Auto-detection via `hyper_util::server::conn::auto::Builder`.
 The `ScriptExecutor` trait (`src/executor/mod.rs`) defines the interface for script execution:
 
 - `PhpExecutor` (`php.rs`) - Main PHP executor using php-embed with worker pool
-- `PhpSapiExecutor` (`php_sapi.rs`) - Alternative PHP executor with SAPI module init
+- `ExtExecutor` (`ext.rs`) - PHP executor with tokio_sapi extension integration
 - `StubExecutor` (`stub.rs`) - Returns empty responses for benchmarking
 
 Selection order in main.rs:
 1. `USE_STUB=1` → StubExecutor
-2. `USE_SAPI=1` → PhpSapiExecutor
+2. `USE_EXT=1` → ExtExecutor (with tokio_sapi PHP extension)
 3. Default → PhpExecutor
+
+### tokio_sapi PHP Extension
+
+Located in `ext/` directory. Provides:
+- PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_async_call()`
+- C API for future FFI superglobals optimization
+- Built as both shared library (.so) and static library (.a)
 
 ### PHP Worker Pool
 
@@ -95,7 +102,7 @@ Selection order in main.rs:
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
 | `PHP_WORKERS` | `0` (auto) | Worker count (0 = CPU cores) |
 | `USE_STUB` | `0` | Disable PHP, return empty responses |
-| `USE_SAPI` | `0` | Use alternative SAPI executor |
+| `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
 | `TLS_CERT` | - | Path to TLS certificate (PEM) |
 | `TLS_KEY` | - | Path to TLS private key (PEM) |

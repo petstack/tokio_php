@@ -12,12 +12,18 @@ pub mod sapi;
 #[cfg(feature = "php")]
 pub mod ext_ffi;
 
+#[cfg(feature = "php")]
+mod ext;
+
 use async_trait::async_trait;
 
 pub use stub::StubExecutor;
 
 #[cfg(feature = "php")]
 pub use php::PhpExecutor;
+
+#[cfg(feature = "php")]
+pub use ext::ExtExecutor;
 
 use crate::types::{ScriptRequest, ScriptResponse};
 

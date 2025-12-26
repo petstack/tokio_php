@@ -32,13 +32,20 @@ RUN apk add --no-cache \
 # Create working directory
 WORKDIR /app
 
-# Build tokio_sapi PHP extension
+# Build tokio_sapi PHP extension as shared library
 COPY ext ./ext
 WORKDIR /app/ext
 RUN phpize && \
     ./configure --enable-tokio_sapi && \
     make && \
     make install
+
+# Also build as static library for linking with Rust
+RUN cc -c -fPIC -I. -I/usr/local/include/php -I/usr/local/include/php/main \
+    -I/usr/local/include/php/TSRM -I/usr/local/include/php/Zend \
+    -I/usr/local/include/php/ext -DHAVE_CONFIG_H -o tokio_sapi_static.o tokio_sapi.c && \
+    ar rcs libtokio_sapi.a tokio_sapi_static.o && \
+    cp libtokio_sapi.a /usr/local/lib/
 
 # Back to app directory
 WORKDIR /app

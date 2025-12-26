@@ -12,6 +12,9 @@ use crate::server::{Server, ServerConfig};
 #[cfg(feature = "php")]
 use crate::executor::PhpExecutor;
 
+#[cfg(feature = "php")]
+use crate::executor::ExtExecutor;
+
 use crate::executor::StubExecutor;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -107,11 +110,42 @@ async fn async_main(
     #[cfg(all(feature = "stub", not(feature = "php")))]
     let use_stub = true;
 
+    // Check for extension mode (USE_EXT=1 uses FFI superglobals)
+    let use_ext = std::env::var("USE_EXT")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+
     if use_stub {
         info!("Running in STUB mode (PHP disabled)");
         let executor = StubExecutor::new();
         let server = Server::new(config, executor)?;
         run_server(server).await
+    } else if use_ext {
+        #[cfg(feature = "php")]
+        {
+            info!(
+                "Initializing EXT executor with {} workers (FFI superglobals)...",
+                worker_threads
+            );
+
+            let executor = ExtExecutor::new(worker_threads).map_err(|e| {
+                eprintln!("Failed to initialize ExtExecutor: {}", e);
+                e
+            })?;
+
+            info!("ExtExecutor ready ({} workers, FFI mode)", executor.worker_count());
+
+            let server = Server::new(config, executor)?;
+            run_server(server).await
+        }
+
+        #[cfg(not(feature = "php"))]
+        {
+            info!("PHP feature not enabled, falling back to stub mode");
+            let executor = StubExecutor::new();
+            let server = Server::new(config, executor)?;
+            run_server(server).await
+        }
     } else {
         #[cfg(feature = "php")]
         {

@@ -48,6 +48,10 @@ fn main() {
     // Link against php embed library
     println!("cargo:rustc-link-lib=dylib=php");
 
+    // Link against tokio_sapi static library (if available)
+    // This provides the extension functions for direct superglobal access
+    println!("cargo:rustc-link-lib=static=tokio_sapi");
+
     // Parse additional libraries from --libs
     for flag in libs.split_whitespace() {
         if let Some(lib) = flag.strip_prefix("-l") {
