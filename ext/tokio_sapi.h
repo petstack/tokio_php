@@ -134,6 +134,15 @@ void tokio_sapi_set_post_var(const char *key, size_t key_len,
                               const char *value, size_t value_len);
 void tokio_sapi_set_cookie_var(const char *key, size_t key_len,
                                 const char *value, size_t value_len);
+
+/* Batch API - set multiple variables in one FFI call
+ * Buffer format: [key_len:u32][key][val_len:u32][val]...
+ * Returns number of variables set */
+int tokio_sapi_set_server_vars_batch(const char *buffer, size_t buffer_len, size_t count);
+int tokio_sapi_set_get_vars_batch(const char *buffer, size_t buffer_len, size_t count);
+int tokio_sapi_set_post_vars_batch(const char *buffer, size_t buffer_len, size_t count);
+int tokio_sapi_set_cookie_vars_batch(const char *buffer, size_t buffer_len, size_t count);
+
 void tokio_sapi_set_files_var(const char *field, size_t field_len,
                                const char *name, const char *type,
                                const char *tmp_name, int error, size_t size);

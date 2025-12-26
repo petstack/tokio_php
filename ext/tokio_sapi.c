@@ -185,6 +185,77 @@ void tokio_sapi_set_cookie_var(const char *key, size_t key_len,
     set_superglobal_value(TRACK_VARS_COOKIE, key, key_len, value, value_len);
 }
 
+/* ============================================================================
+ * Batch API - set multiple variables in one FFI call
+ * ============================================================================ */
+
+/* Batch set superglobal from packed buffer:
+ * Buffer format: [key_len:u32][key\0][val_len:u32][val]...
+ * key_len includes null terminator, val_len does not
+ * Returns number of variables set */
+static int set_superglobal_batch(int track_var, const char *buffer, size_t buffer_len, size_t count)
+{
+    zval *arr = &PG(http_globals)[track_var];
+    if (Z_TYPE_P(arr) != IS_ARRAY) {
+        array_init(arr);
+    }
+
+    const unsigned char *ptr = (const unsigned char *)buffer;
+    const unsigned char *end = ptr + buffer_len;
+    int set_count = 0;
+
+    for (size_t i = 0; i < count && ptr + 4 <= end; i++) {
+        /* Read key length (includes null terminator) */
+        uint32_t key_len;
+        memcpy(&key_len, ptr, 4);
+        ptr += 4;
+        if (key_len == 0 || ptr + key_len > end) break;
+
+        const char *key = (const char *)ptr;  /* Already null-terminated */
+        ptr += key_len;
+
+        /* Read value length */
+        if (ptr + 4 > end) break;
+        uint32_t val_len;
+        memcpy(&val_len, ptr, 4);
+        ptr += 4;
+        if (ptr + val_len > end) break;
+
+        const char *val = (const char *)ptr;
+        ptr += val_len;
+
+        /* Set variable using php_register_variable_safe */
+        php_register_variable_safe((char *)key, (char *)val, val_len, arr);
+        set_count++;
+    }
+
+    return set_count;
+}
+
+/* Public API: batch set $_SERVER variables */
+int tokio_sapi_set_server_vars_batch(const char *buffer, size_t buffer_len, size_t count)
+{
+    return set_superglobal_batch(TRACK_VARS_SERVER, buffer, buffer_len, count);
+}
+
+/* Public API: batch set $_GET variables */
+int tokio_sapi_set_get_vars_batch(const char *buffer, size_t buffer_len, size_t count)
+{
+    return set_superglobal_batch(TRACK_VARS_GET, buffer, buffer_len, count);
+}
+
+/* Public API: batch set $_POST variables */
+int tokio_sapi_set_post_vars_batch(const char *buffer, size_t buffer_len, size_t count)
+{
+    return set_superglobal_batch(TRACK_VARS_POST, buffer, buffer_len, count);
+}
+
+/* Public API: batch set $_COOKIE variables */
+int tokio_sapi_set_cookie_vars_batch(const char *buffer, size_t buffer_len, size_t count)
+{
+    return set_superglobal_batch(TRACK_VARS_COOKIE, buffer, buffer_len, count);
+}
+
 /* Public API: set $_FILES variable (single file) */
 void tokio_sapi_set_files_var(const char *field, size_t field_len,
                                const char *name, const char *type,

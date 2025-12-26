@@ -65,12 +65,72 @@ extern "C" {
         error: c_int,
         size: usize
     );
+
+    // Batch API - set multiple variables in one FFI call
+    fn tokio_sapi_set_server_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
+    fn tokio_sapi_set_get_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
+    fn tokio_sapi_set_post_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
+    fn tokio_sapi_set_cookie_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
+
     fn tokio_sapi_clear_superglobals();
     fn tokio_sapi_init_request_state();  // Replaces header_remove();ob_start() eval
     fn tokio_sapi_build_request();
 
     // Script execution
     fn tokio_sapi_execute_script(path: *const c_char) -> c_int;
+}
+
+// =============================================================================
+// Batch Buffer Helper
+// =============================================================================
+
+/// Thread-local buffer for batch serialization (avoids allocation per request)
+thread_local! {
+    static BATCH_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pack key-value pairs into batch buffer format: [key_len:u32][key\0][val_len:u32][val]...
+/// Keys include null terminator for C compatibility, value length excludes null
+#[inline]
+fn pack_kv_pairs<'a>(pairs: impl Iterator<Item = (&'a String, &'a String)>, extra: Option<(&str, &str)>) -> (usize, usize) {
+    BATCH_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        buf.clear();
+
+        let mut count = 0;
+
+        // Pack regular pairs
+        for (key, value) in pairs {
+            // Key: length includes null terminator
+            buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
+            buf.extend_from_slice(key.as_bytes());
+            buf.push(0); // null terminator
+            // Value: length excludes null (C will use str_len)
+            buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            buf.extend_from_slice(value.as_bytes());
+            count += 1;
+        }
+
+        // Pack extra pair if provided
+        if let Some((key, value)) = extra {
+            buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
+            buf.extend_from_slice(key.as_bytes());
+            buf.push(0);
+            buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            buf.extend_from_slice(value.as_bytes());
+            count += 1;
+        }
+
+        (buf.len(), count)
+    })
+}
+
+/// Get pointer to batch buffer (must be called right after pack_kv_pairs)
+#[inline]
+fn get_batch_buffer_ptr() -> *const c_char {
+    BATCH_BUFFER.with(|buf| {
+        buf.borrow().as_ptr() as *const c_char
+    })
 }
 
 // =============================================================================
@@ -137,71 +197,69 @@ fn execute_script_with_ffi(
         timing.ffi_clear_us = phase_start.elapsed().as_micros() as u64;
     }
 
-    // 2. Set $_SERVER variables
+    // 2. Set $_SERVER variables (batch)
     let phase_start = Instant::now();
-    unsafe {
-        for (key, value) in &request.server_vars {
-            tokio_sapi_set_server_var(
-                key.as_ptr() as *const c_char, key.len(),
-                value.as_ptr() as *const c_char, value.len()
-            );
+    let req_id_value = request_id.to_string();
+    let (buf_len, count) = pack_kv_pairs(
+        request.server_vars.iter().map(|(k, v)| (k, v)),
+        Some(("TOKIO_REQUEST_ID", &req_id_value))
+    );
+    if count > 0 {
+        unsafe {
+            tokio_sapi_set_server_vars_batch(get_batch_buffer_ptr(), buf_len, count);
         }
-        // Add TOKIO_REQUEST_ID to $_SERVER
-        let req_id_key = b"TOKIO_REQUEST_ID";
-        let req_id_value = request_id.to_string();
-        tokio_sapi_set_server_var(
-            req_id_key.as_ptr() as *const c_char, req_id_key.len(),
-            req_id_value.as_ptr() as *const c_char, req_id_value.len()
-        );
     }
     if profiling {
         timing.ffi_server_us = phase_start.elapsed().as_micros() as u64;
-        timing.ffi_server_count = request.server_vars.len() as u64 + 1; // +1 for REQUEST_ID
+        timing.ffi_server_count = count as u64;
     }
 
-    // 3. Set $_GET variables
+    // 3. Set $_GET variables (batch)
     let phase_start = Instant::now();
-    unsafe {
-        for (key, value) in &request.get_params {
-            tokio_sapi_set_get_var(
-                key.as_ptr() as *const c_char, key.len(),
-                value.as_ptr() as *const c_char, value.len()
-            );
+    let (buf_len, count) = pack_kv_pairs(
+        request.get_params.iter().map(|(k, v)| (k, v)),
+        None
+    );
+    if count > 0 {
+        unsafe {
+            tokio_sapi_set_get_vars_batch(get_batch_buffer_ptr(), buf_len, count);
         }
     }
     if profiling {
         timing.ffi_get_us = phase_start.elapsed().as_micros() as u64;
-        timing.ffi_get_count = request.get_params.len() as u64;
+        timing.ffi_get_count = count as u64;
     }
 
-    // 4. Set $_POST variables
+    // 4. Set $_POST variables (batch)
     let phase_start = Instant::now();
-    unsafe {
-        for (key, value) in &request.post_params {
-            tokio_sapi_set_post_var(
-                key.as_ptr() as *const c_char, key.len(),
-                value.as_ptr() as *const c_char, value.len()
-            );
+    let (buf_len, count) = pack_kv_pairs(
+        request.post_params.iter().map(|(k, v)| (k, v)),
+        None
+    );
+    if count > 0 {
+        unsafe {
+            tokio_sapi_set_post_vars_batch(get_batch_buffer_ptr(), buf_len, count);
         }
     }
     if profiling {
         timing.ffi_post_us = phase_start.elapsed().as_micros() as u64;
-        timing.ffi_post_count = request.post_params.len() as u64;
+        timing.ffi_post_count = count as u64;
     }
 
-    // 5. Set $_COOKIE variables
+    // 5. Set $_COOKIE variables (batch)
     let phase_start = Instant::now();
-    unsafe {
-        for (key, value) in &request.cookies {
-            tokio_sapi_set_cookie_var(
-                key.as_ptr() as *const c_char, key.len(),
-                value.as_ptr() as *const c_char, value.len()
-            );
+    let (buf_len, count) = pack_kv_pairs(
+        request.cookies.iter().map(|(k, v)| (k, v)),
+        None
+    );
+    if count > 0 {
+        unsafe {
+            tokio_sapi_set_cookie_vars_batch(get_batch_buffer_ptr(), buf_len, count);
         }
     }
     if profiling {
         timing.ffi_cookie_us = phase_start.elapsed().as_micros() as u64;
-        timing.ffi_cookie_count = request.cookies.len() as u64;
+        timing.ffi_cookie_count = count as u64;
     }
 
     // 6. Set $_FILES variables
