@@ -194,6 +194,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 executor: Arc::clone(&self.executor),
                 document_root: Arc::clone(&self.config.document_root),
                 skip_file_check: self.executor.skip_file_check() || self.index_file_path.is_some(),
+                is_stub_mode: self.executor.skip_file_check(),
                 index_file_path: self.index_file_path.clone(),
                 index_file_name: index_file_name.clone(),
                 active_connections: Arc::clone(&self.active_connections),

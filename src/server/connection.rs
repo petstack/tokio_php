@@ -46,6 +46,7 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub executor: Arc<E>,
     pub document_root: Arc<str>,
     pub skip_file_check: bool,
+    pub is_stub_mode: bool,
     pub index_file_path: Option<Arc<str>>,
     pub index_file_name: Option<Arc<str>>,
     pub active_connections: Arc<AtomicUsize>,
@@ -142,20 +143,22 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
     }
 
     async fn handle_plain_connection(self: Arc<Self>, stream: TcpStream, remote_addr: SocketAddr) {
-        // Wait for first byte with timeout to detect idle connections
-        let mut peek_buf = [0u8; 1];
-        match tokio::time::timeout(Duration::from_secs(10), stream.peek(&mut peek_buf)).await {
-            Ok(Ok(0)) | Err(_) => {
-                // Connection closed or timeout - client connected but sent nothing
-                debug!("Connection idle timeout or closed: {:?}", remote_addr);
-                return;
-            }
-            Ok(Err(e)) => {
-                debug!("Peek error: {:?}", e);
-                return;
-            }
-            Ok(Ok(_)) => {
-                // Data available, proceed
+        // Wait for first byte with timeout to detect idle connections (skip for stub mode)
+        if !self.is_stub_mode {
+            let mut peek_buf = [0u8; 1];
+            match tokio::time::timeout(Duration::from_secs(10), stream.peek(&mut peek_buf)).await {
+                Ok(Ok(0)) | Err(_) => {
+                    // Connection closed or timeout - client connected but sent nothing
+                    debug!("Connection idle timeout or closed: {:?}", remote_addr);
+                    return;
+                }
+                Ok(Err(e)) => {
+                    debug!("Peek error: {:?}", e);
+                    return;
+                }
+                Ok(Ok(_)) => {
+                    // Data available, proceed
+                }
             }
         }
 
@@ -273,8 +276,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .map(accepts_brotli)
             .unwrap_or(false);
 
-        // Fast path for stub: minimal processing
-        if self.skip_file_check && is_php_uri(uri_path) {
+        // Fast path for stub mode only
+        if self.is_stub_mode && is_php_uri(uri_path) {
             return empty_stub_response();
         }
 
