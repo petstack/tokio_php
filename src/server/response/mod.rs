@@ -21,15 +21,24 @@ pub static BAD_REQUEST_BODY: Bytes = Bytes::from_static(b"Failed to read request
 
 const DEFAULT_CONTENT_TYPE: &str = "text/html; charset=utf-8";
 
-/// Build a pre-built empty response for stub mode.
+/// Build an empty response for stub mode.
+/// Optimized: minimal allocations, pre-computed header values.
+#[inline]
 pub fn empty_stub_response() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", DEFAULT_CONTENT_TYPE)
-        .header("Server", "tokio_php/0.1.0")
-        .header("Content-Length", "0")
-        .body(Full::new(EMPTY_BODY.clone()))
-        .unwrap()
+    use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE, SERVER};
+    use hyper::http::HeaderValue;
+
+    // Pre-computed static header values (no allocation)
+    static CT_VALUE: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
+    static SERVER_VALUE: HeaderValue = HeaderValue::from_static("tokio_php/0.1.0");
+    static ZERO_VALUE: HeaderValue = HeaderValue::from_static("0");
+
+    let mut resp = Response::new(Full::new(EMPTY_BODY.clone()));
+    let headers = resp.headers_mut();
+    headers.insert(CONTENT_TYPE, CT_VALUE.clone());
+    headers.insert(SERVER, SERVER_VALUE.clone());
+    headers.insert(CONTENT_LENGTH, ZERO_VALUE.clone());
+    resp
 }
 
 /// Create an error response with the given status and body.

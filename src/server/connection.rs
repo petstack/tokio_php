@@ -184,6 +184,14 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
     ) -> Response<Full<Bytes>> {
+        // FAST PATH: stub mode - return immediately with absolute minimal processing
+        if self.skip_file_check {
+            let uri_path = req.uri().path();
+            if is_php_uri(uri_path) {
+                return empty_stub_response();
+            }
+        }
+
         // Capture request timestamp at the very start
         let request_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -203,6 +211,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let mut path_resolve_us = 0u64;
         let mut file_check_us = 0u64;
 
+        let uri = req.uri().clone();
+        let uri_path = uri.path();
+
         let method = req.method().clone();
         let http_version = match req.version() {
             hyper::Version::HTTP_2 => "HTTP/2.0",
@@ -212,8 +223,6 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             _ => "HTTP/1.1",
         }
         .to_string();
-        let uri = req.uri().clone();
-        let uri_path = uri.path();
         let query_string = uri.query().unwrap_or("");
 
         // Block direct access to index file in single entry point mode
@@ -238,11 +247,6 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .and_then(|v| v.to_str().ok())
             .map(accepts_brotli)
             .unwrap_or(false);
-
-        // Fast path for stub: minimal processing
-        if self.skip_file_check && is_php_uri(uri_path) {
-            return empty_stub_response();
-        }
 
         // Full processing path - extract headers before consuming body
         let headers_start = Instant::now();
