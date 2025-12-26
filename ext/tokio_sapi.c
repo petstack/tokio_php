@@ -71,38 +71,89 @@ static void php_tokio_sapi_init_globals(zend_tokio_sapi_globals *globals)
  * Superglobals manipulation (the main performance win!)
  * ============================================================================ */
 
-/* Helper: get or create a superglobal array */
-static zval* get_superglobal(int track_var)
+/* Superglobal names for symbol table lookup */
+static const char *superglobal_names[] = {
+    "_POST",    /* TRACK_VARS_POST = 0 */
+    "_GET",     /* TRACK_VARS_GET = 1 */
+    "_COOKIE",  /* TRACK_VARS_COOKIE = 2 */
+    "_SERVER",  /* TRACK_VARS_SERVER = 3 */
+    "_ENV",     /* TRACK_VARS_ENV = 4 */
+    "_FILES",   /* TRACK_VARS_FILES = 5 */
+    "_REQUEST"  /* TRACK_VARS_REQUEST = 6 (not really used here) */
+};
+static const size_t superglobal_name_lens[] = {5, 4, 7, 7, 4, 6, 8};
+
+/* Cached interned strings for superglobal names (avoids alloc/free per call)
+ * Using __thread for ZTS thread-local storage */
+static __thread zend_string *superglobal_zstrings[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+static __thread zend_string *request_zstring = NULL;
+static __thread int superglobal_strings_initialized = 0;
+
+/* Initialize cached strings (called once per thread) */
+static void init_superglobal_strings(void)
 {
+    if (superglobal_strings_initialized) return; /* Already initialized */
+
+    for (int i = 0; i < 6; i++) {
+        /* Use persistent=1 to avoid per-request memory management */
+        superglobal_zstrings[i] = zend_string_init(superglobal_names[i], superglobal_name_lens[i], 1);
+    }
+    request_zstring = zend_string_init("_REQUEST", sizeof("_REQUEST")-1, 1);
+    superglobal_strings_initialized = 1;
+}
+
+/* Helper: get superglobal from symbol table (where PHP code reads from)
+ * Uses zend_is_auto_global to ensure proper initialization in ZTS mode */
+static zval* get_superglobal_from_symtable(int track_var)
+{
+    if (track_var < 0 || track_var > 5) return NULL;
+
+    const char *name = superglobal_names[track_var];
+    size_t name_len = superglobal_name_lens[track_var];
+
+    /* Use cached string for auto-global check (avoids alloc/free!) */
+    init_superglobal_strings();
+    zend_is_auto_global(superglobal_zstrings[track_var]);
+
+    /* Now access the symbol table */
+    zval *arr = zend_hash_str_find(&EG(symbol_table), name, name_len);
+    if (arr == NULL || Z_TYPE_P(arr) != IS_ARRAY) {
+        /* Create new array in symbol table */
+        zval new_arr;
+        array_init(&new_arr);
+        arr = zend_hash_str_update(&EG(symbol_table), name, name_len, &new_arr);
+    }
+    return arr;
+}
+
+/* Helper: set a value in a superglobal using PHP's proper API */
+static void set_superglobal_value(int track_var, const char *key, size_t key_len,
+                                   const char *value, size_t value_len)
+{
+    /* Use PG(http_globals) which is what PHP's SAPI layer uses */
     zval *arr = &PG(http_globals)[track_var];
 
+    /* Initialize if needed */
     if (Z_TYPE_P(arr) != IS_ARRAY) {
         array_init(arr);
     }
 
-    return arr;
+    /* Use php_register_variable_safe - the proper PHP API for SAPIs */
+    php_register_variable_safe((char*)key, (char*)value, value_len, arr);
 }
 
-/* Helper: set a value in a superglobal */
-static void set_superglobal_value(int track_var, const char *key, size_t key_len,
-                                   const char *value, size_t value_len)
-{
-    zval *arr = get_superglobal(track_var);
-    zval zv;
-
-    ZVAL_STRINGL(&zv, value, value_len);
-    zend_hash_str_update(Z_ARRVAL_P(arr), key, key_len, &zv);
-}
-
-/* Clear a superglobal array */
+/* Clear a superglobal array (fast path - no auto-global init) */
 static void clear_superglobal(int track_var)
 {
-    zval *arr = &PG(http_globals)[track_var];
+    if (track_var < 0 || track_var > 5) return;
 
-    if (Z_TYPE_P(arr) == IS_ARRAY) {
+    const char *name = superglobal_names[track_var];
+    size_t name_len = superglobal_name_lens[track_var];
+
+    /* Direct symbol table access - if not there, nothing to clear */
+    zval *arr = zend_hash_str_find(&EG(symbol_table), name, name_len);
+    if (arr && Z_TYPE_P(arr) == IS_ARRAY) {
         zend_hash_clean(Z_ARRVAL_P(arr));
-    } else {
-        array_init(arr);
     }
 }
 
@@ -139,7 +190,9 @@ void tokio_sapi_set_files_var(const char *field, size_t field_len,
                                const char *name, const char *type,
                                const char *tmp_name, int error, size_t size)
 {
-    zval *files_arr = get_superglobal(TRACK_VARS_FILES);
+    zval *files_arr = get_superglobal_from_symtable(TRACK_VARS_FILES);
+    if (files_arr == NULL) return;
+
     zval file_entry;
     zval tmp;
 
@@ -179,27 +232,48 @@ void tokio_sapi_clear_superglobals(void)
     }
 }
 
+/* Public API: initialize request state (replaces header_remove();http_response_code(200);ob_start()) */
+void tokio_sapi_init_request_state(void)
+{
+    /* Clear any existing headers from previous request */
+    zend_llist_clean(&SG(sapi_headers).headers);
+
+    /* Set default response code */
+    SG(sapi_headers).http_response_code = 200;
+
+    /* Start output buffering if not already started */
+    if (!OG(active)) {
+        php_output_start_default();
+    }
+}
+
 /* Public API: build $_REQUEST from $_GET + $_POST */
 void tokio_sapi_build_request(void)
 {
-    zval *get_arr = get_superglobal(TRACK_VARS_GET);
-    zval *post_arr = get_superglobal(TRACK_VARS_POST);
+    zval *get_arr = get_superglobal_from_symtable(TRACK_VARS_GET);
+    zval *post_arr = get_superglobal_from_symtable(TRACK_VARS_POST);
     zval request_arr;
     zend_string *key;
     zval *val;
+
+    if (get_arr == NULL || post_arr == NULL) return;
 
     array_init(&request_arr);
 
     /* Copy $_GET */
     ZEND_HASH_FOREACH_STR_KEY_VAL(Z_ARRVAL_P(get_arr), key, val) {
-        Z_TRY_ADDREF_P(val);
-        zend_hash_update(Z_ARRVAL(request_arr), key, val);
+        if (key) {
+            Z_TRY_ADDREF_P(val);
+            zend_hash_update(Z_ARRVAL(request_arr), key, val);
+        }
     } ZEND_HASH_FOREACH_END();
 
     /* Merge $_POST (overwrites GET) */
     ZEND_HASH_FOREACH_STR_KEY_VAL(Z_ARRVAL_P(post_arr), key, val) {
-        Z_TRY_ADDREF_P(val);
-        zend_hash_update(Z_ARRVAL(request_arr), key, val);
+        if (key) {
+            Z_TRY_ADDREF_P(val);
+            zend_hash_update(Z_ARRVAL(request_arr), key, val);
+        }
     } ZEND_HASH_FOREACH_END();
 
     /* Update $_REQUEST in symbol table */

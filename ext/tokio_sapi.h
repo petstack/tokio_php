@@ -26,6 +26,7 @@
 #include "main/php_output.h"
 #include "main/php_main.h"
 #include "main/php_streams.h"
+#include "main/php_variables.h"
 
 /* Extension version */
 #define TOKIO_SAPI_VERSION "0.1.0"
@@ -139,6 +140,9 @@ void tokio_sapi_set_files_var(const char *field, size_t field_len,
 
 /* Clear all superglobals (call before setting new values) */
 void tokio_sapi_clear_superglobals(void);
+
+/* Initialize request state (replaces header_remove();ob_start() eval) */
+void tokio_sapi_init_request_state(void);
 
 /* Build $_REQUEST from $_GET + $_POST */
 void tokio_sapi_build_request(void);

@@ -53,8 +53,24 @@ pub struct ProfileData {
 
     // Superglobals breakdown
     pub superglobals_us: u64,        // Total superglobals time
-    pub superglobals_build_us: u64,  // Build PHP code string
-    pub superglobals_eval_us: u64,   // zend_eval_string execution
+    pub superglobals_build_us: u64,  // Build PHP code string (eval mode)
+    pub superglobals_eval_us: u64,   // zend_eval_string execution (eval mode)
+
+    // FFI superglobals breakdown (USE_EXT=1)
+    pub ffi_request_init_us: u64,    // tokio_sapi_request_init()
+    pub ffi_clear_us: u64,           // tokio_sapi_clear_superglobals()
+    pub ffi_server_us: u64,          // All $_SERVER FFI calls
+    pub ffi_server_count: u64,       // Number of $_SERVER entries
+    pub ffi_get_us: u64,             // All $_GET FFI calls
+    pub ffi_get_count: u64,          // Number of $_GET entries
+    pub ffi_post_us: u64,            // All $_POST FFI calls
+    pub ffi_post_count: u64,         // Number of $_POST entries
+    pub ffi_cookie_us: u64,          // All $_COOKIE FFI calls
+    pub ffi_cookie_count: u64,       // Number of $_COOKIE entries
+    pub ffi_files_us: u64,           // All $_FILES FFI calls
+    pub ffi_files_count: u64,        // Number of $_FILES entries
+    pub ffi_build_request_us: u64,   // tokio_sapi_build_request()
+    pub ffi_init_eval_us: u64,       // INIT_CODE eval (header_remove, ob_start)
 
     // I/O setup
     pub memfd_setup_us: u64,         // memfd_create + stdout redirect
@@ -119,7 +135,29 @@ impl ProfileData {
             ("X-Profile-Superglobals-Us".to_string(), self.superglobals_us.to_string()),
             ("X-Profile-Superglobals-Build-Us".to_string(), self.superglobals_build_us.to_string()),
             ("X-Profile-Superglobals-Eval-Us".to_string(), self.superglobals_eval_us.to_string()),
+        ]);
 
+        // FFI-specific headers (only when USE_EXT=1 and values are non-zero)
+        if self.ffi_request_init_us > 0 || self.ffi_clear_us > 0 {
+            headers.extend([
+                ("X-Profile-FFI-Request-Init-Us".to_string(), self.ffi_request_init_us.to_string()),
+                ("X-Profile-FFI-Clear-Us".to_string(), self.ffi_clear_us.to_string()),
+                ("X-Profile-FFI-Server-Us".to_string(), self.ffi_server_us.to_string()),
+                ("X-Profile-FFI-Server-Count".to_string(), self.ffi_server_count.to_string()),
+                ("X-Profile-FFI-Get-Us".to_string(), self.ffi_get_us.to_string()),
+                ("X-Profile-FFI-Get-Count".to_string(), self.ffi_get_count.to_string()),
+                ("X-Profile-FFI-Post-Us".to_string(), self.ffi_post_us.to_string()),
+                ("X-Profile-FFI-Post-Count".to_string(), self.ffi_post_count.to_string()),
+                ("X-Profile-FFI-Cookie-Us".to_string(), self.ffi_cookie_us.to_string()),
+                ("X-Profile-FFI-Cookie-Count".to_string(), self.ffi_cookie_count.to_string()),
+                ("X-Profile-FFI-Files-Us".to_string(), self.ffi_files_us.to_string()),
+                ("X-Profile-FFI-Files-Count".to_string(), self.ffi_files_count.to_string()),
+                ("X-Profile-FFI-Build-Request-Us".to_string(), self.ffi_build_request_us.to_string()),
+                ("X-Profile-FFI-Init-Eval-Us".to_string(), self.ffi_init_eval_us.to_string()),
+            ]);
+        }
+
+        headers.extend([
             // I/O setup
             ("X-Profile-Memfd-Setup-Us".to_string(), self.memfd_setup_us.to_string()),
 

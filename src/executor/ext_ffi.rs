@@ -4,8 +4,7 @@
 //! the tokio_sapi PHP extension, enabling direct manipulation of
 //! PHP superglobals without eval().
 
-use std::ffi::{c_char, c_int, c_void, CString};
-use std::ptr;
+use std::ffi::{c_char, c_int, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // =============================================================================

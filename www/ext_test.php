@@ -16,6 +16,8 @@ $result = [
     'constants' => [
         'TOKIO_SAPI_VERSION' => defined('TOKIO_SAPI_VERSION') ? TOKIO_SAPI_VERSION : null,
     ],
+    '_SERVER_count' => count($_SERVER),
+    '_SERVER_keys' => array_keys($_SERVER),
     'server_tokio_vars' => array_filter($_SERVER, fn($k) => strpos($k, 'TOKIO') !== false, ARRAY_FILTER_USE_KEY),
 ];
 

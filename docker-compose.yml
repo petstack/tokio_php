@@ -14,9 +14,9 @@ services:
       # USE_STUB: set to 1 or true to disable PHP and return empty responses
       - USE_STUB=${USE_STUB:-0}
       # USE_EXT: set to 1 or true to use ExtExecutor (FFI superglobals)
-      - USE_EXT=${USE_EXT:-0}
+      - USE_EXT=${USE_EXT:-1}
       # PROFILE: set to 1 or true to enable profiling (requires X-Profile: 1 header)
-      - PROFILE=${PROFILE:-1}
+      - PROFILE=${PROFILE:-0}
       # INDEX_FILE: single entry point mode (e.g., index.php)
       - INDEX_FILE=${INDEX_FILE:-}
       # DOCUMENT_ROOT: web root directory (default: /var/www/html)
