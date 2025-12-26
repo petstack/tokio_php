@@ -12,8 +12,9 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockRef, Socket, TcpKeepalive, Type};
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::pki_types::CertificateDer;
 use tokio_rustls::rustls::ServerConfig as RustlsConfig;
@@ -228,6 +229,14 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                     };
 
                     let _ = stream.set_nodelay(true);
+
+                    // Set TCP keepalive to detect dead connections faster (5s idle, 1s interval, 3 retries)
+                    let keepalive = TcpKeepalive::new()
+                        .with_time(Duration::from_secs(5))
+                        .with_interval(Duration::from_secs(1))
+                        .with_retries(3);
+                    let sock_ref = SockRef::from(&stream);
+                    let _ = sock_ref.set_tcp_keepalive(&keepalive);
 
                     let ctx = Arc::clone(&ctx);
                     let tls = tls_acceptor.clone();

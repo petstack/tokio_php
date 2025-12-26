@@ -5,14 +5,14 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming as IncomingBody;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsAcceptor;
@@ -29,7 +29,7 @@ use crate::executor::ScriptExecutor;
 use crate::profiler;
 use crate::types::ScriptRequest;
 
-/// Check if an error is a common connection reset.
+/// Check if an error is a common connection reset or timeout.
 #[inline]
 fn is_connection_error(err_str: &str) -> bool {
     err_str.contains("connection reset")
@@ -37,6 +37,8 @@ fn is_connection_error(err_str: &str) -> bool {
         || err_str.contains("Connection reset")
         || err_str.contains("os error 104")
         || err_str.contains("os error 32")
+        || err_str.contains("timed out")
+        || err_str.contains("deadline has elapsed")
 }
 
 /// Connection handler context.
@@ -80,53 +82,83 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
     ) {
         let tls_start = Instant::now();
 
-        match acceptor.accept(stream).await {
-            Ok(tls_stream) => {
-                let handshake_us = tls_start.elapsed().as_micros() as u64;
-
-                // Extract TLS info from the connection
-                let (_, server_conn) = tls_stream.get_ref();
-                let tls_info = TlsInfo {
-                    handshake_us,
-                    protocol: server_conn
-                        .protocol_version()
-                        .map(|v| format!("{:?}", v))
-                        .unwrap_or_default(),
-                    alpn: server_conn
-                        .alpn_protocol()
-                        .map(|p| String::from_utf8_lossy(p).to_string())
-                        .unwrap_or_default(),
-                };
-
-                let ctx = Arc::clone(&self);
-                let service = service_fn(move |req| {
-                    let ctx = Arc::clone(&ctx);
-                    let tls = tls_info.clone();
-                    async move { ctx.handle_request(req, remote_addr, Some(tls)).await }
-                });
-
-                let io = TokioIo::new(tls_stream);
-                if let Err(err) = auto::Builder::new(TokioExecutor::new())
-                    .http1()
-                    .keep_alive(true)
-                    .http2()
-                    .max_concurrent_streams(250)
-                    .serve_connection(io, service)
-                    .await
-                {
-                    let err_str = format!("{:?}", err);
-                    if !is_connection_error(&err_str) {
-                        debug!("TLS connection error: {:?}", err);
-                    }
-                }
-            }
-            Err(e) => {
+        // TLS handshake with timeout
+        let tls_stream = match tokio::time::timeout(
+            Duration::from_secs(10),
+            acceptor.accept(stream),
+        )
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
                 debug!("TLS handshake failed: {:?}", e);
+                return;
+            }
+            Err(_) => {
+                debug!("TLS handshake timeout: {:?}", remote_addr);
+                return;
+            }
+        };
+
+        let handshake_us = tls_start.elapsed().as_micros() as u64;
+
+        // Extract TLS info from the connection
+        let (_, server_conn) = tls_stream.get_ref();
+        let tls_info = TlsInfo {
+            handshake_us,
+            protocol: server_conn
+                .protocol_version()
+                .map(|v| format!("{:?}", v))
+                .unwrap_or_default(),
+            alpn: server_conn
+                .alpn_protocol()
+                .map(|p| String::from_utf8_lossy(p).to_string())
+                .unwrap_or_default(),
+        };
+
+        let ctx = Arc::clone(&self);
+        let service = service_fn(move |req| {
+            let ctx = Arc::clone(&ctx);
+            let tls = tls_info.clone();
+            async move { ctx.handle_request(req, remote_addr, Some(tls)).await }
+        });
+
+        let io = TokioIo::new(tls_stream);
+        if let Err(err) = auto::Builder::new(TokioExecutor::new())
+            .http1()
+            .timer(TokioTimer::new())
+            .header_read_timeout(Some(Duration::from_secs(5)))
+            .keep_alive(true)
+            .http2()
+            .max_concurrent_streams(250)
+            .serve_connection(io, service)
+            .await
+        {
+            let err_str = format!("{:?}", err);
+            if !is_connection_error(&err_str) {
+                debug!("TLS connection error: {:?}", err);
             }
         }
     }
 
     async fn handle_plain_connection(self: Arc<Self>, stream: TcpStream, remote_addr: SocketAddr) {
+        // Wait for first byte with timeout to detect idle connections
+        let mut peek_buf = [0u8; 1];
+        match tokio::time::timeout(Duration::from_secs(10), stream.peek(&mut peek_buf)).await {
+            Ok(Ok(0)) | Err(_) => {
+                // Connection closed or timeout - client connected but sent nothing
+                debug!("Connection idle timeout or closed: {:?}", remote_addr);
+                return;
+            }
+            Ok(Err(e)) => {
+                debug!("Peek error: {:?}", e);
+                return;
+            }
+            Ok(Ok(_)) => {
+                // Data available, proceed
+            }
+        }
+
         let ctx = Arc::clone(&self);
         let service = service_fn(move |req| {
             let ctx = Arc::clone(&ctx);
@@ -136,6 +168,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let io = TokioIo::new(stream);
         if let Err(err) = auto::Builder::new(TokioExecutor::new())
             .http1()
+            .timer(TokioTimer::new())
+            .header_read_timeout(Some(Duration::from_secs(5)))
             .keep_alive(true)
             .http2()
             .max_concurrent_streams(250)
