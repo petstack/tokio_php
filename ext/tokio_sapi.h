@@ -143,12 +143,26 @@ int tokio_sapi_set_get_vars_batch(const char *buffer, size_t buffer_len, size_t 
 int tokio_sapi_set_post_vars_batch(const char *buffer, size_t buffer_len, size_t count);
 int tokio_sapi_set_cookie_vars_batch(const char *buffer, size_t buffer_len, size_t count);
 
+/* Ultra-batch API - set ALL superglobals in one FFI call
+ * Buffer format per superglobal: [count:u32][key_len:u32][key\0][val_len:u32][val]...
+ * Order: SERVER, GET, POST, COOKIE
+ * Performs: clear, init caches, set all vars, build $_REQUEST, init request state */
+void tokio_sapi_set_all_superglobals(
+    const char *server_buf, size_t server_len, size_t server_count,
+    const char *get_buf, size_t get_len, size_t get_count,
+    const char *post_buf, size_t post_len, size_t post_count,
+    const char *cookie_buf, size_t cookie_len, size_t cookie_count
+);
+
 void tokio_sapi_set_files_var(const char *field, size_t field_len,
                                const char *name, const char *type,
                                const char *tmp_name, int error, size_t size);
 
 /* Clear all superglobals (call before setting new values) */
 void tokio_sapi_clear_superglobals(void);
+
+/* Initialize superglobal caches (call once before batch operations) */
+void tokio_sapi_init_superglobals(void);
 
 /* Initialize request state (replaces header_remove();ob_start() eval) */
 void tokio_sapi_init_request_state(void);

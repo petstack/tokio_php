@@ -72,7 +72,16 @@ extern "C" {
     fn tokio_sapi_set_post_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
     fn tokio_sapi_set_cookie_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
 
+    // Ultra-batch API - set ALL superglobals in one FFI call
+    fn tokio_sapi_set_all_superglobals(
+        server_buf: *const c_char, server_len: usize, server_count: usize,
+        get_buf: *const c_char, get_len: usize, get_count: usize,
+        post_buf: *const c_char, post_len: usize, post_count: usize,
+        cookie_buf: *const c_char, cookie_len: usize, cookie_count: usize,
+    );
+
     fn tokio_sapi_clear_superglobals();
+    fn tokio_sapi_init_superglobals();   // Initialize superglobal array caches (call once per request)
     fn tokio_sapi_init_request_state();  // Replaces header_remove();ob_start() eval
     fn tokio_sapi_build_request();
 
@@ -84,53 +93,43 @@ extern "C" {
 // Batch Buffer Helper
 // =============================================================================
 
-/// Thread-local buffer for batch serialization (avoids allocation per request)
+/// Thread-local buffers for ultra-batch serialization (one per superglobal type)
 thread_local! {
-    static BATCH_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    static SERVER_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    static GET_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    static POST_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    static COOKIE_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Pack key-value pairs into batch buffer format: [key_len:u32][key\0][val_len:u32][val]...
-/// Keys include null terminator for C compatibility, value length excludes null
+/// Pack key-value pairs into a buffer. Returns (buffer_len, count)
 #[inline]
-fn pack_kv_pairs<'a>(pairs: impl Iterator<Item = (&'a String, &'a String)>, extra: Option<(&str, &str)>) -> (usize, usize) {
-    BATCH_BUFFER.with(|buf| {
-        let mut buf = buf.borrow_mut();
-        buf.clear();
+fn pack_into_buffer<'a>(
+    buf: &mut Vec<u8>,
+    pairs: impl Iterator<Item = (&'a String, &'a String)>,
+    extra: Option<(&str, &str)>,
+) -> (usize, usize) {
+    buf.clear();
+    let mut count = 0;
 
-        let mut count = 0;
+    for (key, value) in pairs {
+        buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
+        buf.extend_from_slice(key.as_bytes());
+        buf.push(0);
+        buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        buf.extend_from_slice(value.as_bytes());
+        count += 1;
+    }
 
-        // Pack regular pairs
-        for (key, value) in pairs {
-            // Key: length includes null terminator
-            buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
-            buf.extend_from_slice(key.as_bytes());
-            buf.push(0); // null terminator
-            // Value: length excludes null (C will use str_len)
-            buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
-            buf.extend_from_slice(value.as_bytes());
-            count += 1;
-        }
+    if let Some((key, value)) = extra {
+        buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
+        buf.extend_from_slice(key.as_bytes());
+        buf.push(0);
+        buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        buf.extend_from_slice(value.as_bytes());
+        count += 1;
+    }
 
-        // Pack extra pair if provided
-        if let Some((key, value)) = extra {
-            buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
-            buf.extend_from_slice(key.as_bytes());
-            buf.push(0);
-            buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
-            buf.extend_from_slice(value.as_bytes());
-            count += 1;
-        }
-
-        (buf.len(), count)
-    })
-}
-
-/// Get pointer to batch buffer (must be called right after pack_kv_pairs)
-#[inline]
-fn get_batch_buffer_ptr() -> *const c_char {
-    BATCH_BUFFER.with(|buf| {
-        buf.borrow().as_ptr() as *const c_char
-    })
+    (buf.len(), count)
 }
 
 // =============================================================================
@@ -190,9 +189,12 @@ fn execute_script_with_ffi(
     // === FFI Superglobals with granular timing ===
     let total_start = Instant::now();
 
-    // 1. Clear superglobals
+    // 1. Clear superglobals and initialize array caches
     let phase_start = Instant::now();
-    unsafe { tokio_sapi_clear_superglobals(); }
+    unsafe {
+        tokio_sapi_clear_superglobals();
+        tokio_sapi_init_superglobals();
+    }
     if profiling {
         timing.ffi_clear_us = phase_start.elapsed().as_micros() as u64;
     }
@@ -200,14 +202,14 @@ fn execute_script_with_ffi(
     // 2. Set $_SERVER variables (batch)
     let phase_start = Instant::now();
     let req_id_value = request_id.to_string();
-    let (buf_len, count) = pack_kv_pairs(
-        request.server_vars.iter().map(|(k, v)| (k, v)),
-        Some(("TOKIO_REQUEST_ID", &req_id_value))
-    );
+    let (buf_len, count) = SERVER_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        pack_into_buffer(&mut buf, request.server_vars.iter().map(|(k, v)| (k, v)), Some(("TOKIO_REQUEST_ID", &req_id_value)))
+    });
     if count > 0 {
-        unsafe {
-            tokio_sapi_set_server_vars_batch(get_batch_buffer_ptr(), buf_len, count);
-        }
+        SERVER_BUFFER.with(|buf| unsafe {
+            tokio_sapi_set_server_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+        });
     }
     if profiling {
         timing.ffi_server_us = phase_start.elapsed().as_micros() as u64;
@@ -216,14 +218,14 @@ fn execute_script_with_ffi(
 
     // 3. Set $_GET variables (batch)
     let phase_start = Instant::now();
-    let (buf_len, count) = pack_kv_pairs(
-        request.get_params.iter().map(|(k, v)| (k, v)),
-        None
-    );
+    let (buf_len, count) = GET_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        pack_into_buffer(&mut buf, request.get_params.iter().map(|(k, v)| (k, v)), None)
+    });
     if count > 0 {
-        unsafe {
-            tokio_sapi_set_get_vars_batch(get_batch_buffer_ptr(), buf_len, count);
-        }
+        GET_BUFFER.with(|buf| unsafe {
+            tokio_sapi_set_get_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+        });
     }
     if profiling {
         timing.ffi_get_us = phase_start.elapsed().as_micros() as u64;
@@ -232,14 +234,14 @@ fn execute_script_with_ffi(
 
     // 4. Set $_POST variables (batch)
     let phase_start = Instant::now();
-    let (buf_len, count) = pack_kv_pairs(
-        request.post_params.iter().map(|(k, v)| (k, v)),
-        None
-    );
+    let (buf_len, count) = POST_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        pack_into_buffer(&mut buf, request.post_params.iter().map(|(k, v)| (k, v)), None)
+    });
     if count > 0 {
-        unsafe {
-            tokio_sapi_set_post_vars_batch(get_batch_buffer_ptr(), buf_len, count);
-        }
+        POST_BUFFER.with(|buf| unsafe {
+            tokio_sapi_set_post_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+        });
     }
     if profiling {
         timing.ffi_post_us = phase_start.elapsed().as_micros() as u64;
@@ -248,14 +250,14 @@ fn execute_script_with_ffi(
 
     // 5. Set $_COOKIE variables (batch)
     let phase_start = Instant::now();
-    let (buf_len, count) = pack_kv_pairs(
-        request.cookies.iter().map(|(k, v)| (k, v)),
-        None
-    );
+    let (buf_len, count) = COOKIE_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        pack_into_buffer(&mut buf, request.cookies.iter().map(|(k, v)| (k, v)), None)
+    });
     if count > 0 {
-        unsafe {
-            tokio_sapi_set_cookie_vars_batch(get_batch_buffer_ptr(), buf_len, count);
-        }
+        COOKIE_BUFFER.with(|buf| unsafe {
+            tokio_sapi_set_cookie_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+        });
     }
     if profiling {
         timing.ffi_cookie_us = phase_start.elapsed().as_micros() as u64;
@@ -304,7 +306,7 @@ fn execute_script_with_ffi(
         timing.memfd_setup_us = memfd_start.elapsed().as_micros() as u64;
     }
 
-    // Initialize PHP state (headers, output buffering) via FFI - no eval!
+    // Initialize PHP state (headers, output buffering) via FFI
     let init_start = Instant::now();
     unsafe {
         tokio_sapi_init_request_state();

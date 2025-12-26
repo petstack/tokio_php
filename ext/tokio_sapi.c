@@ -103,7 +103,7 @@ static void init_superglobal_strings(void)
 }
 
 /* Helper: get superglobal from symbol table (where PHP code reads from)
- * Uses zend_is_auto_global to ensure proper initialization in ZTS mode */
+ * Fast path: try direct access first, only call zend_is_auto_global if needed */
 static zval* get_superglobal_from_symtable(int track_var)
 {
     if (track_var < 0 || track_var > 5) return NULL;
@@ -111,12 +111,18 @@ static zval* get_superglobal_from_symtable(int track_var)
     const char *name = superglobal_names[track_var];
     size_t name_len = superglobal_name_lens[track_var];
 
-    /* Use cached string for auto-global check (avoids alloc/free!) */
+    /* Fast path: try direct symbol table access first */
+    zval *arr = zend_hash_str_find(&EG(symbol_table), name, name_len);
+    if (arr && Z_TYPE_P(arr) == IS_ARRAY) {
+        return arr;  /* Already exists and is array - return directly */
+    }
+
+    /* Slow path: initialize cached strings and trigger auto-global init */
     init_superglobal_strings();
     zend_is_auto_global(superglobal_zstrings[track_var]);
 
-    /* Now access the symbol table */
-    zval *arr = zend_hash_str_find(&EG(symbol_table), name, name_len);
+    /* Try again after auto-global init */
+    arr = zend_hash_str_find(&EG(symbol_table), name, name_len);
     if (arr == NULL || Z_TYPE_P(arr) != IS_ARRAY) {
         /* Create new array in symbol table */
         zval new_arr;
@@ -186,6 +192,44 @@ void tokio_sapi_set_cookie_var(const char *key, size_t key_len,
 }
 
 /* ============================================================================
+ * Cached superglobal arrays (avoids repeated zend_is_auto_global calls)
+ * ============================================================================ */
+
+/* Thread-local cached superglobal array pointers */
+static __thread zval *cached_superglobal_arrs[6] = {NULL};
+static __thread int superglobals_initialized = 0;
+
+/* Reset cached pointers (call at request end) */
+static void reset_superglobal_cache(void)
+{
+    superglobals_initialized = 0;
+    for (int i = 0; i < 6; i++) {
+        cached_superglobal_arrs[i] = NULL;
+    }
+}
+
+/* Initialize all superglobals once per request (avoids repeated zend_is_auto_global calls) */
+void tokio_sapi_init_superglobals(void)
+{
+    if (superglobals_initialized) return;
+
+    for (int i = 0; i < 6; i++) {
+        cached_superglobal_arrs[i] = get_superglobal_from_symtable(i);
+    }
+    superglobals_initialized = 1;
+}
+
+/* Get cached superglobal array (fast path after init) */
+static zval* get_cached_superglobal(int track_var)
+{
+    if (track_var < 0 || track_var > 5) return NULL;
+    if (!superglobals_initialized) {
+        tokio_sapi_init_superglobals();
+    }
+    return cached_superglobal_arrs[track_var];
+}
+
+/* ============================================================================
  * Batch API - set multiple variables in one FFI call
  * ============================================================================ */
 
@@ -195,9 +239,10 @@ void tokio_sapi_set_cookie_var(const char *key, size_t key_len,
  * Returns number of variables set */
 static int set_superglobal_batch(int track_var, const char *buffer, size_t buffer_len, size_t count)
 {
-    zval *arr = &PG(http_globals)[track_var];
-    if (Z_TYPE_P(arr) != IS_ARRAY) {
-        array_init(arr);
+    /* Get cached array (fast path, no repeated zend_is_auto_global) */
+    zval *arr = get_cached_superglobal(track_var);
+    if (arr == NULL || Z_TYPE_P(arr) != IS_ARRAY) {
+        return 0;
     }
 
     const unsigned char *ptr = (const unsigned char *)buffer;
@@ -212,6 +257,7 @@ static int set_superglobal_batch(int track_var, const char *buffer, size_t buffe
         if (key_len == 0 || ptr + key_len > end) break;
 
         const char *key = (const char *)ptr;  /* Already null-terminated */
+        size_t key_str_len = key_len - 1;  /* Exclude null for hash key */
         ptr += key_len;
 
         /* Read value length */
@@ -224,8 +270,10 @@ static int set_superglobal_batch(int track_var, const char *buffer, size_t buffe
         const char *val = (const char *)ptr;
         ptr += val_len;
 
-        /* Set variable using php_register_variable_safe */
-        php_register_variable_safe((char *)key, (char *)val, val_len, arr);
+        /* Direct hash update (faster than php_register_variable_safe) */
+        zval zval_val;
+        ZVAL_STRINGL(&zval_val, val, val_len);
+        zend_hash_str_update(Z_ARRVAL_P(arr), key, key_str_len, &zval_val);
         set_count++;
     }
 
@@ -254,6 +302,52 @@ int tokio_sapi_set_post_vars_batch(const char *buffer, size_t buffer_len, size_t
 int tokio_sapi_set_cookie_vars_batch(const char *buffer, size_t buffer_len, size_t count)
 {
     return set_superglobal_batch(TRACK_VARS_COOKIE, buffer, buffer_len, count);
+}
+
+/* Public API: ultra-batch - set ALL superglobals in one call
+ * This combines: clear, init caches, set all vars, build $_REQUEST, init request state */
+void tokio_sapi_set_all_superglobals(
+    const char *server_buf, size_t server_len, size_t server_count,
+    const char *get_buf, size_t get_len, size_t get_count,
+    const char *post_buf, size_t post_len, size_t post_count,
+    const char *cookie_buf, size_t cookie_len, size_t cookie_count)
+{
+    /* 1. Clear all superglobals */
+    clear_superglobal(TRACK_VARS_GET);
+    clear_superglobal(TRACK_VARS_POST);
+    clear_superglobal(TRACK_VARS_SERVER);
+    clear_superglobal(TRACK_VARS_COOKIE);
+    clear_superglobal(TRACK_VARS_FILES);
+
+    /* Clear $_REQUEST */
+    zval *request = zend_hash_str_find(&EG(symbol_table), "_REQUEST", sizeof("_REQUEST")-1);
+    if (request && Z_TYPE_P(request) == IS_ARRAY) {
+        zend_hash_clean(Z_ARRVAL_P(request));
+    }
+
+    /* Reset and reinitialize cache */
+    reset_superglobal_cache();
+    tokio_sapi_init_superglobals();
+
+    /* 2. Set all superglobals using cached arrays */
+    if (server_count > 0) {
+        set_superglobal_batch(TRACK_VARS_SERVER, server_buf, server_len, server_count);
+    }
+    if (get_count > 0) {
+        set_superglobal_batch(TRACK_VARS_GET, get_buf, get_len, get_count);
+    }
+    if (post_count > 0) {
+        set_superglobal_batch(TRACK_VARS_POST, post_buf, post_len, post_count);
+    }
+    if (cookie_count > 0) {
+        set_superglobal_batch(TRACK_VARS_COOKIE, cookie_buf, cookie_len, cookie_count);
+    }
+
+    /* 3. Build $_REQUEST from $_GET + $_POST */
+    tokio_sapi_build_request();
+
+    /* 4. Initialize request state (headers, output buffering) */
+    tokio_sapi_init_request_state();
 }
 
 /* Public API: set $_FILES variable (single file) */
@@ -301,6 +395,9 @@ void tokio_sapi_clear_superglobals(void)
     if (request && Z_TYPE_P(request) == IS_ARRAY) {
         zend_hash_clean(Z_ARRVAL_P(request));
     }
+
+    /* Reset cache for next request */
+    reset_superglobal_cache();
 }
 
 /* Public API: initialize request state (replaces header_remove();http_response_code(200);ob_start()) */
