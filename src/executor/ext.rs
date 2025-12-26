@@ -35,7 +35,7 @@ extern "C" {
     fn zend_eval_string(str: *mut c_char, retval: *mut c_void, name: *mut c_char) -> c_int;
 }
 
-// tokio_sapi extension functions
+// tokio_sapi extension functions (from static library)
 extern "C" {
     fn tokio_sapi_request_init(request_id: u64) -> c_int;
     fn tokio_sapi_request_shutdown();
@@ -217,16 +217,25 @@ fn ext_worker_main_loop(
                 };
 
                 let result = if startup_ok {
-                    // NOTE: tokio_sapi_request_init disabled for now - crashes
-                    // TODO: Fix extension initialization order
-                    let _ = request_id; // suppress unused warning
+                    // Initialize tokio_sapi request context
+                    unsafe {
+                        tokio_sapi_request_init(request_id);
+                    }
+
+                    // Add TOKIO_REQUEST_ID to server_vars (will be included in eval code)
+                    let mut request_with_id = request.clone();
+                    request_with_id.server_vars.push((
+                        "TOKIO_REQUEST_ID".to_string(),
+                        request_id.to_string()
+                    ));
 
                     // Execute script with eval (like PhpExecutor)
-                    match execute_script_with_eval(&request, profiling) {
+                    match execute_script_with_eval(&request_with_id, profiling) {
                         Ok((capture, timing)) => {
-                            // Shutdown PHP request (while stdout still captured)
+                            // Shutdown tokio_sapi and PHP request
                             let shutdown_start = Instant::now();
                             unsafe {
+                                tokio_sapi_request_shutdown();
                                 php_request_shutdown(ptr::null_mut());
                             }
                             let php_shutdown_us = if profiling {
@@ -247,6 +256,7 @@ fn ext_worker_main_loop(
                         }
                         Err(e) => {
                             unsafe {
+                                tokio_sapi_request_shutdown();
                                 php_request_shutdown(ptr::null_mut());
                             }
                             Err(e)

@@ -82,7 +82,7 @@ typedef int (*tokio_async_call_fn)(const char *name, const char *data,
                                     size_t data_len, char **result, size_t *result_len);
 
 /* ============================================================================
- * Global state
+ * Global state (only for callbacks - request context uses __thread TLS)
  * ============================================================================ */
 
 ZEND_BEGIN_MODULE_GLOBALS(tokio_sapi)
@@ -91,9 +91,6 @@ ZEND_BEGIN_MODULE_GLOBALS(tokio_sapi)
     tokio_write_output_fn write_output_callback;
     tokio_send_header_fn send_header_callback;
     tokio_async_call_fn async_call_callback;
-
-    /* Per-request context (pointer for ZTS safety) */
-    tokio_request_context *request_ctx;
 ZEND_END_MODULE_GLOBALS(tokio_sapi)
 
 #ifdef ZTS

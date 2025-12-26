@@ -3,12 +3,61 @@
  *
  * This extension provides direct access to PHP internals,
  * bypassing the need for zend_eval_string() to set superglobals.
+ *
+ * ZTS Note: Uses C11 __thread for request context instead of PHP module globals
+ * to ensure proper thread-local storage in worker threads.
  */
 
 #include "tokio_sapi.h"
+#include <stdlib.h>
 
 /* ============================================================================
- * Module globals
+ * Thread-local request context (NOT using PHP module globals)
+ *
+ * PHP module globals require complex ZTS initialization that doesn't work
+ * well when called from external (Rust) threads. Instead, we use simple
+ * C11 thread-local storage which works correctly in any thread.
+ * ============================================================================ */
+
+static __thread tokio_request_context *tls_request_ctx = NULL;
+static __thread uint64_t tls_request_id = 0;
+
+/* Get or create thread-local request context */
+static tokio_request_context* get_request_context(void)
+{
+    if (tls_request_ctx == NULL) {
+        /* Use regular malloc - we manage lifecycle ourselves */
+        tls_request_ctx = (tokio_request_context*)calloc(1, sizeof(tokio_request_context));
+        if (tls_request_ctx) {
+            tls_request_ctx->http_response_code = 200;
+        }
+    }
+    return tls_request_ctx;
+}
+
+/* Free thread-local request context */
+static void free_request_context(void)
+{
+    tokio_request_context *ctx = tls_request_ctx;
+    if (ctx == NULL) return;
+
+    /* Free POST data (allocated with malloc) */
+    if (ctx->post_data) {
+        free(ctx->post_data);
+    }
+
+    /* Free headers (allocated with malloc) */
+    for (int i = 0; i < ctx->header_count; i++) {
+        if (ctx->headers[i].name) free(ctx->headers[i].name);
+        if (ctx->headers[i].value) free(ctx->headers[i].value);
+    }
+
+    free(ctx);
+    tls_request_ctx = NULL;
+}
+
+/* ============================================================================
+ * Module globals (only for callbacks, not request state)
  * ============================================================================ */
 
 ZEND_DECLARE_MODULE_GLOBALS(tokio_sapi)
@@ -16,42 +65,6 @@ ZEND_DECLARE_MODULE_GLOBALS(tokio_sapi)
 static void php_tokio_sapi_init_globals(zend_tokio_sapi_globals *globals)
 {
     memset(globals, 0, sizeof(zend_tokio_sapi_globals));
-}
-
-/* ============================================================================
- * Request context management
- * ============================================================================ */
-
-static tokio_request_context* get_request_context(void)
-{
-    if (TOKIO_G(request_ctx) == NULL) {
-        TOKIO_G(request_ctx) = ecalloc(1, sizeof(tokio_request_context));
-        TOKIO_G(request_ctx)->http_response_code = 200;
-    }
-    return TOKIO_G(request_ctx);
-}
-
-static void free_request_context(void)
-{
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
-    if (ctx == NULL) return;
-
-    /* Free POST data */
-    if (ctx->post_data) {
-        efree(ctx->post_data);
-    }
-
-    /* Free output buffer */
-    smart_str_free(&ctx->output_buffer);
-
-    /* Free headers */
-    for (int i = 0; i < ctx->header_count; i++) {
-        if (ctx->headers[i].name) efree(ctx->headers[i].name);
-        if (ctx->headers[i].value) efree(ctx->headers[i].value);
-    }
-
-    efree(ctx);
-    TOKIO_G(request_ctx) = NULL;
 }
 
 /* ============================================================================
@@ -200,229 +213,41 @@ void tokio_sapi_build_request(void)
 void tokio_sapi_set_post_data(const char *data, size_t len)
 {
     tokio_request_context *ctx = get_request_context();
+    if (ctx == NULL) return;
 
     if (ctx->post_data) {
-        efree(ctx->post_data);
+        free(ctx->post_data);
     }
 
     if (data && len > 0) {
-        ctx->post_data = emalloc(len + 1);
-        memcpy(ctx->post_data, data, len);
-        ctx->post_data[len] = '\0';
-        ctx->post_data_len = len;
+        ctx->post_data = (char*)malloc(len + 1);
+        if (ctx->post_data) {
+            memcpy(ctx->post_data, data, len);
+            ctx->post_data[len] = '\0';
+            ctx->post_data_len = len;
+        }
     } else {
         ctx->post_data = NULL;
         ctx->post_data_len = 0;
     }
     ctx->post_data_read = 0;
-
-    /* Also set SG(request_info).raw_post_data for compatibility */
-    SG(request_info).request_body = NULL;
-    SG(request_info).content_type_dup = NULL;
-}
-
-/* SAPI read_post callback - reads POST body for php://input */
-static size_t tokio_sapi_read_post(char *buffer, size_t count)
-{
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
-
-    if (ctx == NULL || ctx->post_data == NULL) {
-        return 0;
-    }
-
-    size_t remaining = ctx->post_data_len - ctx->post_data_read;
-    size_t to_read = (count < remaining) ? count : remaining;
-
-    if (to_read > 0) {
-        memcpy(buffer, ctx->post_data + ctx->post_data_read, to_read);
-        ctx->post_data_read += to_read;
-    }
-
-    return to_read;
 }
 
 /* ============================================================================
- * Output capture via PHP output handler
+ * Header capture (using thread-local context)
  * ============================================================================ */
-
-/* Output handler callback */
-static int tokio_output_handler(void **handler_context, php_output_context *output_context)
-{
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
-
-    if (ctx == NULL) {
-        return FAILURE;
-    }
-
-    if (output_context->in.used > 0) {
-        /* Append to our buffer */
-        smart_str_appendl(&ctx->output_buffer, output_context->in.data, output_context->in.used);
-
-        /* Also call Rust callback if set */
-        if (TOKIO_G(write_output_callback)) {
-            TOKIO_G(write_output_callback)(output_context->in.data, output_context->in.used);
-        }
-    }
-
-    /* Pass through to next handler */
-    output_context->out.data = output_context->in.data;
-    output_context->out.used = output_context->in.used;
-    output_context->out.free = 0;
-
-    return SUCCESS;
-}
-
-void tokio_sapi_start_output_capture(void)
-{
-    tokio_request_context *ctx = get_request_context();
-
-    if (!ctx->output_handler_started) {
-        php_output_handler *handler = php_output_handler_create_internal(
-            ZEND_STRL("tokio_sapi"),
-            tokio_output_handler,
-            0,
-            PHP_OUTPUT_HANDLER_STDFLAGS
-        );
-
-        if (handler) {
-            php_output_handler_start(handler);
-            ctx->output_handler_started = 1;
-        }
-    }
-}
-
-const char* tokio_sapi_get_output(size_t *len)
-{
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
-
-    if (ctx == NULL || ctx->output_buffer.s == NULL) {
-        *len = 0;
-        return "";
-    }
-
-    *len = ZSTR_LEN(ctx->output_buffer.s);
-    return ZSTR_VAL(ctx->output_buffer.s);
-}
-
-void tokio_sapi_clear_output(void)
-{
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
-
-    if (ctx) {
-        smart_str_free(&ctx->output_buffer);
-        memset(&ctx->output_buffer, 0, sizeof(smart_str));
-    }
-}
-
-/* ============================================================================
- * Header capture
- * ============================================================================ */
-
-/* SAPI header handler - intercepts header() calls */
-static int tokio_sapi_header_handler(sapi_header_struct *sapi_header,
-                                      sapi_header_op_enum op,
-                                      sapi_headers_struct *sapi_headers)
-{
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
-
-    if (ctx == NULL) {
-        return SAPI_HEADER_ADD;
-    }
-
-    /* Always capture response code */
-    if (sapi_headers) {
-        ctx->http_response_code = sapi_headers->http_response_code;
-    }
-
-    if (sapi_header == NULL || sapi_header->header == NULL) {
-        return SAPI_HEADER_ADD;
-    }
-
-    switch (op) {
-        case SAPI_HEADER_REPLACE:
-        case SAPI_HEADER_ADD: {
-            /* Parse "Name: Value" */
-            char *colon = strchr(sapi_header->header, ':');
-            if (colon && ctx->header_count < TOKIO_MAX_HEADERS) {
-                size_t name_len = colon - sapi_header->header;
-                char *value = colon + 1;
-                while (*value == ' ') value++;
-
-                int idx = ctx->header_count;
-
-                /* For REPLACE, check if header exists */
-                if (op == SAPI_HEADER_REPLACE) {
-                    for (int i = 0; i < ctx->header_count; i++) {
-                        if (ctx->headers[i].name &&
-                            strncasecmp(ctx->headers[i].name, sapi_header->header, name_len) == 0) {
-                            /* Replace existing */
-                            efree(ctx->headers[i].value);
-                            ctx->headers[i].value = estrdup(value);
-                            return SAPI_HEADER_ADD;
-                        }
-                    }
-                }
-
-                /* Add new header */
-                ctx->headers[idx].name = estrndup(sapi_header->header, name_len);
-                ctx->headers[idx].value = estrdup(value);
-                ctx->header_count++;
-
-                /* Call Rust callback */
-                if (TOKIO_G(send_header_callback)) {
-                    TOKIO_G(send_header_callback)(
-                        ctx->headers[idx].name, name_len,
-                        ctx->headers[idx].value, strlen(ctx->headers[idx].value)
-                    );
-                }
-            }
-            break;
-        }
-
-        case SAPI_HEADER_DELETE: {
-            /* Find and remove header */
-            for (int i = 0; i < ctx->header_count; i++) {
-                if (ctx->headers[i].name &&
-                    strcasecmp(ctx->headers[i].name, sapi_header->header) == 0) {
-                    efree(ctx->headers[i].name);
-                    efree(ctx->headers[i].value);
-                    /* Shift remaining headers */
-                    memmove(&ctx->headers[i], &ctx->headers[i+1],
-                            (ctx->header_count - i - 1) * sizeof(ctx->headers[0]));
-                    ctx->header_count--;
-                    break;
-                }
-            }
-            break;
-        }
-
-        case SAPI_HEADER_DELETE_ALL:
-            for (int i = 0; i < ctx->header_count; i++) {
-                if (ctx->headers[i].name) efree(ctx->headers[i].name);
-                if (ctx->headers[i].value) efree(ctx->headers[i].value);
-            }
-            ctx->header_count = 0;
-            break;
-
-        case SAPI_HEADER_SET_STATUS:
-            /* Status code already captured above */
-            break;
-    }
-
-    return SAPI_HEADER_ADD;
-}
 
 /* Public API: get header count */
 int tokio_sapi_get_header_count(void)
 {
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
+    tokio_request_context *ctx = tls_request_ctx;
     return ctx ? ctx->header_count : 0;
 }
 
 /* Public API: get header name by index */
 const char* tokio_sapi_get_header_name(int index)
 {
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
+    tokio_request_context *ctx = tls_request_ctx;
     if (ctx && index >= 0 && index < ctx->header_count) {
         return ctx->headers[index].name;
     }
@@ -432,7 +257,7 @@ const char* tokio_sapi_get_header_name(int index)
 /* Public API: get header value by index */
 const char* tokio_sapi_get_header_value(int index)
 {
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
+    tokio_request_context *ctx = tls_request_ctx;
     if (ctx && index >= 0 && index < ctx->header_count) {
         return ctx->headers[index].value;
     }
@@ -442,8 +267,56 @@ const char* tokio_sapi_get_header_value(int index)
 /* Public API: get response code */
 int tokio_sapi_get_response_code(void)
 {
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
+    tokio_request_context *ctx = tls_request_ctx;
     return ctx ? ctx->http_response_code : 200;
+}
+
+/* Public API: add a header (called from Rust or internal) */
+void tokio_sapi_add_header(const char *name, size_t name_len,
+                           const char *value, size_t value_len, int replace)
+{
+    tokio_request_context *ctx = get_request_context();
+    if (ctx == NULL || ctx->header_count >= TOKIO_MAX_HEADERS) return;
+
+    /* For replace mode, check if header exists */
+    if (replace) {
+        for (int i = 0; i < ctx->header_count; i++) {
+            if (ctx->headers[i].name &&
+                strncasecmp(ctx->headers[i].name, name, name_len) == 0 &&
+                strlen(ctx->headers[i].name) == name_len) {
+                /* Replace existing */
+                free(ctx->headers[i].value);
+                ctx->headers[i].value = (char*)malloc(value_len + 1);
+                if (ctx->headers[i].value) {
+                    memcpy(ctx->headers[i].value, value, value_len);
+                    ctx->headers[i].value[value_len] = '\0';
+                }
+                return;
+            }
+        }
+    }
+
+    /* Add new header */
+    int idx = ctx->header_count;
+    ctx->headers[idx].name = (char*)malloc(name_len + 1);
+    ctx->headers[idx].value = (char*)malloc(value_len + 1);
+
+    if (ctx->headers[idx].name && ctx->headers[idx].value) {
+        memcpy(ctx->headers[idx].name, name, name_len);
+        ctx->headers[idx].name[name_len] = '\0';
+        memcpy(ctx->headers[idx].value, value, value_len);
+        ctx->headers[idx].value[value_len] = '\0';
+        ctx->header_count++;
+    }
+}
+
+/* Public API: set response code */
+void tokio_sapi_set_response_code(int code)
+{
+    tokio_request_context *ctx = get_request_context();
+    if (ctx) {
+        ctx->http_response_code = code;
+    }
 }
 
 /* ============================================================================
@@ -466,26 +339,29 @@ int tokio_sapi_execute_script(const char *path)
 }
 
 /* ============================================================================
- * Request lifecycle
+ * Request lifecycle (using thread-local storage)
  * ============================================================================ */
 
 int tokio_sapi_request_init(uint64_t request_id)
 {
+    /* Free any existing context from previous request */
+    free_request_context();
+
+    /* Create fresh context */
     tokio_request_context *ctx = get_request_context();
+    if (ctx == NULL) {
+        return FAILURE;
+    }
+
     ctx->request_id = request_id;
     ctx->http_response_code = 200;
-
-    /* Clear captured headers */
-    for (int i = 0; i < ctx->header_count; i++) {
-        if (ctx->headers[i].name) efree(ctx->headers[i].name);
-        if (ctx->headers[i].value) efree(ctx->headers[i].value);
-    }
     ctx->header_count = 0;
+    ctx->post_data = NULL;
+    ctx->post_data_len = 0;
+    ctx->post_data_read = 0;
 
-    /* Clear output buffer */
-    smart_str_free(&ctx->output_buffer);
-    memset(&ctx->output_buffer, 0, sizeof(smart_str));
-    ctx->output_handler_started = 0;
+    /* Store in thread-local for PHP functions */
+    tls_request_id = request_id;
 
     return SUCCESS;
 }
@@ -493,52 +369,55 @@ int tokio_sapi_request_init(uint64_t request_id)
 void tokio_sapi_request_shutdown(void)
 {
     free_request_context();
-}
-
-/* ============================================================================
- * Callback registration
- * ============================================================================ */
-
-void tokio_sapi_set_callbacks(
-    tokio_read_post_fn read_post,
-    tokio_write_output_fn write_output,
-    tokio_send_header_fn send_header,
-    tokio_async_call_fn async_call)
-{
-    TOKIO_G(read_post_callback) = read_post;
-    TOKIO_G(write_output_callback) = write_output;
-    TOKIO_G(send_header_callback) = send_header;
-    TOKIO_G(async_call_callback) = async_call;
+    tls_request_id = 0;
 }
 
 /* ============================================================================
  * PHP Functions (available from PHP scripts)
  * ============================================================================ */
 
-/* tokio_request_id(): int - get current request ID */
+/* tokio_request_id(): int - get current request ID
+ * Reads from $_SERVER['TOKIO_REQUEST_ID'] which is set by Rust in server_vars.
+ * This allows sharing between Rust and PHP.
+ */
 PHP_FUNCTION(tokio_request_id)
 {
-    tokio_request_context *ctx = TOKIO_G(request_ctx);
-    if (ctx) {
-        RETURN_LONG(ctx->request_id);
+    zval *server_arr, *request_id_val;
+
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    /* Get $_SERVER from the symbol table (not PG(http_globals)) */
+    server_arr = zend_hash_str_find(&EG(symbol_table), "_SERVER", sizeof("_SERVER")-1);
+    if (server_arr && Z_TYPE_P(server_arr) == IS_ARRAY) {
+        /* Get TOKIO_REQUEST_ID from $_SERVER */
+        request_id_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_REQUEST_ID", sizeof("TOKIO_REQUEST_ID")-1);
+        if (request_id_val && Z_TYPE_P(request_id_val) == IS_STRING) {
+            RETURN_LONG(atoll(Z_STRVAL_P(request_id_val)));
+        }
     }
-    RETURN_LONG(0);
+
+    /* Fallback to TLS (same compilation unit) */
+    RETURN_LONG((zend_long)tls_request_id);
 }
 
-/* tokio_worker_id(): int - get worker thread ID */
+/* tokio_worker_id(): int - get worker thread ID (placeholder) */
 PHP_FUNCTION(tokio_worker_id)
 {
-    /* TODO: Pass from Rust */
+    ZEND_PARSE_PARAMETERS_NONE();
+    /* TODO: Pass actual worker ID from Rust */
     RETURN_LONG(0);
 }
 
 /* tokio_server_info(): array - get server information */
 PHP_FUNCTION(tokio_server_info)
 {
+    ZEND_PARSE_PARAMETERS_NONE();
+
     array_init(return_value);
     add_assoc_string(return_value, "server", "tokio_php");
     add_assoc_string(return_value, "version", TOKIO_SAPI_VERSION);
     add_assoc_string(return_value, "sapi", "tokio_sapi");
+    add_assoc_bool(return_value, "zts", 1);
 }
 
 /* tokio_async_call(string $name, string $data): string|false - call Rust async */
@@ -560,7 +439,7 @@ PHP_FUNCTION(tokio_async_call)
 
         if (ret == 0 && result) {
             RETVAL_STRINGL(result, result_len);
-            efree(result);
+            free(result);
             return;
         }
     }
@@ -569,14 +448,32 @@ PHP_FUNCTION(tokio_async_call)
 }
 
 /* ============================================================================
+ * Arginfo for PHP 8+ (fixes "Missing arginfo" warnings)
+ * ============================================================================ */
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_request_id, 0, 0, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_worker_id, 0, 0, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_server_info, 0, 0, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_tokio_async_call, 0, 2, MAY_BE_STRING|MAY_BE_FALSE)
+    ZEND_ARG_TYPE_INFO(0, name, IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO(0, data, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+/* ============================================================================
  * PHP Extension registration
  * ============================================================================ */
 
 static const zend_function_entry tokio_sapi_functions[] = {
-    PHP_FE(tokio_request_id, NULL)
-    PHP_FE(tokio_worker_id, NULL)
-    PHP_FE(tokio_server_info, NULL)
-    PHP_FE(tokio_async_call, NULL)
+    PHP_FE(tokio_request_id, arginfo_tokio_request_id)
+    PHP_FE(tokio_worker_id, arginfo_tokio_worker_id)
+    PHP_FE(tokio_server_info, arginfo_tokio_server_info)
+    PHP_FE(tokio_async_call, arginfo_tokio_async_call)
     PHP_FE_END
 };
 
@@ -598,15 +495,16 @@ PHP_MSHUTDOWN_FUNCTION(tokio_sapi)
     return SUCCESS;
 }
 
-/* Request init */
+/* Request init - called by PHP for each request */
 PHP_RINIT_FUNCTION(tokio_sapi)
 {
     return SUCCESS;
 }
 
-/* Request shutdown */
+/* Request shutdown - called by PHP for each request */
 PHP_RSHUTDOWN_FUNCTION(tokio_sapi)
 {
+    /* Don't free context here - Rust manages lifecycle via tokio_sapi_request_shutdown() */
     return SUCCESS;
 }
 
@@ -616,6 +514,7 @@ PHP_MINFO_FUNCTION(tokio_sapi)
     php_info_print_table_start();
     php_info_print_table_header(2, "tokio_sapi support", "enabled");
     php_info_print_table_row(2, "Version", TOKIO_SAPI_VERSION);
+    php_info_print_table_row(2, "Thread Safety", "ZTS with __thread TLS");
     php_info_print_table_end();
 }
 
@@ -643,11 +542,11 @@ ZEND_GET_MODULE(tokio_sapi)
 
 int tokio_sapi_init(void)
 {
-    /* Module is auto-initialized via zend_startup_module */
     return SUCCESS;
 }
 
 void tokio_sapi_shutdown(void)
 {
-    /* Cleanup handled by module shutdown */
+    /* Cleanup thread-local context if any */
+    free_request_context();
 }

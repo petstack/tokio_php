@@ -68,7 +68,7 @@ RUN apk add --no-cache libgcc
 COPY --from=builder /usr/local/lib/php/extensions/no-debug-zts-20240924/tokio_sapi.so \
      /usr/local/lib/php/extensions/no-debug-zts-20240924/
 
-# Configure tokio_sapi extension
+# Configure tokio_sapi extension (dynamic .so for PHP functions)
 RUN echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
 
 # Configure OPcache + JIT - works by overriding SAPI name to "cli-server" before init

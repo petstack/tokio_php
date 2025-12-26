@@ -16,6 +16,7 @@ $result = [
     'constants' => [
         'TOKIO_SAPI_VERSION' => defined('TOKIO_SAPI_VERSION') ? TOKIO_SAPI_VERSION : null,
     ],
+    'server_tokio_vars' => array_filter($_SERVER, fn($k) => strpos($k, 'TOKIO') !== false, ARRAY_FILTER_USE_KEY),
 ];
 
 if (function_exists('tokio_server_info')) {
@@ -24,6 +25,10 @@ if (function_exists('tokio_server_info')) {
 
 if (function_exists('tokio_request_id')) {
     $result['request_id'] = tokio_request_id();
+}
+
+if (function_exists('tokio_worker_id')) {
+    $result['worker_id'] = tokio_worker_id();
 }
 
 echo json_encode($result, JSON_PRETTY_PRINT);

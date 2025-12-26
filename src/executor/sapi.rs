@@ -214,6 +214,7 @@ pub fn init() -> Result<(), String> {
         if php_embed_init(1, argv.as_mut_ptr()) != 0 {
             return Err("Failed to initialize PHP embed".to_string());
         }
+        // tokio_sapi extension loaded dynamically via php.ini
     }
 
     tracing::info!("PHP initialized with SAPI 'cli-server' (OPcache compatible, custom header handler)");
