@@ -10,6 +10,8 @@ RUN apk add --no-cache \
     llvm \
     make \
     g++ \
+    autoconf \
+    automake \
     # Libraries required by PHP
     readline-dev \
     ncurses-dev \
@@ -30,6 +32,17 @@ RUN apk add --no-cache \
 # Create working directory
 WORKDIR /app
 
+# Build tokio_sapi PHP extension
+COPY ext ./ext
+WORKDIR /app/ext
+RUN phpize && \
+    ./configure --enable-tokio_sapi && \
+    make && \
+    make install
+
+# Back to app directory
+WORKDIR /app
+
 # Copy source files
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
@@ -43,6 +56,13 @@ FROM php:8.4-zts-alpine
 
 # Install runtime dependencies
 RUN apk add --no-cache libgcc
+
+# Copy tokio_sapi extension from builder to correct PHP extensions directory
+COPY --from=builder /usr/local/lib/php/extensions/no-debug-zts-20240924/tokio_sapi.so \
+     /usr/local/lib/php/extensions/no-debug-zts-20240924/
+
+# Configure tokio_sapi extension
+RUN echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
 
 # Configure OPcache + JIT - works by overriding SAPI name to "cli-server" before init
 RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \

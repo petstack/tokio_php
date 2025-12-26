@@ -9,6 +9,9 @@ mod php;
 #[cfg(feature = "php")]
 pub mod sapi;
 
+#[cfg(feature = "php")]
+pub mod ext_ffi;
+
 use async_trait::async_trait;
 
 pub use stub::StubExecutor;
