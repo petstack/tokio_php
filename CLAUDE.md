@@ -216,20 +216,43 @@ INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 | Endpoint | Description |
 |----------|-------------|
 | `/health` | Health check with timestamp and active connections (JSON) |
-| `/metrics` | Prometheus-compatible metrics (stub) |
+| `/metrics` | Prometheus-compatible metrics |
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_uptime_seconds` | gauge | Server uptime in seconds |
+| `tokio_php_requests_per_second` | gauge | Lifetime average RPS |
+| `tokio_php_response_time_avg_seconds` | gauge | Average response time |
+| `tokio_php_active_connections` | gauge | Current active connections |
+| `tokio_php_pending_requests` | gauge | Requests waiting in queue |
+| `tokio_php_dropped_requests` | counter | Requests dropped (queue full) |
+| `tokio_php_requests_total{method}` | counter | Requests by HTTP method |
+| `tokio_php_responses_total{status}` | counter | Responses by status class |
+| `node_load1` | gauge | 1-minute load average |
+| `node_load5` | gauge | 5-minute load average |
+| `node_load15` | gauge | 15-minute load average |
+| `node_memory_MemTotal_bytes` | gauge | Total memory in bytes |
+| `node_memory_MemAvailable_bytes` | gauge | Available memory in bytes |
+| `node_memory_MemUsed_bytes` | gauge | Used memory in bytes |
+| `tokio_php_memory_usage_percent` | gauge | Memory usage percentage |
 
 ### Example responses
 
 ```bash
 # Health check
 curl http://localhost:9090/health
-{"status":"ok","timestamp":1703361234,"active_connections":5}
+{"status":"ok","timestamp":1703361234,"active_connections":5,"total_requests":1000}
 
 # Metrics
 curl http://localhost:9090/metrics
-# HELP tokio_php_active_connections Current number of active connections
-# TYPE tokio_php_active_connections gauge
-tokio_php_active_connections 5
+# HELP tokio_php_uptime_seconds Server uptime in seconds
+tokio_php_uptime_seconds 3600.000
+# HELP node_load1 1-minute load average
+node_load1 1.50
+# HELP tokio_php_memory_usage_percent Memory usage percentage
+tokio_php_memory_usage_percent 45.32
 ```
 
 ## Limitations

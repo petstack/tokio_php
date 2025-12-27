@@ -1,6 +1,7 @@
 //! Internal HTTP server for health and metrics endpoints.
 
 use std::convert::Infallible;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -14,6 +15,76 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+
+// =============================================================================
+// System Metrics (CPU, Memory)
+// =============================================================================
+
+/// System metrics snapshot
+#[derive(Default)]
+pub struct SystemMetrics {
+    /// Load average (1 minute)
+    pub load_avg_1m: f64,
+    /// Load average (5 minutes)
+    pub load_avg_5m: f64,
+    /// Load average (15 minutes)
+    pub load_avg_15m: f64,
+    /// Total memory in bytes
+    pub memory_total_bytes: u64,
+    /// Available memory in bytes
+    pub memory_available_bytes: u64,
+    /// Used memory in bytes (total - available)
+    pub memory_used_bytes: u64,
+    /// Memory usage percentage
+    pub memory_usage_percent: f64,
+}
+
+impl SystemMetrics {
+    /// Read current system metrics from /proc (Linux) or return defaults
+    pub fn read() -> Self {
+        let mut metrics = Self::default();
+
+        // Read load average from /proc/loadavg
+        if let Ok(content) = fs::read_to_string("/proc/loadavg") {
+            let parts: Vec<&str> = content.split_whitespace().collect();
+            if parts.len() >= 3 {
+                metrics.load_avg_1m = parts[0].parse().unwrap_or(0.0);
+                metrics.load_avg_5m = parts[1].parse().unwrap_or(0.0);
+                metrics.load_avg_15m = parts[2].parse().unwrap_or(0.0);
+            }
+        }
+
+        // Read memory info from /proc/meminfo
+        if let Ok(content) = fs::read_to_string("/proc/meminfo") {
+            for line in content.lines() {
+                if line.starts_with("MemTotal:") {
+                    metrics.memory_total_bytes = parse_meminfo_kb(line) * 1024;
+                } else if line.starts_with("MemAvailable:") {
+                    metrics.memory_available_bytes = parse_meminfo_kb(line) * 1024;
+                }
+            }
+            if metrics.memory_total_bytes > 0 {
+                metrics.memory_used_bytes = metrics.memory_total_bytes.saturating_sub(metrics.memory_available_bytes);
+                metrics.memory_usage_percent =
+                    (metrics.memory_used_bytes as f64 / metrics.memory_total_bytes as f64) * 100.0;
+            }
+        }
+
+        metrics
+    }
+}
+
+/// Parse a line like "MemTotal:       16384000 kB" and return the value in KB
+fn parse_meminfo_kb(line: &str) -> u64 {
+    line.split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
+// =============================================================================
+// Request Metrics
+// =============================================================================
 
 /// Request counters by HTTP method and status code.
 pub struct RequestMetrics {
@@ -225,6 +296,7 @@ async fn handle_internal_request(
                 .unwrap()
         }
         "/metrics" => {
+            let sys = SystemMetrics::read();
             let body = format!(
                 "# HELP tokio_php_uptime_seconds Server uptime in seconds\n\
                  # TYPE tokio_php_uptime_seconds gauge\n\
@@ -266,7 +338,35 @@ async fn handle_internal_request(
                  tokio_php_responses_total{{status=\"2xx\"}} {}\n\
                  tokio_php_responses_total{{status=\"3xx\"}} {}\n\
                  tokio_php_responses_total{{status=\"4xx\"}} {}\n\
-                 tokio_php_responses_total{{status=\"5xx\"}} {}\n",
+                 tokio_php_responses_total{{status=\"5xx\"}} {}\n\
+                 \n\
+                 # HELP node_load1 1-minute load average\n\
+                 # TYPE node_load1 gauge\n\
+                 node_load1 {:.2}\n\
+                 \n\
+                 # HELP node_load5 5-minute load average\n\
+                 # TYPE node_load5 gauge\n\
+                 node_load5 {:.2}\n\
+                 \n\
+                 # HELP node_load15 15-minute load average\n\
+                 # TYPE node_load15 gauge\n\
+                 node_load15 {:.2}\n\
+                 \n\
+                 # HELP node_memory_MemTotal_bytes Total memory in bytes\n\
+                 # TYPE node_memory_MemTotal_bytes gauge\n\
+                 node_memory_MemTotal_bytes {}\n\
+                 \n\
+                 # HELP node_memory_MemAvailable_bytes Available memory in bytes\n\
+                 # TYPE node_memory_MemAvailable_bytes gauge\n\
+                 node_memory_MemAvailable_bytes {}\n\
+                 \n\
+                 # HELP node_memory_MemUsed_bytes Used memory in bytes\n\
+                 # TYPE node_memory_MemUsed_bytes gauge\n\
+                 node_memory_MemUsed_bytes {}\n\
+                 \n\
+                 # HELP tokio_php_memory_usage_percent Memory usage percentage\n\
+                 # TYPE tokio_php_memory_usage_percent gauge\n\
+                 tokio_php_memory_usage_percent {:.2}\n",
                 metrics.uptime_secs(),
                 metrics.rps(),
                 metrics.avg_response_time_us() / 1_000_000.0, // convert us to seconds
@@ -285,6 +385,13 @@ async fn handle_internal_request(
                 metrics.status_3xx.load(Ordering::Relaxed),
                 metrics.status_4xx.load(Ordering::Relaxed),
                 metrics.status_5xx.load(Ordering::Relaxed),
+                sys.load_avg_1m,
+                sys.load_avg_5m,
+                sys.load_avg_15m,
+                sys.memory_total_bytes,
+                sys.memory_available_bytes,
+                sys.memory_used_bytes,
+                sys.memory_usage_percent,
             );
             Response::builder()
                 .status(StatusCode::OK)
