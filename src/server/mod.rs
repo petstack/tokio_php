@@ -23,7 +23,7 @@ use tracing::{debug, error, info, warn};
 
 pub use config::ServerConfig;
 use connection::ConnectionContext;
-use internal::run_internal_server;
+use internal::{run_internal_server, RequestMetrics};
 
 use crate::executor::ScriptExecutor;
 
@@ -36,6 +36,8 @@ pub struct Server<E: ScriptExecutor> {
     index_file_path: Option<Arc<str>>,
     /// Active connections counter
     active_connections: Arc<AtomicUsize>,
+    /// Request metrics by HTTP method
+    request_metrics: Arc<RequestMetrics>,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
@@ -78,6 +80,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             tls_acceptor,
             index_file_path,
             active_connections: Arc::new(AtomicUsize::new(0)),
+            request_metrics: Arc::new(RequestMetrics::new()),
         })
     }
 
@@ -169,8 +172,11 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         // Spawn internal server if configured
         if let Some(internal_addr) = self.config.internal_addr {
             let active_connections = Arc::clone(&self.active_connections);
+            let request_metrics = Arc::clone(&self.request_metrics);
             let handle = tokio::spawn(async move {
-                if let Err(e) = run_internal_server(internal_addr, active_connections).await {
+                if let Err(e) =
+                    run_internal_server(internal_addr, active_connections, request_metrics).await
+                {
                     error!("Internal server error: {}", e);
                 }
             });
@@ -198,6 +204,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 index_file_path: self.index_file_path.clone(),
                 index_file_name: index_file_name.clone(),
                 active_connections: Arc::clone(&self.active_connections),
+                request_metrics: Arc::clone(&self.request_metrics),
             });
 
             let handle = tokio::spawn(async move {

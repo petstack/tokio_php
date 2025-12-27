@@ -45,17 +45,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         num_workers
     };
 
+    // Queue capacity (0 = default: workers * 100)
+    let queue_capacity = std::env::var("QUEUE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+
     // Use single-threaded Tokio runtime - PHP workers handle blocking work
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
-    runtime.block_on(async_main(num_workers, worker_threads))
+    runtime.block_on(async_main(num_workers, worker_threads, queue_capacity))
 }
 
 async fn async_main(
     num_workers: usize,
     worker_threads: usize,
+    queue_capacity: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Configure server address
     let addr: SocketAddr = std::env::var("LISTEN_ADDR")
@@ -128,10 +135,11 @@ async fn async_main(
                 worker_threads
             );
 
-            let executor = ExtExecutor::new(worker_threads).map_err(|e| {
-                eprintln!("Failed to initialize ExtExecutor: {}", e);
-                e
-            })?;
+            let executor = ExtExecutor::with_queue_capacity(worker_threads, queue_capacity)
+                .map_err(|e| {
+                    eprintln!("Failed to initialize ExtExecutor: {}", e);
+                    e
+                })?;
 
             info!("ExtExecutor ready ({} workers, FFI mode)", executor.worker_count());
 
@@ -154,10 +162,11 @@ async fn async_main(
                 worker_threads
             );
 
-            let executor = PhpExecutor::new(worker_threads).map_err(|e| {
-                eprintln!("Failed to initialize PHP: {}", e);
-                e
-            })?;
+            let executor = PhpExecutor::with_queue_capacity(worker_threads, queue_capacity)
+                .map_err(|e| {
+                    eprintln!("Failed to initialize PHP: {}", e);
+                    e
+                })?;
 
             info!("PHP executor ready ({} workers)", executor.worker_count());
 

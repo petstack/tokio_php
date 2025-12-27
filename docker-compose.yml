@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - "8081:8080"
       - "9091:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
@@ -17,14 +17,16 @@ services:
       - USE_EXT=${USE_EXT:-1}
       # PROFILE: set to 1 or true to enable profiling (requires X-Profile: 1 header)
       - PROFILE=${PROFILE:-0}
+      # QUEUE_CAPACITY: max pending requests in queue (0 = workers * 100)
+      - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
       # INDEX_FILE: single entry point mode (e.g., index.php)
       - INDEX_FILE=${INDEX_FILE:-}
       # DOCUMENT_ROOT: web root directory (default: /var/www/html)
-      - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
+      - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html/public}
       # INTERNAL_ADDR: internal server for /health and /metrics
       - INTERNAL_ADDR=0.0.0.0:9090
-    volumes:
-      - ./www:/var/www/html:ro
+#    volumes:
+#      - ./www:/var/www/html:ro
     restart: unless-stopped
 
   # HTTPS/TLS variant
@@ -34,6 +36,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8443:8443"
+      - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8443
       - RUST_LOG=tokio_php=info

@@ -25,12 +25,28 @@ pub use php::PhpExecutor;
 #[cfg(feature = "php")]
 pub use ext::ExtExecutor;
 
+#[cfg(feature = "php")]
+pub use common::QUEUE_FULL_ERROR;
+
 use crate::types::{ScriptRequest, ScriptResponse};
 
 /// Error type for script execution.
 #[derive(Debug, Clone)]
 pub struct ExecutorError {
     pub message: String,
+}
+
+impl ExecutorError {
+    /// Returns true if this error indicates the worker queue is full.
+    #[cfg(feature = "php")]
+    pub fn is_queue_full(&self) -> bool {
+        self.message == QUEUE_FULL_ERROR
+    }
+
+    #[cfg(not(feature = "php"))]
+    pub fn is_queue_full(&self) -> bool {
+        false
+    }
 }
 
 impl std::fmt::Display for ExecutorError {

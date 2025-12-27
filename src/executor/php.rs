@@ -20,18 +20,32 @@ struct PhpPool {
 
 impl PhpPool {
     fn new(num_workers: usize) -> Result<Self, String> {
+        Self::with_queue_capacity(num_workers, 0)
+    }
+
+    fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, String> {
         // Initialize custom SAPI
         sapi::init()?;
 
-        let pool = WorkerPool::new(num_workers, "php", |id, rx| {
-            common::worker_main_loop(id, rx);
-        })?;
+        let pool = if queue_capacity > 0 {
+            WorkerPool::with_queue_capacity(num_workers, "php", queue_capacity, |id, rx| {
+                common::worker_main_loop(id, rx);
+            })?
+        } else {
+            WorkerPool::new(num_workers, "php", |id, rx| {
+                common::worker_main_loop(id, rx);
+            })?
+        };
 
         for id in 0..num_workers {
             tracing::debug!("Spawned PHP worker thread {}", id);
         }
 
-        tracing::info!("PHP pool initialized with {} workers", num_workers);
+        tracing::info!(
+            "PHP pool initialized with {} workers, queue capacity {}",
+            num_workers,
+            pool.queue_capacity()
+        );
 
         Ok(Self { pool })
     }
@@ -63,8 +77,15 @@ pub struct PhpExecutor {
 
 impl PhpExecutor {
     /// Creates a new PHP executor with the specified number of worker threads.
+    /// Uses default queue capacity (workers * 100).
     pub fn new(num_workers: usize) -> Result<Self, ExecutorError> {
-        let pool = PhpPool::new(num_workers)?;
+        Self::with_queue_capacity(num_workers, 0)
+    }
+
+    /// Creates a new PHP executor with custom queue capacity.
+    /// If queue_capacity is 0, uses default (workers * 100).
+    pub fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, ExecutorError> {
+        let pool = PhpPool::with_queue_capacity(num_workers, queue_capacity)?;
         Ok(Self { pool })
     }
 

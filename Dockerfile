@@ -92,7 +92,7 @@ COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
 RUN mkdir -p /var/www/html
 
 # Copy PHP files
-COPY www /var/www/html
+COPY www/symfony /var/www/html
 
 EXPOSE 8080
 

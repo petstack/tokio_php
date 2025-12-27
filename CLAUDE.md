@@ -104,6 +104,7 @@ Located in `ext/` directory. Provides:
 | `USE_STUB` | `0` | Disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
+| `QUEUE_CAPACITY` | `0` (auto) | Max pending requests in queue (0 = workers × 100) |
 | `TLS_CERT` | - | Path to TLS certificate (PEM) |
 | `TLS_KEY` | - | Path to TLS private key (PEM) |
 | `INDEX_FILE` | - | Single entry point mode (e.g., `index.php`) |

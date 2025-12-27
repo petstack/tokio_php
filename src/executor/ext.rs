@@ -524,18 +524,32 @@ struct ExtPool {
 
 impl ExtPool {
     fn new(num_workers: usize) -> Result<Self, String> {
+        Self::with_queue_capacity(num_workers, 0)
+    }
+
+    fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, String> {
         // Initialize SAPI (same as PhpExecutor)
         sapi::init()?;
 
-        let pool = WorkerPool::new(num_workers, "ext", |id, rx| {
-            ext_worker_main_loop(id, rx);
-        })?;
+        let pool = if queue_capacity > 0 {
+            WorkerPool::with_queue_capacity(num_workers, "ext", queue_capacity, |id, rx| {
+                ext_worker_main_loop(id, rx);
+            })?
+        } else {
+            WorkerPool::new(num_workers, "ext", |id, rx| {
+                ext_worker_main_loop(id, rx);
+            })?
+        };
 
         for id in 0..num_workers {
             tracing::debug!("Spawned ExtWorker thread {}", id);
         }
 
-        tracing::info!("ExtPool initialized with {} workers (FFI superglobals)", num_workers);
+        tracing::info!(
+            "ExtPool initialized with {} workers, queue capacity {} (FFI superglobals)",
+            num_workers,
+            pool.queue_capacity()
+        );
 
         Ok(Self { pool })
     }
@@ -570,8 +584,15 @@ pub struct ExtExecutor {
 
 impl ExtExecutor {
     /// Creates a new ExtExecutor with the specified number of worker threads.
+    /// Uses default queue capacity (workers * 100).
     pub fn new(num_workers: usize) -> Result<Self, ExecutorError> {
-        let pool = ExtPool::new(num_workers)?;
+        Self::with_queue_capacity(num_workers, 0)
+    }
+
+    /// Creates a new ExtExecutor with custom queue capacity.
+    /// If queue_capacity is 0, uses default (workers * 100).
+    pub fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, ExecutorError> {
+        let pool = ExtPool::with_queue_capacity(num_workers, queue_capacity)?;
         Ok(Self { pool })
     }
 

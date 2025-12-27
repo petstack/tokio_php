@@ -69,21 +69,42 @@ pub struct WorkerThread {
     pub handle: JoinHandle<()>,
 }
 
+/// Default queue capacity multiplier per worker
+const DEFAULT_QUEUE_MULTIPLIER: usize = 100;
+
+/// Error returned when queue is full
+pub const QUEUE_FULL_ERROR: &str = "Queue full";
+
 /// Generic worker pool for PHP execution
 pub struct WorkerPool {
-    request_tx: mpsc::Sender<WorkerRequest>,
+    request_tx: mpsc::SyncSender<WorkerRequest>,
     workers: Vec<WorkerThread>,
     worker_count: AtomicUsize,
+    queue_capacity: usize,
 }
 
 impl WorkerPool {
     /// Creates a new worker pool with the given number of workers.
     /// The `worker_fn` is called for each worker thread.
+    /// Queue capacity defaults to workers * 100.
     pub fn new<F>(num_workers: usize, name_prefix: &str, worker_fn: F) -> Result<Self, String>
     where
         F: Fn(usize, Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
     {
-        let (request_tx, request_rx) = mpsc::channel::<WorkerRequest>();
+        Self::with_queue_capacity(num_workers, name_prefix, num_workers * DEFAULT_QUEUE_MULTIPLIER, worker_fn)
+    }
+
+    /// Creates a new worker pool with custom queue capacity.
+    pub fn with_queue_capacity<F>(
+        num_workers: usize,
+        name_prefix: &str,
+        queue_capacity: usize,
+        worker_fn: F,
+    ) -> Result<Self, String>
+    where
+        F: Fn(usize, Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
+    {
+        let (request_tx, request_rx) = mpsc::sync_channel::<WorkerRequest>(queue_capacity);
         let request_rx = Arc::new(Mutex::new(request_rx));
 
         let mut workers = Vec::with_capacity(num_workers);
@@ -103,28 +124,44 @@ impl WorkerPool {
             workers.push(WorkerThread { handle });
         }
 
+        tracing::info!(
+            "WorkerPool '{}' created with {} workers, queue capacity {}",
+            name_prefix, num_workers, queue_capacity
+        );
+
         Ok(Self {
             request_tx,
             workers,
             worker_count: AtomicUsize::new(num_workers),
+            queue_capacity,
         })
     }
 
-    /// Executes a request asynchronously via the worker pool
+    /// Executes a request asynchronously via the worker pool.
+    /// Returns QUEUE_FULL_ERROR if the queue is full.
     pub async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
         let (response_tx, response_rx) = oneshot::channel();
 
+        // Use try_send to avoid blocking and detect queue full
         self.request_tx
-            .send(WorkerRequest {
+            .try_send(WorkerRequest {
                 request,
                 response_tx,
                 queued_at: Instant::now(),
             })
-            .map_err(|_| "Worker pool shut down".to_string())?;
+            .map_err(|e| match e {
+                mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
+                mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
+            })?;
 
         response_rx
             .await
             .map_err(|_| "Worker dropped response".to_string())?
+    }
+
+    /// Returns the queue capacity
+    pub fn queue_capacity(&self) -> usize {
+        self.queue_capacity
     }
 
     /// Returns the number of workers

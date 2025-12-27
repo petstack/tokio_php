@@ -41,6 +41,8 @@ fn is_connection_error(err_str: &str) -> bool {
         || err_str.contains("deadline has elapsed")
 }
 
+use super::internal::RequestMetrics;
+
 /// Connection handler context.
 pub struct ConnectionContext<E: ScriptExecutor> {
     pub executor: Arc<E>,
@@ -50,6 +52,7 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub index_file_path: Option<Arc<str>>,
     pub index_file_name: Option<Arc<str>>,
     pub active_connections: Arc<AtomicUsize>,
+    pub request_metrics: Arc<RequestMetrics>,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -192,6 +195,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
+        // Increment request method metrics
+        self.request_metrics.increment_method(req.method());
+
         let is_head = *req.method() == Method::HEAD;
 
         let response = match *req.method() {
@@ -211,6 +217,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 .body(Full::new(METHOD_NOT_ALLOWED_BODY.clone()))
                 .unwrap(),
         };
+
+        // Increment response status metrics
+        self.request_metrics.increment_status(response.status().as_u16());
 
         Ok(response)
     }
@@ -557,7 +566,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 profile: profiling_enabled,
             };
 
-            let response = match self.executor.execute(script_request).await {
+            // Track pending requests for metrics (guard ensures cleanup on cancel)
+            let _pending_guard = RequestMetrics::pending_guard(&self.request_metrics);
+            let execute_result = self.executor.execute(script_request).await;
+
+            let response = match execute_result {
                 Ok(mut resp) => {
                     // Add parse breakdown to profile data if profiling
                     if profiling_enabled {
@@ -583,15 +596,26 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     from_script_response(resp, profiling_enabled, use_brotli)
                 }
                 Err(e) => {
-                    error!("Script execution error: {}", e);
-                    Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .header("Content-Type", "text/html")
-                        .body(Full::new(Bytes::from(format!(
-                            "<h1>500 Internal Server Error</h1><pre>{}</pre>",
-                            e
-                        ))))
-                        .unwrap()
+                    if e.is_queue_full() {
+                        // Queue is full - server overloaded
+                        self.request_metrics.inc_dropped();
+                        Response::builder()
+                            .status(StatusCode::SERVICE_UNAVAILABLE)
+                            .header("Content-Type", "text/plain")
+                            .header("Retry-After", "1")
+                            .body(Full::new(Bytes::from_static(b"503 Service Unavailable - Server overloaded")))
+                            .unwrap()
+                    } else {
+                        error!("Script execution error: {}", e);
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .header("Content-Type", "text/html")
+                            .body(Full::new(Bytes::from(format!(
+                                "<h1>500 Internal Server Error</h1><pre>{}</pre>",
+                                e
+                            ))))
+                            .unwrap()
+                    }
                 }
             };
 
