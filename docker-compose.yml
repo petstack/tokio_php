@@ -28,6 +28,8 @@ services:
 #    volumes:
 #      - ./www:/var/www/html:ro
     restart: unless-stopped
+#    logging:
+#      driver: "none"  # или ограничить: driver: "json-file", options: { max-size: "1m" }
 
   # HTTPS/TLS variant
   tokio_php_tls:
