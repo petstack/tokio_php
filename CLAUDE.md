@@ -100,17 +100,44 @@ Located in `ext/` directory. Provides:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
-| `PHP_WORKERS` | `0` (auto) | Worker count (0 = CPU cores) |
-| `USE_STUB` | `0` | Disable PHP, return empty responses |
+| `PHP_WORKERS` | `0` | Worker count (0 = auto-detect CPU cores) |
+| `QUEUE_CAPACITY` | `0` | Max pending requests (0 = workers × 100) |
+| `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
+| `INDEX_FILE` | _(empty)_ | Single entry point mode (e.g., `index.php`) |
+| `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
+| `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
-| `QUEUE_CAPACITY` | `0` (auto) | Max pending requests in queue (0 = workers × 100) |
-| `TLS_CERT` | - | Path to TLS certificate (PEM) |
-| `TLS_KEY` | - | Path to TLS private key (PEM) |
-| `INDEX_FILE` | - | Single entry point mode (e.g., `index.php`) |
-| `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
-| `INTERNAL_ADDR` | - | Internal server address for /health and /metrics |
-| `RUST_LOG` | `tokio_php=info` | Log level |
+| `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
+| `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
+| `RUST_LOG` | `tokio_php=info` | Log level (trace, debug, info, warn, error) |
+
+### Auto-calculated Defaults
+
+- `PHP_WORKERS=0` → uses `num_cpus::get()` (all available CPU cores)
+- `QUEUE_CAPACITY=0` → uses `workers × 100` (e.g., 8 workers = 800 queue capacity)
+
+### Configuration Examples
+
+```bash
+# Minimal (all defaults)
+docker compose up -d
+
+# Production with tuning
+PHP_WORKERS=8 QUEUE_CAPACITY=500 INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
+
+# Benchmark mode (no PHP execution)
+USE_STUB=1 docker compose up -d
+
+# Laravel/Symfony single entry point
+INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d
+
+# With TLS/HTTPS
+TLS_CERT=/certs/cert.pem TLS_KEY=/certs/key.pem docker compose up -d
+
+# Debug logging
+RUST_LOG=tokio_php=debug docker compose up -d
+```
 
 ## Profiling
 
