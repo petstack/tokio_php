@@ -195,6 +195,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
+        let request_start = Instant::now();
+
         // Increment request method metrics
         self.request_metrics.increment_method(req.method());
 
@@ -218,7 +220,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 .unwrap(),
         };
 
-        // Increment response status metrics
+        // Record response time and status metrics
+        let response_time_us = request_start.elapsed().as_micros() as u64;
+        self.request_metrics.record_response_time(response_time_us);
         self.request_metrics.increment_status(response.status().as_u16());
 
         Ok(response)

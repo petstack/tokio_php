@@ -2,8 +2,9 @@
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use http_body_util::Full;
@@ -15,8 +16,9 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 /// Request counters by HTTP method and status code.
-#[derive(Default)]
 pub struct RequestMetrics {
+    // Server start time for uptime/RPS calculation
+    pub start_time: Instant,
     // By HTTP method
     pub get: AtomicUsize,
     pub post: AtomicUsize,
@@ -34,11 +36,32 @@ pub struct RequestMetrics {
     // Queue metrics
     pub pending_requests: AtomicUsize,
     pub dropped_requests: AtomicUsize,
+    // Response time tracking (microseconds)
+    pub total_response_time_us: AtomicU64,
+    pub response_count: AtomicU64,
 }
 
 impl RequestMetrics {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            start_time: Instant::now(),
+            get: AtomicUsize::new(0),
+            post: AtomicUsize::new(0),
+            head: AtomicUsize::new(0),
+            put: AtomicUsize::new(0),
+            delete: AtomicUsize::new(0),
+            options: AtomicUsize::new(0),
+            patch: AtomicUsize::new(0),
+            other: AtomicUsize::new(0),
+            status_2xx: AtomicUsize::new(0),
+            status_3xx: AtomicUsize::new(0),
+            status_4xx: AtomicUsize::new(0),
+            status_5xx: AtomicUsize::new(0),
+            pending_requests: AtomicUsize::new(0),
+            dropped_requests: AtomicUsize::new(0),
+            total_response_time_us: AtomicU64::new(0),
+            response_count: AtomicU64::new(0),
+        }
     }
 
     /// Increment counter for the given HTTP method.
@@ -104,6 +127,38 @@ impl RequestMetrics {
             + self.options.load(Ordering::Relaxed)
             + self.patch.load(Ordering::Relaxed)
             + self.other.load(Ordering::Relaxed)
+    }
+
+    /// Record response time in microseconds.
+    #[inline]
+    pub fn record_response_time(&self, duration_us: u64) {
+        self.total_response_time_us.fetch_add(duration_us, Ordering::Relaxed);
+        self.response_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Get server uptime in seconds.
+    pub fn uptime_secs(&self) -> f64 {
+        self.start_time.elapsed().as_secs_f64()
+    }
+
+    /// Get requests per second (RPS).
+    pub fn rps(&self) -> f64 {
+        let uptime = self.uptime_secs();
+        if uptime > 0.0 {
+            self.total() as f64 / uptime
+        } else {
+            0.0
+        }
+    }
+
+    /// Get average response time in microseconds.
+    pub fn avg_response_time_us(&self) -> f64 {
+        let count = self.response_count.load(Ordering::Relaxed);
+        if count > 0 {
+            self.total_response_time_us.load(Ordering::Relaxed) as f64 / count as f64
+        } else {
+            0.0
+        }
     }
 }
 
@@ -171,7 +226,19 @@ async fn handle_internal_request(
         }
         "/metrics" => {
             let body = format!(
-                "# HELP tokio_php_active_connections Current number of active connections\n\
+                "# HELP tokio_php_uptime_seconds Server uptime in seconds\n\
+                 # TYPE tokio_php_uptime_seconds gauge\n\
+                 tokio_php_uptime_seconds {:.3}\n\
+                 \n\
+                 # HELP tokio_php_requests_per_second Current requests per second (lifetime average)\n\
+                 # TYPE tokio_php_requests_per_second gauge\n\
+                 tokio_php_requests_per_second {:.2}\n\
+                 \n\
+                 # HELP tokio_php_response_time_avg_seconds Average response time in seconds\n\
+                 # TYPE tokio_php_response_time_avg_seconds gauge\n\
+                 tokio_php_response_time_avg_seconds {:.6}\n\
+                 \n\
+                 # HELP tokio_php_active_connections Current number of active connections\n\
                  # TYPE tokio_php_active_connections gauge\n\
                  tokio_php_active_connections {}\n\
                  \n\
@@ -200,6 +267,9 @@ async fn handle_internal_request(
                  tokio_php_responses_total{{status=\"3xx\"}} {}\n\
                  tokio_php_responses_total{{status=\"4xx\"}} {}\n\
                  tokio_php_responses_total{{status=\"5xx\"}} {}\n",
+                metrics.uptime_secs(),
+                metrics.rps(),
+                metrics.avg_response_time_us() / 1_000_000.0, // convert us to seconds
                 active_connections,
                 metrics.pending_requests.load(Ordering::Relaxed),
                 metrics.dropped_requests.load(Ordering::Relaxed),
