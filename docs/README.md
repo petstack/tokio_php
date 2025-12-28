@@ -120,4 +120,4 @@ tokio_php/
 
 ## License
 
-proprietary
+[AGPL-3.0](../LICENSE)
