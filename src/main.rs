@@ -109,6 +109,15 @@ async fn async_main(
         config = config.with_internal_addr(internal_addr);
     }
 
+    // Custom error pages directory
+    if let Some(error_pages_dir) = std::env::var("ERROR_PAGES_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        info!("Error pages directory: {}", error_pages_dir);
+        config = config.with_error_pages_dir(error_pages_dir);
+    }
+
     // Check for stub mode (via env var or feature)
     let use_stub = std::env::var("USE_STUB")
         .map(|v| v == "1" || v.to_lowercase() == "true")

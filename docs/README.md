@@ -15,6 +15,7 @@ Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
 | [Compression](compression.md) | Brotli compression for responses                           |
 | [Single Entry Point](single-entry-point.md) | Laravel/Symfony routing mode                               |
 | [Metrics](metrics.md) | Health checks and Prometheus metrics                       |
+| [Error Pages](error-pages.md) | Custom HTML error pages for 4xx/5xx                        |
 | [Configuration](configuration.md) | Environment variables reference                            |
 | [tokio_sapi Extension](tokio-sapi-extension.md) | PHP extension for FFI superglobals                         |
 
@@ -76,6 +77,7 @@ tokio_php/
 │   └── profiler.rs       # Timing profiler
 ├── ext/                  # tokio_sapi PHP extension
 ├── www/                  # Document root
+│   └── errors/           # Custom error pages
 ├── certs/                # TLS certificates
 ├── Dockerfile            # Multi-stage build
 └── docker-compose.yml    # Service definitions

@@ -12,6 +12,7 @@ tokio_php is configured via environment variables.
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
 | `INDEX_FILE` | _(empty)_ | Single entry point mode (e.g., `index.php`) |
 | `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
+| `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable request profiling |
@@ -127,6 +128,62 @@ INTERNAL_ADDR=127.0.0.1:9090
 Provides endpoints:
 - `/health` - JSON health check
 - `/metrics` - Prometheus-compatible metrics
+
+### ERROR_PAGES_DIR
+
+Directory containing custom HTML error pages for 4xx/5xx responses.
+
+```bash
+# Disabled (default)
+ERROR_PAGES_DIR=
+
+# Enable with custom directory
+ERROR_PAGES_DIR=/var/www/html/errors
+ERROR_PAGES_DIR=/app/errors
+```
+
+**File Naming**: Files must be named `{status_code}.html`:
+- `404.html` - Not Found
+- `500.html` - Internal Server Error
+- `503.html` - Service Unavailable
+
+**Behavior**:
+- Files are cached in memory at server startup for performance
+- Only served when client sends `Accept: text/html` header
+- Only applied to 4xx/5xx responses with empty body
+- Missing files fall back to default text response
+- Files are served as-is (not processed through PHP)
+
+**Example Setup**:
+
+```bash
+# Directory structure
+www/
+  errors/
+    404.html
+    500.html
+    503.html
+
+# Run with custom error pages
+ERROR_PAGES_DIR=/var/www/html/errors docker compose up -d
+```
+
+**Example 404.html**:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>404 - Not Found</title>
+</head>
+<body>
+    <h1>404</h1>
+    <p>The page you're looking for doesn't exist.</p>
+    <a href="/">Go Home</a>
+</body>
+</html>
+```
 
 ### USE_STUB
 
@@ -269,6 +326,7 @@ QUEUE_CAPACITY=1000 \
 DOCUMENT_ROOT=/var/www/html/public \
 INDEX_FILE=index.php \
 INTERNAL_ADDR=0.0.0.0:9090 \
+ERROR_PAGES_DIR=/var/www/html/errors \
 PROFILE=0 \
 USE_EXT=0 \
 RUST_LOG=tokio_php=info \
@@ -293,6 +351,7 @@ services:
       - DOCUMENT_ROOT=/var/www/html
       - INDEX_FILE=${INDEX_FILE:-}
       - INTERNAL_ADDR=0.0.0.0:9090
+      - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-}
       - PROFILE=${PROFILE:-0}
       - USE_EXT=${USE_EXT:-0}
       - USE_STUB=${USE_STUB:-0}

@@ -124,6 +124,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
 | `INDEX_FILE` | _(empty)_ | Single entry point mode (e.g., `index.php`) |
 | `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
+| `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., 404.html) |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
@@ -153,6 +154,9 @@ INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d
 
 # With TLS/HTTPS
 TLS_CERT=/certs/cert.pem TLS_KEY=/certs/key.pem docker compose up -d
+
+# Custom error pages
+ERROR_PAGES_DIR=/var/www/html/errors docker compose up -d
 
 # Debug logging
 RUST_LOG=tokio_php=debug docker compose up -d
@@ -300,6 +304,31 @@ node_load1 1.50
 # HELP tokio_php_memory_usage_percent Memory usage percentage
 tokio_php_memory_usage_percent 45.32
 ```
+
+## Custom Error Pages
+
+Serve custom HTML error pages for 4xx/5xx responses. Enable by setting `ERROR_PAGES_DIR`:
+
+```bash
+ERROR_PAGES_DIR=/var/www/html/errors docker compose up -d
+```
+
+### File Naming
+
+Files must be named `{status_code}.html`:
+- `404.html` - Not Found
+- `500.html` - Internal Server Error
+- `503.html` - Service Unavailable
+
+### Behavior
+
+- Files cached in memory at startup (high performance)
+- Only served when client sends `Accept: text/html` header
+- Only applied to 4xx/5xx responses with empty body
+- Missing files fall back to default text response
+- Files served as-is (not processed through PHP)
+
+Example error pages are provided in `www/errors/`.
 
 ## Limitations
 

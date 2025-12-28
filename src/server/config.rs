@@ -26,6 +26,8 @@ pub struct ServerConfig {
     pub index_file: Option<String>,
     /// Internal server address for /health and /metrics
     pub internal_addr: Option<SocketAddr>,
+    /// Directory with custom error pages ({status_code}.html)
+    pub error_pages_dir: Option<String>,
 }
 
 impl ServerConfig {
@@ -38,6 +40,7 @@ impl ServerConfig {
             tls_key: None,
             index_file: None,
             internal_addr: None,
+            error_pages_dir: None,
         }
     }
 
@@ -64,6 +67,11 @@ impl ServerConfig {
 
     pub fn with_internal_addr(mut self, addr: SocketAddr) -> Self {
         self.internal_addr = Some(addr);
+        self
+    }
+
+    pub fn with_error_pages_dir(mut self, dir: String) -> Self {
+        self.error_pages_dir = Some(dir);
         self
     }
 

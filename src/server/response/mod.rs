@@ -44,13 +44,13 @@ pub fn error_response(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
         .unwrap()
 }
 
-/// Create a Not Found response.
+/// Create a Not Found response with empty body (for error page injection).
 #[inline]
 pub fn not_found_response() -> Response<Full<Bytes>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .header("Content-Type", "text/html")
-        .body(Full::new(NOT_FOUND_BODY.clone()))
+        .body(Full::new(EMPTY_BODY.clone()))
         .unwrap()
 }
 

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming as IncomingBody;
+use hyper::body::{Body, Incoming as IncomingBody};
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
@@ -19,6 +19,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error};
 
 use super::config::TlsInfo;
+use super::error_pages::{accepts_html, ErrorPages};
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
     accepts_brotli, empty_stub_response, from_script_response, not_found_response,
@@ -53,6 +54,7 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub index_file_name: Option<Arc<str>>,
     pub active_connections: Arc<AtomicUsize>,
     pub request_metrics: Arc<RequestMetrics>,
+    pub error_pages: ErrorPages,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -202,7 +204,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         let is_head = *req.method() == Method::HEAD;
 
-        let response = match *req.method() {
+        // Check if client accepts HTML (for custom error pages)
+        let client_accepts_html = req
+            .headers()
+            .get("accept")
+            .and_then(|v| v.to_str().ok())
+            .map(accepts_html)
+            .unwrap_or(false);
+
+        let mut response = match *req.method() {
             Method::GET | Method::POST | Method::HEAD => {
                 let mut resp = self.process_request(req, remote_addr, tls_info).await;
 
@@ -219,6 +229,33 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 .body(Full::new(METHOD_NOT_ALLOWED_BODY.clone()))
                 .unwrap(),
         };
+
+        // Apply custom error page if:
+        // 1. Error pages are configured
+        // 2. Status is 4xx or 5xx
+        // 3. Body is empty
+        // 4. Client accepts HTML
+        if client_accepts_html && !self.error_pages.is_empty() {
+            let status = response.status().as_u16();
+            if (400..600).contains(&status) {
+                // Check if body is empty
+                let body_is_empty = response.body().size_hint().exact() == Some(0);
+                if body_is_empty {
+                    if let Some(error_html) = self.error_pages.get(status) {
+                        let (mut parts, _) = response.into_parts();
+                        parts.headers.insert(
+                            hyper::header::CONTENT_TYPE,
+                            "text/html; charset=utf-8".parse().unwrap(),
+                        );
+                        parts.headers.insert(
+                            hyper::header::CONTENT_LENGTH,
+                            error_html.len().to_string().parse().unwrap(),
+                        );
+                        response = Response::from_parts(parts, Full::new(error_html.clone()));
+                    }
+                }
+            }
+        }
 
         // Record response time and status metrics
         let response_time_us = request_start.elapsed().as_micros() as u64;

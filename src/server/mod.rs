@@ -2,6 +2,7 @@
 
 pub mod config;
 mod connection;
+pub mod error_pages;
 mod internal;
 pub mod request;
 pub mod response;
@@ -23,6 +24,7 @@ use tracing::{debug, error, info, warn};
 
 pub use config::ServerConfig;
 use connection::ConnectionContext;
+use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics};
 
 use crate::executor::ScriptExecutor;
@@ -38,6 +40,8 @@ pub struct Server<E: ScriptExecutor> {
     active_connections: Arc<AtomicUsize>,
     /// Request metrics by HTTP method
     request_metrics: Arc<RequestMetrics>,
+    /// Cached custom error pages
+    error_pages: ErrorPages,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
@@ -74,6 +78,13 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             None
         };
 
+        // Load custom error pages if configured
+        let error_pages = if let Some(ref dir) = config.error_pages_dir {
+            ErrorPages::from_directory(dir)
+        } else {
+            ErrorPages::new()
+        };
+
         Ok(Self {
             config,
             executor: Arc::new(executor),
@@ -81,6 +92,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             index_file_path,
             active_connections: Arc::new(AtomicUsize::new(0)),
             request_metrics: Arc::new(RequestMetrics::new()),
+            error_pages,
         })
     }
 
@@ -205,6 +217,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 index_file_name: index_file_name.clone(),
                 active_connections: Arc::clone(&self.active_connections),
                 request_metrics: Arc::clone(&self.request_metrics),
+                error_pages: self.error_pages.clone(),
             });
 
             let handle = tokio::spawn(async move {

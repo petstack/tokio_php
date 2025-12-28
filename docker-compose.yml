@@ -25,6 +25,8 @@ services:
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       # INTERNAL_ADDR: internal server for /health and /metrics
       - INTERNAL_ADDR=0.0.0.0:9090
+      # ERROR_PAGES_DIR: directory with custom HTML error pages (e.g., 404.html, 500.html)
+      - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -49,6 +51,7 @@ services:
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - TLS_CERT=/certs/cert.pem
       - TLS_KEY=/certs/key.pem
+      - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
     volumes:
       - ./www:/var/www/html:ro
       - ./certs:/certs:ro
