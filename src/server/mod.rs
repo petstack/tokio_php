@@ -13,12 +13,13 @@ mod routing;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use socket2::{Domain, Protocol, SockRef, Socket, TcpKeepalive, Type};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio_rustls::rustls::pki_types::CertificateDer;
 use tokio_rustls::rustls::ServerConfig as RustlsConfig;
 use tokio_rustls::TlsAcceptor;
@@ -47,6 +48,12 @@ pub struct Server<E: ScriptExecutor> {
     error_pages: ErrorPages,
     /// Per-IP rate limiter
     rate_limiter: Option<Arc<RateLimiter>>,
+    /// Shutdown signal sender
+    shutdown_tx: watch::Sender<bool>,
+    /// Shutdown signal receiver (cloneable)
+    shutdown_rx: watch::Receiver<bool>,
+    /// Shutdown initiated flag
+    shutdown_initiated: Arc<AtomicBool>,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
@@ -92,13 +99,16 @@ impl<E: ScriptExecutor + 'static> Server<E> {
 
         // Create rate limiter if configured
         let rate_limiter = RateLimiter::from_config().map(Arc::new);
-        if let Some(ref limiter) = rate_limiter {
+        if rate_limiter.is_some() {
             info!(
                 "Rate limiting enabled: {} requests per {} seconds per IP",
                 rate_limit::get_limit(),
                 rate_limit::get_window_secs()
             );
         }
+
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         Ok(Self {
             config,
@@ -109,6 +119,9 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             request_metrics: Arc::new(RequestMetrics::new()),
             error_pages,
             rate_limiter,
+            shutdown_tx,
+            shutdown_rx,
+            shutdown_initiated: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -174,6 +187,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
     }
 
     /// Run the server.
+    /// Spawns worker accept loops and waits for shutdown signal.
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let num_workers = if self.config.num_workers == 0 {
             num_cpus::get()
@@ -201,11 +215,17 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         if let Some(internal_addr) = self.config.internal_addr {
             let active_connections = Arc::clone(&self.active_connections);
             let request_metrics = Arc::clone(&self.request_metrics);
+            let mut shutdown_rx = self.shutdown_rx.clone();
             let handle = tokio::spawn(async move {
-                if let Err(e) =
-                    run_internal_server(internal_addr, active_connections, request_metrics).await
-                {
-                    error!("Internal server error: {}", e);
+                tokio::select! {
+                    result = run_internal_server(internal_addr, active_connections, request_metrics) => {
+                        if let Err(e) = result {
+                            error!("Internal server error: {}", e);
+                        }
+                    }
+                    _ = shutdown_rx.changed() => {
+                        debug!("Internal server received shutdown signal");
+                    }
                 }
             });
             handles.push(handle);
@@ -222,6 +242,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         for worker_id in 0..num_workers {
             let addr = self.config.addr;
             let tls_acceptor = self.tls_acceptor.clone();
+            let mut shutdown_rx = self.shutdown_rx.clone();
+            let conn_shutdown_rx = self.shutdown_rx.clone();
 
             // Create connection context for this worker
             let ctx = Arc::new(ConnectionContext {
@@ -258,42 +280,61 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 debug!("Worker {} started", worker_id);
 
                 loop {
-                    let (stream, remote_addr) = match listener.accept().await {
-                        Ok(conn) => conn,
-                        Err(e) => {
-                            error!("Worker {}: Accept error: {}", worker_id, e);
-                            continue;
+                    tokio::select! {
+                        result = listener.accept() => {
+                            let (stream, remote_addr) = match result {
+                                Ok(conn) => conn,
+                                Err(e) => {
+                                    error!("Worker {}: Accept error: {}", worker_id, e);
+                                    continue;
+                                }
+                            };
+
+                            let _ = stream.set_nodelay(true);
+
+                            // Set TCP keepalive
+                            let keepalive = TcpKeepalive::new()
+                                .with_time(Duration::from_secs(5))
+                                .with_interval(Duration::from_secs(1))
+                                .with_retries(3);
+                            let sock_ref = SockRef::from(&stream);
+                            let _ = sock_ref.set_tcp_keepalive(&keepalive);
+
+                            let ctx = Arc::clone(&ctx);
+                            let tls = tls_acceptor.clone();
+                            // Each connection gets its own shutdown receiver for graceful shutdown
+                            let conn_shutdown = conn_shutdown_rx.clone();
+
+                            tokio::spawn(async move {
+                                ctx.handle_connection_graceful(stream, remote_addr, tls, conn_shutdown).await;
+                            });
                         }
-                    };
-
-                    let _ = stream.set_nodelay(true);
-
-                    // Set TCP keepalive to detect dead connections faster (5s idle, 1s interval, 3 retries)
-                    let keepalive = TcpKeepalive::new()
-                        .with_time(Duration::from_secs(5))
-                        .with_interval(Duration::from_secs(1))
-                        .with_retries(3);
-                    let sock_ref = SockRef::from(&stream);
-                    let _ = sock_ref.set_tcp_keepalive(&keepalive);
-
-                    let ctx = Arc::clone(&ctx);
-                    let tls = tls_acceptor.clone();
-
-                    tokio::task::spawn(async move {
-                        ctx.handle_connection(stream, remote_addr, tls).await;
-                    });
+                        _ = shutdown_rx.changed() => {
+                            debug!("Worker {} received shutdown signal, stopping accept loop", worker_id);
+                            break;
+                        }
+                    }
                 }
             });
 
             handles.push(handle);
         }
 
-        // Wait for all workers (they run forever unless cancelled)
+        // Wait for all workers to stop accepting
         for handle in handles {
             let _ = handle.await;
         }
 
         Ok(())
+    }
+
+    /// Trigger graceful shutdown.
+    /// Signals all workers to stop accepting new connections.
+    pub fn trigger_shutdown(&self) {
+        if self.shutdown_initiated.swap(true, Ordering::SeqCst) {
+            return; // Already initiated
+        }
+        let _ = self.shutdown_tx.send(true);
     }
 
     /// Get the configured drain timeout.

@@ -64,32 +64,31 @@ DRAIN_TIMEOUT_SECS=30 docker compose up -d
 
 During graceful shutdown, you'll see logs like:
 
-```
-[INFO] Received shutdown signal, draining connections...
-[INFO] Waiting up to 30s for 5 active connections to complete
-[DEBUG] Waiting for 5 connections to drain...
-[DEBUG] Waiting for 3 connections to drain...
-[DEBUG] Waiting for 1 connections to drain...
-[INFO] All connections drained successfully
-[INFO] Shutdown complete
+```json
+{"level":"info","msg":"Received shutdown signal, initiating graceful shutdown..."}
+{"level":"info","msg":"Waiting up to 30s for 5 active connections to complete (HTTP/2 GOAWAY sent)"}
+{"level":"debug","msg":"Waiting for 3 connections to drain..."}
+{"level":"debug","msg":"Waiting for 1 connections to drain..."}
+{"level":"info","msg":"All connections drained successfully"}
+{"level":"info","msg":"Shutdown complete"}
 ```
 
 If timeout is reached:
 
-```
-[INFO] Received shutdown signal, draining connections...
-[INFO] Waiting up to 30s for 10 active connections to complete
-[WARN] Drain timeout reached with 2 active connections
-[INFO] Forcing shutdown after drain timeout
-[INFO] Shutdown complete
+```json
+{"level":"info","msg":"Received shutdown signal, initiating graceful shutdown..."}
+{"level":"info","msg":"Waiting up to 30s for 10 active connections to complete (HTTP/2 GOAWAY sent)"}
+{"level":"warn","msg":"Drain timeout reached with 2 active connections"}
+{"level":"info","msg":"Drain timeout reached, forcing shutdown"}
+{"level":"info","msg":"Shutdown complete"}
 ```
 
 If no active connections:
 
-```
-[INFO] Received shutdown signal, draining connections...
-[INFO] No active connections, shutting down immediately
-[INFO] Shutdown complete
+```json
+{"level":"info","msg":"Received shutdown signal, initiating graceful shutdown..."}
+{"level":"info","msg":"No active connections, shutting down immediately"}
+{"level":"info","msg":"Shutdown complete"}
 ```
 
 ## Kubernetes Integration

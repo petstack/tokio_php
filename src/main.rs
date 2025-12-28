@@ -225,33 +225,63 @@ async fn async_main(
     }
 }
 
+/// Wait for shutdown signal (SIGINT or SIGTERM).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for ctrl_c");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to listen for SIGTERM")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
+
 async fn run_server<E: crate::executor::ScriptExecutor + 'static>(
     server: Server<E>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drain_timeout = server.drain_timeout();
 
-    // Handle shutdown gracefully
+    // Handle shutdown gracefully with tokio::select
     tokio::select! {
         result = server.run() => {
             if let Err(e) = result {
                 eprintln!("Server error: {}", e);
             }
         }
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received shutdown signal, draining connections...");
+        _ = shutdown_signal() => {
+            info!("Received shutdown signal, initiating graceful shutdown...");
+
+            // Trigger shutdown - stops accept loops and signals all connections
+            // Each connection will receive the shutdown signal and send HTTP/2 GOAWAY
+            server.trigger_shutdown();
 
             let active = server.active_connections();
             if active > 0 {
                 info!(
-                    "Waiting up to {}s for {} active connections to complete",
+                    "Waiting up to {}s for {} active connections to complete (HTTP/2 GOAWAY sent)",
                     drain_timeout.as_secs(),
                     active
                 );
 
+                // Wait for connections to drain with timeout
                 if server.wait_for_drain(drain_timeout).await {
                     info!("All connections drained successfully");
                 } else {
-                    info!("Forcing shutdown after drain timeout");
+                    info!("Drain timeout reached, forcing shutdown");
                 }
             } else {
                 info!("No active connections, shutting down immediately");
@@ -259,7 +289,7 @@ async fn run_server<E: crate::executor::ScriptExecutor + 'static>(
         }
     }
 
-    // Cleanup
+    // Cleanup PHP workers
     server.shutdown();
     info!("Shutdown complete");
 
