@@ -5,6 +5,7 @@ pub mod config;
 pub mod connection;
 pub mod error_pages;
 mod internal;
+pub mod rate_limit;
 pub mod request;
 pub mod response;
 mod routing;
@@ -27,6 +28,7 @@ pub use config::ServerConfig;
 use connection::ConnectionContext;
 use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics};
+use rate_limit::RateLimiter;
 
 use crate::executor::ScriptExecutor;
 
@@ -43,6 +45,8 @@ pub struct Server<E: ScriptExecutor> {
     request_metrics: Arc<RequestMetrics>,
     /// Cached custom error pages
     error_pages: ErrorPages,
+    /// Per-IP rate limiter
+    rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
@@ -86,6 +90,16 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             ErrorPages::new()
         };
 
+        // Create rate limiter if configured
+        let rate_limiter = RateLimiter::from_config().map(Arc::new);
+        if let Some(ref limiter) = rate_limiter {
+            info!(
+                "Rate limiting enabled: {} requests per {} seconds per IP",
+                rate_limit::get_limit(),
+                rate_limit::get_window_secs()
+            );
+        }
+
         Ok(Self {
             config,
             executor: Arc::new(executor),
@@ -94,6 +108,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             active_connections: Arc::new(AtomicUsize::new(0)),
             request_metrics: Arc::new(RequestMetrics::new()),
             error_pages,
+            rate_limiter,
         })
     }
 
@@ -219,6 +234,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 active_connections: Arc::clone(&self.active_connections),
                 request_metrics: Arc::clone(&self.request_metrics),
                 error_pages: self.error_pages.clone(),
+                rate_limiter: self.rate_limiter.clone(),
             });
 
             let handle = tokio::spawn(async move {

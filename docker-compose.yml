@@ -29,6 +29,10 @@ services:
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
       # ACCESS_LOG: set to 1 or true to enable access logs
       - ACCESS_LOG=${ACCESS_LOG:-1}
+      # RATE_LIMIT: max requests per IP per window (0 = disabled)
+      - RATE_LIMIT=${RATE_LIMIT:-0}
+      # RATE_WINDOW: rate limit window in seconds (default: 60)
+      - RATE_WINDOW=${RATE_WINDOW:-60}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -62,6 +66,8 @@ services:
       - INTERNAL_ADDR=0.0.0.0:9090
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
       - ACCESS_LOG=${ACCESS_LOG:-1}
+      - RATE_LIMIT=${RATE_LIMIT:-0}
+      - RATE_WINDOW=${RATE_WINDOW:-60}
     volumes:
       - ./www:/var/www/html:ro
       - ./certs:/certs:ro

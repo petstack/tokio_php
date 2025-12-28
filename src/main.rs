@@ -9,7 +9,7 @@ use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::server::{access_log, Server, ServerConfig};
+use crate::server::{access_log, rate_limit, Server, ServerConfig};
 
 #[cfg(feature = "php")]
 use crate::executor::PhpExecutor;
@@ -41,6 +41,19 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false);
     access_log::init(access_log_enabled);
+
+    // Initialize rate limiting (RATE_LIMIT=requests per window, RATE_WINDOW=seconds)
+    let rate_limit_value = std::env::var("RATE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let rate_window = std::env::var("RATE_WINDOW")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60);
+    if rate_limit_value > 0 {
+        rate_limit::init(rate_limit_value, rate_window);
+    }
 
     info!("Starting tokio_php server...");
 

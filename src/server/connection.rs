@@ -95,6 +95,7 @@ use tracing::{debug, error};
 use super::access_log;
 use super::config::TlsInfo;
 use super::error_pages::{accepts_html, ErrorPages};
+use super::rate_limit::RateLimiter;
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
     accepts_brotli, empty_stub_response, from_script_response, not_found_response,
@@ -130,6 +131,7 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub active_connections: Arc<AtomicUsize>,
     pub request_metrics: Arc<RequestMetrics>,
     pub error_pages: ErrorPages,
+    pub rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -281,6 +283,23 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
             .unwrap_or_else(|| generate_request_id());
+
+        // Check rate limit (per-IP)
+        if let Some(ref limiter) = self.rate_limiter {
+            let result = limiter.check(remote_addr.ip());
+            if !result.allowed {
+                return Ok(Response::builder()
+                    .status(StatusCode::TOO_MANY_REQUESTS)
+                    .header("Content-Type", "text/plain")
+                    .header("Retry-After", result.reset_after.to_string())
+                    .header("X-RateLimit-Limit", super::rate_limit::get_limit().to_string())
+                    .header("X-RateLimit-Remaining", "0")
+                    .header("X-RateLimit-Reset", result.reset_after.to_string())
+                    .header("x-request-id", request_id)
+                    .body(Full::new(Bytes::from_static(b"429 Too Many Requests")))
+                    .unwrap());
+            }
+        }
 
         // Increment request method metrics
         self.request_metrics.increment_method(req.method());

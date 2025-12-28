@@ -15,6 +15,8 @@ tokio_php is configured via environment variables.
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
+| `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
+| `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable request profiling |
@@ -296,6 +298,60 @@ docker compose logs | jq -c 'select(.type == "access")'
 # Filter errors (4xx/5xx)
 docker compose logs | jq -c 'select(.data.status >= 400)'
 ```
+
+### RATE_LIMIT / RATE_WINDOW
+
+Per-IP rate limiting to prevent abuse.
+
+```bash
+# Disabled (default)
+RATE_LIMIT=0
+
+# 100 requests per minute per IP
+RATE_LIMIT=100
+RATE_WINDOW=60
+
+# 1000 requests per hour
+RATE_LIMIT=1000
+RATE_WINDOW=3600
+
+# Strict: 10 requests per 10 seconds
+RATE_LIMIT=10
+RATE_WINDOW=10
+```
+
+**Response when rate limited:**
+
+```
+HTTP/1.1 429 Too Many Requests
+Content-Type: text/plain
+Retry-After: 45
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 45
+
+429 Too Many Requests
+```
+
+**Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `Retry-After` | Seconds until limit resets (RFC 7231) |
+| `X-RateLimit-Limit` | Maximum requests per window |
+| `X-RateLimit-Remaining` | Remaining requests in current window |
+| `X-RateLimit-Reset` | Seconds until window resets |
+
+**Algorithm:** Fixed window per IP address. Counter resets when window expires.
+
+**vs QUEUE_CAPACITY:**
+
+| Mechanism | Scope | Response | Purpose |
+|-----------|-------|----------|---------|
+| `RATE_LIMIT` | Per-IP | 429 | Fairness, abuse prevention |
+| `QUEUE_CAPACITY` | Global | 503 | Server overload protection |
+
+Rate limit is checked first. If passed, request enters queue.
 
 ### USE_STUB
 

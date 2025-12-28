@@ -127,6 +127,8 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., 404.html) |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
+| `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
+| `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
@@ -296,6 +298,38 @@ Request ID appears in `ctx.request_id` in access logs:
 ```
 
 Use for distributed tracing across microservices.
+
+## Rate Limiting
+
+Per-IP rate limiting with fixed window algorithm. See [docs/rate-limiting.md](docs/rate-limiting.md) for full documentation.
+
+```bash
+# 100 requests per minute per IP
+RATE_LIMIT=100 RATE_WINDOW=60 docker compose up -d
+```
+
+Response when limited:
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 45
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 45
+```
+
+### Rate Limit vs Queue Capacity
+
+```
+Request → Rate Limit (per-IP) → Queue (global) → Worker
+              │ 429                  │ 503
+              ▼                      ▼
+         Too Many Requests    Service Unavailable
+```
+
+| Mechanism | Scope | Response | Purpose |
+|-----------|-------|----------|---------|
+| `RATE_LIMIT` | Per-IP | 429 | Fairness, abuse prevention |
+| `QUEUE_CAPACITY` | Global | 503 | Server overload protection |
 
 ## Docker Services
 
