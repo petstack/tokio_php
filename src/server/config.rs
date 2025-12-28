@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// TLS connection information for profiling
 #[derive(Clone, Default)]
@@ -28,6 +29,8 @@ pub struct ServerConfig {
     pub internal_addr: Option<SocketAddr>,
     /// Directory with custom error pages ({status_code}.html)
     pub error_pages_dir: Option<String>,
+    /// Graceful shutdown drain timeout
+    pub drain_timeout: Duration,
 }
 
 impl ServerConfig {
@@ -41,6 +44,7 @@ impl ServerConfig {
             index_file: None,
             internal_addr: None,
             error_pages_dir: None,
+            drain_timeout: Duration::from_secs(30),
         }
     }
 
@@ -72,6 +76,11 @@ impl ServerConfig {
 
     pub fn with_error_pages_dir(mut self, dir: String) -> Self {
         self.error_pages_dir = Some(dir);
+        self
+    }
+
+    pub fn with_drain_timeout(mut self, timeout: Duration) -> Self {
+        self.drain_timeout = timeout;
         self
     }
 

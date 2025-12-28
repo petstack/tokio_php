@@ -4,6 +4,7 @@ mod server;
 mod types;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -118,6 +119,13 @@ async fn async_main(
         config = config.with_error_pages_dir(error_pages_dir);
     }
 
+    // Graceful shutdown drain timeout (default: 30 seconds)
+    let drain_timeout_secs = std::env::var("DRAIN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30);
+    config = config.with_drain_timeout(Duration::from_secs(drain_timeout_secs));
+
     // Check for stub mode (via env var or feature)
     let use_stub = std::env::var("USE_STUB")
         .map(|v| v == "1" || v.to_lowercase() == "true")
@@ -196,6 +204,8 @@ async fn async_main(
 async fn run_server<E: crate::executor::ScriptExecutor + 'static>(
     server: Server<E>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let drain_timeout = server.drain_timeout();
+
     // Handle shutdown gracefully
     tokio::select! {
         result = server.run() => {
@@ -204,12 +214,30 @@ async fn run_server<E: crate::executor::ScriptExecutor + 'static>(
             }
         }
         _ = tokio::signal::ctrl_c() => {
-            info!("Shutting down...");
+            info!("Received shutdown signal, draining connections...");
+
+            let active = server.active_connections();
+            if active > 0 {
+                info!(
+                    "Waiting up to {}s for {} active connections to complete",
+                    drain_timeout.as_secs(),
+                    active
+                );
+
+                if server.wait_for_drain(drain_timeout).await {
+                    info!("All connections drained successfully");
+                } else {
+                    info!("Forcing shutdown after drain timeout");
+                }
+            } else {
+                info!("No active connections, shutting down immediately");
+            }
         }
     }
 
     // Cleanup
     server.shutdown();
+    info!("Shutdown complete");
 
     Ok(())
 }

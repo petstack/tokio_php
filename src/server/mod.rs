@@ -279,6 +279,41 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         Ok(())
     }
 
+    /// Get the configured drain timeout.
+    pub fn drain_timeout(&self) -> Duration {
+        self.config.drain_timeout
+    }
+
+    /// Get a reference to the active connections counter.
+    pub fn active_connections_counter(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.active_connections)
+    }
+
+    /// Wait for all active connections to drain.
+    /// Returns true if drained successfully, false if timeout was reached.
+    pub async fn wait_for_drain(&self, timeout: Duration) -> bool {
+        let start = std::time::Instant::now();
+        let check_interval = Duration::from_millis(100);
+
+        loop {
+            let active = self.active_connections.load(Ordering::Relaxed);
+            if active == 0 {
+                return true;
+            }
+
+            if start.elapsed() >= timeout {
+                warn!(
+                    "Drain timeout reached with {} active connections",
+                    active
+                );
+                return false;
+            }
+
+            debug!("Waiting for {} connections to drain...", active);
+            tokio::time::sleep(check_interval).await;
+        }
+    }
+
     /// Shutdown the server.
     pub fn shutdown(&self) {
         self.executor.shutdown();

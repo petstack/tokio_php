@@ -125,6 +125,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `INDEX_FILE` | _(empty)_ | Single entry point mode (e.g., `index.php`) |
 | `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., 404.html) |
+| `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
@@ -329,6 +330,46 @@ Files must be named `{status_code}.html`:
 - Files served as-is (not processed through PHP)
 
 Example error pages are provided in `www/errors/`.
+
+## Graceful Shutdown
+
+tokio_php supports graceful shutdown with connection draining for zero-downtime deployments.
+
+### Behavior
+
+1. Server receives SIGTERM/SIGINT (Ctrl+C)
+2. Stops accepting new connections
+3. Waits for in-flight requests to complete (up to `DRAIN_TIMEOUT_SECS`)
+4. Shuts down cleanly
+
+### Configuration
+
+```bash
+# Default: 30 seconds
+DRAIN_TIMEOUT_SECS=30 docker compose up -d
+
+# Kubernetes: match terminationGracePeriodSeconds
+DRAIN_TIMEOUT_SECS=25 docker compose up -d  # 5s buffer for preStop hook
+```
+
+### Kubernetes Integration
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 30
+  containers:
+    - name: app
+      lifecycle:
+        preStop:
+          exec:
+            command: ["sleep", "5"]  # Allow LB to remove pod
+```
+
+Timeline:
+- 0s: SIGTERM sent
+- 0-5s: preStop hook (LB removes pod from rotation)
+- 5-30s: App drains connections
+- 30s: SIGKILL if still running
 
 ## Limitations
 

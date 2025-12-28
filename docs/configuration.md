@@ -13,6 +13,7 @@ tokio_php is configured via environment variables.
 | `INDEX_FILE` | _(empty)_ | Single entry point mode (e.g., `index.php`) |
 | `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages |
+| `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable request profiling |
@@ -183,6 +184,43 @@ ERROR_PAGES_DIR=/var/www/html/errors docker compose up -d
     <a href="/">Go Home</a>
 </body>
 </html>
+```
+
+### DRAIN_TIMEOUT_SECS
+
+Graceful shutdown drain timeout in seconds.
+
+```bash
+# Default: 30 seconds
+DRAIN_TIMEOUT_SECS=30
+
+# Quick shutdown for development
+DRAIN_TIMEOUT_SECS=5
+
+# Kubernetes: match terminationGracePeriodSeconds minus preStop
+DRAIN_TIMEOUT_SECS=25
+```
+
+When the server receives SIGTERM/SIGINT:
+1. Stops accepting new connections
+2. Waits for in-flight requests to complete
+3. Forces shutdown after timeout
+
+| Value | Use Case |
+|-------|----------|
+| `5` | Development/testing |
+| `25-30` | Production with Kubernetes |
+| `60` | Long-running requests |
+
+**Kubernetes example:**
+```yaml
+spec:
+  terminationGracePeriodSeconds: 30
+  containers:
+    - lifecycle:
+        preStop:
+          exec:
+            command: ["sleep", "5"]  # LB drain time
 ```
 
 ### USE_STUB
