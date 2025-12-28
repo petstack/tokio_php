@@ -26,12 +26,15 @@ Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
 ## Quick Start
 
 ```bash
-# Build and run
+# Build and run (ExtExecutor enabled by default)
 docker compose build
 docker compose up -d
 
 # Test
 curl http://localhost:8080/index.php
+
+# Production (explicit ExtExecutor for 2.5x faster than PHP-FPM)
+USE_EXT=1 docker compose up -d
 
 # View logs
 docker compose logs -f
@@ -42,14 +45,32 @@ docker compose down
 
 ## Performance
 
-Benchmark results on 14-core CPU:
+### tokio_php vs nginx + PHP-FPM
+
+| Server | RPS (bench.php) | RPS (index.php) | Latency |
+|--------|-----------------|-----------------|---------|
+| **tokio_php (ExtExecutor)** | **35,350** | **32,913** | 2.8ms |
+| nginx + PHP-FPM | 13,890 | 12,471 | 7.2ms |
+
+**tokio_php is 2.5x faster** — no FastCGI overhead, threads instead of processes.
+
+### Executor Comparison
+
+| Executor | Method | RPS (bench.php) |
+|----------|--------|-----------------|
+| **ExtExecutor** | `php_execute_script()` | **37,911** |
+| PhpExecutor | `zend_eval_string()` | 19,555 |
+
+Use `USE_EXT=1` for production (2x faster).
+
+### OPcache Impact
 
 | Configuration | Requests/sec | Latency |
 |---------------|--------------|---------|
 | No OPcache | ~12,400 | 8.27ms |
 | OPcache | ~22,760 | 5.40ms |
 | OPcache + JIT | ~23,650 | 4.46ms |
-| Production tuned | ~40,000+ | ~2.5ms |
+| ExtExecutor + JIT | ~35,000+ | ~2.8ms |
 
 ## Requirements
 

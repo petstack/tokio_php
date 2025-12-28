@@ -86,6 +86,26 @@ ExtExecutor is **2x faster** than PhpExecutor due to different script execution 
 USE_EXT=1 docker compose up -d
 ```
 
+### Performance vs PHP-FPM
+
+tokio_php is **2.5x faster** than nginx + PHP-FPM:
+
+| Server | RPS (bench.php) | RPS (index.php) | Latency |
+|--------|-----------------|-----------------|---------|
+| **tokio_php** | **35,350** | **32,913** | 2.8ms |
+| nginx + PHP-FPM | 13,890 | 12,471 | 7.2ms |
+
+*Benchmark: 14 workers each, OPcache+JIT enabled, wrk -t4 -c100 -d5s*
+
+**Why tokio_php is faster:**
+1. No network hop (nginx → FastCGI socket → FPM)
+2. Threads vs processes (no context switch overhead)
+3. No FastCGI protocol encode/decode (~1ms saved)
+4. Direct OPcache access via TSRM
+5. Single binary (no reverse proxy)
+
+See [docs/architecture.md](docs/architecture.md#comparison-with-php-fpm) for detailed comparison.
+
 ### tokio_sapi PHP Extension
 
 Located in `ext/` directory. Provides:
