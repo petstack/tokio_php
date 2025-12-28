@@ -257,6 +257,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 request_metrics: Arc::clone(&self.request_metrics),
                 error_pages: self.error_pages.clone(),
                 rate_limiter: self.rate_limiter.clone(),
+                static_cache_ttl: self.config.static_cache_ttl.clone(),
             });
 
             let handle = tokio::spawn(async move {

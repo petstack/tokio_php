@@ -133,6 +133,7 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub request_metrics: Arc<RequestMetrics>,
     pub error_pages: ErrorPages,
     pub rate_limiter: Option<Arc<RateLimiter>>,
+    pub static_cache_ttl: super::config::StaticCacheTtl,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -509,6 +510,19 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .map(accepts_brotli)
             .unwrap_or(false);
 
+        // Extract conditional caching headers for static file serving
+        let if_none_match = req
+            .headers()
+            .get("if-none-match")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let if_modified_since = req
+            .headers()
+            .get("if-modified-since")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         // Fast path for stub mode only
         if self.is_stub_mode && is_php_uri(uri_path) {
             return empty_stub_response();
@@ -850,7 +864,13 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
             response
         } else {
-            serve_static_file(file_path, use_brotli).await
+            serve_static_file(
+                file_path,
+                use_brotli,
+                &self.static_cache_ttl,
+                if_none_match.as_deref(),
+                if_modified_since.as_deref(),
+            ).await
         }
     }
 }

@@ -13,6 +13,7 @@ Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
 | [Worker Pool](worker-pool.md) | Multi-threaded PHP execution, scaling                      |
 | [Profiler](profiler.md) | Request timing and performance analysis                    |
 | [Compression](compression.md) | Brotli compression for responses                           |
+| [Static Caching](static-caching.md) | Cache-Control, ETag, Last-Modified for static files        |
 | [Single Entry Point](single-entry-point.md) | Laravel/Symfony routing mode                               |
 | [Metrics](metrics.md) | Prometheus metrics for monitoring                          |
 | [Health Checks](health-checks.md) | Docker and Kubernetes probes                               |

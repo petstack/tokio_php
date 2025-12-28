@@ -14,6 +14,7 @@ tokio_php is configured via environment variables.
 | `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
+| `STATIC_CACHE_TTL` | `1d` | Static file cache duration (1d, 1w, 1m, 1y, off) |
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
@@ -225,6 +226,48 @@ spec:
           exec:
             command: ["sleep", "5"]  # LB drain time
 ```
+
+### STATIC_CACHE_TTL
+
+Cache duration for static files (CSS, JS, images, fonts, etc.).
+
+```bash
+# Default: 1 day
+STATIC_CACHE_TTL=1d
+
+# 1 week (recommended for production)
+STATIC_CACHE_TTL=1w
+
+# 1 month
+STATIC_CACHE_TTL=1m
+
+# 1 year (for versioned assets)
+STATIC_CACHE_TTL=1y
+
+# Disable caching
+STATIC_CACHE_TTL=off
+```
+
+| Format | Duration | Seconds |
+|--------|----------|---------|
+| `1s` | 1 second | 1 |
+| `1h` | 1 hour | 3,600 |
+| `1d` | 1 day | 86,400 |
+| `1w` | 1 week | 604,800 |
+| `1m` | ~1 month | 2,592,000 |
+| `1y` | ~1 year | 31,536,000 |
+| `off` | disabled | - |
+
+**Response headers when enabled:**
+
+```http
+Cache-Control: public, max-age=86400
+Expires: Mon, 30 Dec 2024 12:00:00 GMT
+ETag: "1a2b-65a51a2d"
+Last-Modified: Sun, 29 Dec 2024 12:00:00 GMT
+```
+
+**Note:** Only static files receive caching headers. PHP responses are not affected.
 
 ### ACCESS_LOG
 
@@ -495,6 +538,7 @@ DOCUMENT_ROOT=/var/www/html/public \
 INDEX_FILE=index.php \
 INTERNAL_ADDR=0.0.0.0:9090 \
 ERROR_PAGES_DIR=/var/www/html/errors \
+STATIC_CACHE_TTL=1w \
 ACCESS_LOG=1 \
 PROFILE=0 \
 USE_EXT=1 \
@@ -521,6 +565,7 @@ services:
       - INDEX_FILE=${INDEX_FILE:-}
       - INTERNAL_ADDR=0.0.0.0:9090
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-}
+      - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       - PROFILE=${PROFILE:-0}
       - USE_EXT=${USE_EXT:-1}  # Recommended: 2x faster
       - USE_STUB=${USE_STUB:-0}

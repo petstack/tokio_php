@@ -150,6 +150,18 @@ async fn async_main(
         .unwrap_or(30);
     config = config.with_drain_timeout(Duration::from_secs(drain_timeout_secs));
 
+    // Static file cache TTL (default: 1d, "off" to disable)
+    let static_cache_ttl = std::env::var("STATIC_CACHE_TTL")
+        .ok()
+        .map(|v| server::config::StaticCacheTtl::parse(&v))
+        .unwrap_or_default();
+    if static_cache_ttl.is_enabled() {
+        info!("Static file caching: {} seconds", static_cache_ttl.as_secs());
+    } else {
+        info!("Static file caching: disabled");
+    }
+    config = config.with_static_cache_ttl(static_cache_ttl);
+
     // Check for stub mode (via env var or feature)
     let use_stub = std::env::var("USE_STUB")
         .map(|v| v == "1" || v.to_lowercase() == "true")

@@ -4,6 +4,81 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Static file cache TTL configuration.
+/// - None: caching disabled ("off")
+/// - Some(duration): cache for specified duration
+#[derive(Clone, Debug)]
+pub struct StaticCacheTtl(pub Option<Duration>);
+
+impl StaticCacheTtl {
+    /// Parse duration string (e.g., "1d", "1w", "1m", "1y", "off").
+    /// Default: 1 day.
+    pub fn parse(s: &str) -> Self {
+        let s = s.trim().to_lowercase();
+
+        if s == "off" || s == "0" || s.is_empty() {
+            return Self(None);
+        }
+
+        // Parse format: number + unit (e.g., "1d", "2w", "30m")
+        let (num_str, unit) = if s.ends_with('d') {
+            (&s[..s.len()-1], "d")
+        } else if s.ends_with('w') {
+            (&s[..s.len()-1], "w")
+        } else if s.ends_with('m') {
+            (&s[..s.len()-1], "m")
+        } else if s.ends_with('y') {
+            (&s[..s.len()-1], "y")
+        } else if s.ends_with('h') {
+            (&s[..s.len()-1], "h")
+        } else if s.ends_with('s') {
+            (&s[..s.len()-1], "s")
+        } else {
+            // Try parsing as seconds
+            if let Ok(secs) = s.parse::<u64>() {
+                return Self(Some(Duration::from_secs(secs)));
+            }
+            return Self::default();
+        };
+
+        let num: u64 = match num_str.parse() {
+            Ok(n) => n,
+            Err(_) => return Self::default(),
+        };
+
+        let secs = match unit {
+            "s" => num,
+            "h" => num * 3600,
+            "d" => num * 86400,
+            "w" => num * 86400 * 7,
+            "m" => num * 86400 * 30,  // ~30 days
+            "y" => num * 86400 * 365, // ~365 days
+            _ => return Self::default(),
+        };
+
+        Self(Some(Duration::from_secs(secs)))
+    }
+
+    /// Check if caching is enabled.
+    #[inline]
+    pub fn is_enabled(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Get TTL in seconds (0 if disabled).
+    #[inline]
+    pub fn as_secs(&self) -> u64 {
+        self.0.map(|d| d.as_secs()).unwrap_or(0)
+    }
+}
+
+impl Default for StaticCacheTtl {
+    fn default() -> Self {
+        // Default: 1 day
+        Self(Some(Duration::from_secs(86400)))
+    }
+}
+
 /// TLS connection information for profiling
 #[derive(Clone, Default)]
 pub struct TlsInfo {
@@ -31,6 +106,8 @@ pub struct ServerConfig {
     pub error_pages_dir: Option<String>,
     /// Graceful shutdown drain timeout
     pub drain_timeout: Duration,
+    /// Static file cache TTL (default: 1d, "off" to disable)
+    pub static_cache_ttl: StaticCacheTtl,
 }
 
 impl ServerConfig {
@@ -45,6 +122,7 @@ impl ServerConfig {
             internal_addr: None,
             error_pages_dir: None,
             drain_timeout: Duration::from_secs(30),
+            static_cache_ttl: StaticCacheTtl::default(),
         }
     }
 
@@ -81,6 +159,11 @@ impl ServerConfig {
 
     pub fn with_drain_timeout(mut self, timeout: Duration) -> Self {
         self.drain_timeout = timeout;
+        self
+    }
+
+    pub fn with_static_cache_ttl(mut self, ttl: StaticCacheTtl) -> Self {
+        self.static_cache_ttl = ttl;
         self
     }
 

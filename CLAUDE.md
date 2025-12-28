@@ -166,6 +166,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., 404.html) |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
+| `STATIC_CACHE_TTL` | `1d` | Static file cache duration (1d, 1w, 1m, 1y, off) |
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
