@@ -61,8 +61,10 @@ RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
 # Runtime stage - use same ZTS image
 FROM php:8.4-zts-alpine
 
-# Install runtime dependencies
-RUN apk add --no-cache libgcc
+# Install runtime dependencies and create www-data user
+RUN apk add --no-cache libgcc curl && \
+    addgroup -g 82 -S www-data 2>/dev/null || true && \
+    adduser -u 82 -D -S -G www-data www-data 2>/dev/null || true
 
 # Copy tokio_sapi extension from builder to correct PHP extensions directory
 COPY --from=builder /usr/local/lib/php/extensions/no-debug-zts-20240924/tokio_sapi.so \
@@ -84,7 +86,7 @@ RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
     echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini && \
     # Preloading - runs preload.php at startup to cache framework classes
     echo "opcache.preload=/var/www/html/preload.php" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.preload_user=root" >> /usr/local/etc/php/conf.d/opcache.ini
+    echo "opcache.preload_user=www-data" >> /usr/local/etc/php/conf.d/opcache.ini
 
 # Create app directory
 WORKDIR /app
@@ -92,16 +94,19 @@ WORKDIR /app
 # Copy the built binary
 COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
 
-# Create directory for PHP files
-RUN mkdir -p /var/www/html
+# Create directory for PHP files with proper ownership
+RUN mkdir -p /var/www/html && chown -R www-data:www-data /var/www/html
 
 # Copy PHP files
-COPY www/symfony /var/www/html
+COPY --chown=www-data:www-data www/symfony /var/www/html
 
 # Copy preload script
-COPY www/preload.php /var/www/html/preload.php
-COPY www/opcache_status.php /var/www/html/opcache_status.php
+COPY --chown=www-data:www-data www/preload.php /var/www/html/preload.php
+COPY --chown=www-data:www-data www/opcache_status.php /var/www/html/opcache_status.php
 
 EXPOSE 8080
+
+# Run as non-root user
+USER www-data
 
 CMD ["tokio_php"]

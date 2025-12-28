@@ -19,6 +19,7 @@ Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
 | [Rate Limiting](rate-limiting.md) | Per-IP request throttling                                  |
 | [Error Pages](error-pages.md) | Custom HTML error pages for 4xx/5xx                        |
 | [Graceful Shutdown](graceful-shutdown.md) | Zero-downtime deployments with connection draining         |
+| [Security](security.md) | Non-root execution, best practices                         |
 | [Configuration](configuration.md) | Environment variables reference                            |
 | [tokio_sapi Extension](tokio-sapi-extension.md) | PHP extension for FFI superglobals                         |
 

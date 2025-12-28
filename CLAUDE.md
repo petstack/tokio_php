@@ -331,6 +331,33 @@ Request → Rate Limit (per-IP) → Queue (global) → Worker
 | `RATE_LIMIT` | Per-IP | 429 | Fairness, abuse prevention |
 | `QUEUE_CAPACITY` | Global | 503 | Server overload protection |
 
+## Security
+
+### Non-root Execution
+
+The server runs as `www-data` user (UID 82) for security:
+
+```dockerfile
+USER www-data
+CMD ["tokio_php"]
+```
+
+- No root privileges at runtime
+- Standard UID 82 (compatible with nginx/apache)
+- OPcache preload runs as `www-data`
+- All files in `/var/www/html` owned by `www-data`
+
+### Verify
+
+```bash
+docker compose exec tokio_php whoami
+# www-data
+
+docker compose exec tokio_php ps aux
+# PID   USER     COMMAND
+#   1   www-data tokio_php
+```
+
 ## Docker Services
 
 | Service | Port | Description |
