@@ -320,3 +320,102 @@ This solves the issue where `header('Location: ...'); exit();` wouldn't work wit
 | FFI superglobals | ~40μs | Direct C calls to set $_GET, $_POST, etc. |
 | Header capture | ~5μs | Thread-local storage |
 | **Total** | **~65μs** | vs ~4ms for nginx+FastCGI |
+
+## Comparison with FrankenPHP
+
+FrankenPHP is a modern PHP application server written in Go, built on Caddy. It embeds PHP directly into the web server using CGO, similar to tokio_php's approach.
+
+### Benchmark Results
+
+| Server | RPS (bench.php) | RPS (index.php) | Latency |
+|--------|-----------------|-----------------|---------|
+| **tokio_php** | **32,600** | **30,250** | 3.1ms |
+| FrankenPHP | 18,350 | 17,530 | 5.5ms |
+
+**tokio_php is 1.8x faster than FrankenPHP** (same hardware, tokio_php 14 workers, FrankenPHP 29 threads).
+
+### Architecture Comparison
+
+| Aspect | tokio_php | FrankenPHP |
+|--------|-----------|------------|
+| Language | Rust + Tokio | Go + Caddy |
+| PHP Integration | php-embed SAPI | CGO bindings |
+| Threading Model | Multi-threaded pool | Goroutines |
+| HTTP Server | Hyper | Caddy |
+| Protocol Support | HTTP/1.1, HTTP/2, HTTPS | HTTP/1-3, HTTPS, QUIC |
+| Worker Mode | Always persistent | Optional (worker mode) |
+
+### Request Flow Comparison
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        FrankenPHP                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Client ──► Caddy (Go) ──► CGO bridge ──► PHP (Zend Engine)     │
+│                                                                  │
+│  Overhead:                                                       │
+│  • CGO call overhead (~1-2ms per request)                       │
+│  • Go ↔ C memory copying                                        │
+│  • Goroutine scheduling                                          │
+│  • Caddy middleware processing                                   │
+│                                                                  │
+│  Total overhead: ~2.5ms                                          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                        tokio_php                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Client ──► Hyper (Rust) ──► direct FFI ──► PHP (Zend Engine)   │
+│                                                                  │
+│  Advantages:                                                     │
+│  • No CGO overhead (Rust has zero-cost FFI)                     │
+│  • Direct memory access, no copying                              │
+│  • Predictable thread scheduling                                 │
+│  • Minimal HTTP processing                                       │
+│                                                                  │
+│  Total overhead: ~0.1ms                                          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why tokio_php is Faster
+
+1. **No CGO overhead** — Go's CGO has significant call overhead (~100-200ns per call). Rust's FFI is zero-cost.
+
+2. **No memory copying** — CGO requires copying data between Go and C heaps. Rust can share memory directly.
+
+3. **Thread-based vs Goroutines** — Goroutines add scheduler overhead. OS threads are more predictable for CPU-bound PHP work.
+
+4. **Minimal HTTP layer** — Hyper is a minimal HTTP implementation. Caddy includes many middleware by default.
+
+5. **Native async** — Tokio's async model maps directly to epoll/kqueue. Go's runtime adds abstraction.
+
+### Feature Comparison
+
+| Feature | tokio_php | FrankenPHP |
+|---------|-----------|------------|
+| OPcache + JIT | ✓ | ✓ |
+| HTTP/2 | ✓ | ✓ |
+| HTTP/3 (QUIC) | ✗ | ✓ |
+| Worker Mode | Built-in | Optional |
+| Early Hints | ✗ | ✓ |
+| Automatic HTTPS | ✗ | ✓ (ACME) |
+| Mercure Support | ✗ | ✓ |
+| Binary Size | ~15MB | ~100MB |
+
+### When to Choose
+
+**Choose tokio_php when:**
+- Maximum performance is critical
+- You need minimal resource usage
+- Deploying behind a reverse proxy (nginx/Traefik)
+- Custom integration with Rust ecosystem
+
+**Choose FrankenPHP when:**
+- You need HTTP/3 or Early Hints
+- Automatic HTTPS with Let's Encrypt is important
+- Real-time features with Mercure are needed
+- Single binary with batteries included

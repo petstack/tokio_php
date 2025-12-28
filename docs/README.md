@@ -63,6 +63,15 @@ docker compose down
 
 Use `USE_EXT=1` for production (2x faster).
 
+### tokio_php vs FrankenPHP
+
+| Server | RPS (bench.php) | RPS (index.php) | Latency |
+|--------|-----------------|-----------------|---------|
+| **tokio_php** | **32,600** | **30,250** | 3.1ms |
+| FrankenPHP | 18,350 | 17,530 | 5.5ms |
+
+**tokio_php is 1.8x faster** — zero-cost Rust FFI vs Go CGO overhead.
+
 ### OPcache Impact
 
 | Configuration | Requests/sec | Latency |
