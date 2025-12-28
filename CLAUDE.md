@@ -94,6 +94,25 @@ Located in `ext/` directory. Provides:
 - PHP 8.4 ZTS (Thread Safe) build required
 - Single-threaded Tokio runtime (PHP workers handle blocking work)
 - OPcache settings in Dockerfile: `opcache.jit=tracing`, `opcache.validate_timestamps=0`
+- Preloading enabled via `opcache.preload` for framework optimization
+
+### OPcache Preloading
+
+Preloading runs `preload.php` at server startup to cache framework classes:
+
+```php
+// www/preload.php
+<?php
+require __DIR__ . '/vendor/autoload.php';
+opcache_compile_file(__DIR__ . '/src/Kernel.php');
+```
+
+Benefits:
+- Eliminates compilation time for preloaded files
+- Classes are "linked" at startup
+- +30-60% performance for frameworks
+
+Check status: `curl http://localhost:8080/opcache_status.php`
 
 ## Environment Variables
 

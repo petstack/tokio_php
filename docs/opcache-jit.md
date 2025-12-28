@@ -133,6 +133,59 @@ echo "JIT buffer used: " . round($jit['buffer_used'] / 1024 / 1024, 2) . " MB\n"
 phpinfo();
 ```
 
+## Preloading
+
+PHP 7.4+ supports preloading - loading scripts once at startup for all requests.
+
+### preload.php
+
+```php
+<?php
+// /var/www/html/preload.php
+
+// Preload framework autoloader
+require __DIR__ . '/vendor/autoload.php';
+
+// Preload specific classes
+opcache_compile_file(__DIR__ . '/src/Kernel.php');
+opcache_compile_file(__DIR__ . '/src/Controller/BaseController.php');
+
+// Preload entire directory
+function preloadDir(string $path): void {
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($path)
+    );
+    foreach ($iterator as $file) {
+        if ($file->getExtension() === 'php') {
+            opcache_compile_file($file->getPathname());
+        }
+    }
+}
+
+preloadDir(__DIR__ . '/src/');
+```
+
+### Configuration
+
+```ini
+; Enable preloading
+opcache.preload=/var/www/html/preload.php
+opcache.preload_user=www-data
+```
+
+### Benefits
+
+- Eliminates compilation time for preloaded files
+- Classes are "linked" at startup (faster autoloading)
+- Shared memory across all workers
+- +30-60% performance for frameworks
+
+### Limitations
+
+- Requires server restart to update preloaded code
+- Only works with cli-server SAPI (tokio_php uses this)
+- Cannot preload files that define functions/classes conditionally
+
 ## Best Practices
 
 ### Production Settings
@@ -148,6 +201,10 @@ opcache.max_accelerated_files=20000
 ; Enable JIT with large buffer
 opcache.jit=tracing
 opcache.jit_buffer_size=128M
+
+; Preloading
+opcache.preload=/var/www/html/preload.php
+opcache.preload_user=root
 ```
 
 ### Development Settings

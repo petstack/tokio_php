@@ -71,7 +71,8 @@ COPY --from=builder /usr/local/lib/php/extensions/no-debug-zts-20240924/tokio_sa
 # Configure tokio_sapi extension (dynamic .so for PHP functions)
 RUN echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
 
-# Configure OPcache + JIT - works by overriding SAPI name to "cli-server" before init
+# Configure OPcache + JIT + Preloading
+# Works by overriding SAPI name to "cli-server" before init
 RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
     echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
     echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini && \
@@ -80,7 +81,10 @@ RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
     echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
     echo "opcache.revalidate_freq=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
     echo "opcache.jit_buffer_size=64M" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini
+    echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    # Preloading - runs preload.php at startup to cache framework classes
+    echo "opcache.preload=/var/www/html/preload.php" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.preload_user=root" >> /usr/local/etc/php/conf.d/opcache.ini
 
 # Create app directory
 WORKDIR /app
@@ -93,6 +97,10 @@ RUN mkdir -p /var/www/html
 
 # Copy PHP files
 COPY www/symfony /var/www/html
+
+# Copy preload script
+COPY www/preload.php /var/www/html/preload.php
+COPY www/opcache_status.php /var/www/html/opcache_status.php
 
 EXPOSE 8080
 
