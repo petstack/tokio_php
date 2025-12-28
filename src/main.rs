@@ -1,4 +1,5 @@
 mod executor;
+pub mod logging;
 pub mod profiler;
 mod server;
 mod types;
@@ -8,7 +9,7 @@ use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::server::{Server, ServerConfig};
+use crate::server::{access_log, Server, ServerConfig};
 
 #[cfg(feature = "php")]
 use crate::executor::PhpExecutor;
@@ -19,17 +20,27 @@ use crate::executor::ExtExecutor;
 use crate::executor::StubExecutor;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Initialize logging
+    // Initialize logging with custom JSON formatter
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "tokio_php=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .event_format(logging::JsonFormatter::new("tokio_php"))
+                .with_ansi(false),
+        )
         .init();
 
     // Initialize profiler
     profiler::init();
+
+    // Initialize access logging
+    let access_log_enabled = std::env::var("ACCESS_LOG")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+    access_log::init(access_log_enabled);
 
     info!("Starting tokio_php server...");
 

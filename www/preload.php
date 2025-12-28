@@ -103,10 +103,20 @@ foreach ($preloadFiles as $file) {
 $stats['new_classes'] = count(get_declared_classes()) - $stats['classes'];
 $stats['new_functions'] = count(get_defined_functions()['user']) - $stats['functions'];
 
-// Log preload results (visible in server startup logs)
-error_log(sprintf(
-    "Preload complete: %d files, %d classes, %d functions",
-    $stats['files'],
-    $stats['new_classes'],
-    $stats['new_functions']
-));
+// Log preload results in unified JSON format
+$logEntry = json_encode([
+    'ts' => gmdate('Y-m-d\TH:i:s.') . sprintf('%03d', (int)(microtime(true) * 1000) % 1000) . 'Z',
+    'level' => 'info',
+    'type' => 'app',
+    'msg' => sprintf('Preload complete: %d files, %d classes, %d functions',
+        $stats['files'], $stats['new_classes'], $stats['new_functions']),
+    'ctx' => ['service' => 'tokio_php'],
+    'data' => [
+        'files' => $stats['files'],
+        'classes' => $stats['new_classes'],
+        'functions' => $stats['new_functions'],
+    ],
+], JSON_UNESCAPED_SLASHES);
+
+// Output to stderr (captured by Docker)
+file_put_contents('php://stderr', $logEntry . "\n");

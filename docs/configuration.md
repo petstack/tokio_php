@@ -14,6 +14,7 @@ tokio_php is configured via environment variables.
 | `INTERNAL_ADDR` | _(empty)_ | Internal server for /health and /metrics |
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
+| `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
 | `PROFILE` | `0` | Enable request profiling |
@@ -223,6 +224,51 @@ spec:
             command: ["sleep", "5"]  # LB drain time
 ```
 
+### ACCESS_LOG
+
+Enable access logs.
+
+```bash
+# Disabled (default)
+ACCESS_LOG=0
+
+# Enabled
+ACCESS_LOG=1
+```
+
+Access logs use unified JSON format:
+
+```json
+{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"access","msg":"GET /api/users 200","ctx":{"service":"tokio_php"},"data":{"method":"GET","path":"/api/users","status":200,"bytes":1234,"duration_ms":5.25,"ip":"10.0.0.1"}}
+```
+
+**Data fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `method` | string | HTTP method |
+| `path` | string | Request path |
+| `query` | string? | Query string |
+| `http` | string | HTTP version |
+| `status` | number | Response status code |
+| `bytes` | number | Response body size |
+| `duration_ms` | number | Request duration (ms) |
+| `ip` | string | Client IP |
+| `ua` | string? | User-Agent |
+| `referer` | string? | Referer |
+| `xff` | string? | X-Forwarded-For |
+| `tls` | string? | TLS protocol |
+
+**Docker/Kubernetes integration:**
+
+```bash
+# Filter by type
+docker compose logs | jq -c 'select(.type == "access")'
+
+# Filter errors (4xx/5xx)
+docker compose logs | jq -c 'select(.data.status >= 400)'
+```
+
 ### USE_STUB
 
 Enable stub mode for benchmarking without PHP.
@@ -285,26 +331,25 @@ Both variables must be set for TLS to be enabled.
 
 ### RUST_LOG
 
-Configure log level and filtering.
+Configure log level and filtering. All logs use unified JSON format.
 
 ```bash
-# Default - info level for tokio_php
+# Default - info level
 RUST_LOG=tokio_php=info
 
-# Debug level
+# Debug mode
 RUST_LOG=tokio_php=debug
 
 # Trace level (very verbose)
 RUST_LOG=tokio_php=trace
 
-# Warning only
+# Warning only (suppress info)
 RUST_LOG=tokio_php=warn
-
-# Multiple targets
-RUST_LOG=tokio_php=debug,hyper=info
 ```
 
 Log levels: `trace`, `debug`, `info`, `warn`, `error`
+
+**Note:** Access logs (when `ACCESS_LOG=1`) are always output regardless of RUST_LOG level. Use `jq` to filter by type.
 
 ## Configuration Examples
 
@@ -365,6 +410,7 @@ DOCUMENT_ROOT=/var/www/html/public \
 INDEX_FILE=index.php \
 INTERNAL_ADDR=0.0.0.0:9090 \
 ERROR_PAGES_DIR=/var/www/html/errors \
+ACCESS_LOG=1 \
 PROFILE=0 \
 USE_EXT=0 \
 RUST_LOG=tokio_php=info \
@@ -393,6 +439,7 @@ services:
       - PROFILE=${PROFILE:-0}
       - USE_EXT=${USE_EXT:-0}
       - USE_STUB=${USE_STUB:-0}
+      - ACCESS_LOG=${ACCESS_LOG:-0}
       - RUST_LOG=${RUST_LOG:-tokio_php=info}
     volumes:
       - ./www:/var/www/html:ro

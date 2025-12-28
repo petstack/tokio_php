@@ -1,7 +1,8 @@
 //! HTTP server with pluggable script executor.
 
+pub mod access_log;
 pub mod config;
-mod connection;
+pub mod connection;
 pub mod error_pages;
 mod internal;
 pub mod request;

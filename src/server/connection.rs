@@ -5,7 +5,66 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// Format current time as ISO 8601 (lightweight, no chrono dependency).
+pub fn chrono_lite_iso8601() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let secs = now.as_secs();
+    let millis = now.subsec_millis();
+
+    // Calculate date/time components
+    // Days since Unix epoch
+    let days = secs / 86400;
+    let day_secs = secs % 86400;
+
+    let hours = day_secs / 3600;
+    let minutes = (day_secs % 3600) / 60;
+    let seconds = day_secs % 60;
+
+    // Calculate year/month/day from days since epoch
+    // Simplified algorithm (valid for 1970-2099)
+    let mut y = 1970;
+    let mut remaining_days = days as i64;
+
+    loop {
+        let year_days = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining_days < year_days {
+            break;
+        }
+        remaining_days -= year_days;
+        y += 1;
+    }
+
+    let is_leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_days: [i64; 12] = if is_leap {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut m = 0;
+    for (i, &days_in_month) in month_days.iter().enumerate() {
+        if remaining_days < days_in_month {
+            m = i + 1;
+            break;
+        }
+        remaining_days -= days_in_month;
+    }
+    let d = remaining_days + 1;
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y, m, d, hours, minutes, seconds, millis
+    )
+}
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -18,6 +77,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error};
 
+use super::access_log;
 use super::config::TlsInfo;
 use super::error_pages::{accepts_html, ErrorPages};
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
@@ -204,6 +264,36 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         let is_head = *req.method() == Method::HEAD;
 
+        // Capture data for access logging (before consuming request)
+        let access_log_enabled = access_log::is_enabled();
+        let method_str = req.method().to_string();
+        let uri_str = req.uri().path().to_string();
+        let query_str = req.uri().query().map(|s| s.to_string());
+        let http_version = format!("{:?}", req.version());
+
+        // Extract headers for access log
+        let (user_agent_log, referer_log, xff_log) = if access_log_enabled {
+            (
+                req.headers()
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string()),
+                req.headers()
+                    .get("referer")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string()),
+                req.headers()
+                    .get("x-forwarded-for")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string()),
+            )
+        } else {
+            (None, None, None)
+        };
+
+        // Extract TLS protocol for access log (before tls_info is moved)
+        let tls_protocol_log = tls_info.as_ref().map(|t| t.protocol.clone());
+
         // Check if client accepts HTML (for custom error pages)
         let client_accepts_html = req
             .headers()
@@ -261,6 +351,30 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let response_time_us = request_start.elapsed().as_micros() as u64;
         self.request_metrics.record_response_time(response_time_us);
         self.request_metrics.increment_status(response.status().as_u16());
+
+        // Access logging
+        if access_log_enabled {
+            let duration = request_start.elapsed();
+            let body_size = response.body().size_hint().exact().unwrap_or(0);
+            let ts = chrono_lite_iso8601();
+            let ip_str = remote_addr.ip().to_string();
+
+            access_log::log_request(
+                &ts,
+                &ip_str,
+                &method_str,
+                &uri_str,
+                query_str.as_deref(),
+                &http_version,
+                response.status().as_u16(),
+                body_size,
+                duration.as_secs_f64() * 1000.0,
+                user_agent_log.as_deref(),
+                referer_log.as_deref(),
+                xff_log.as_deref(),
+                tls_protocol_log.as_deref(),
+            );
+        }
 
         Ok(response)
     }
