@@ -14,7 +14,8 @@ Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
 | [Profiler](profiler.md) | Request timing and performance analysis                    |
 | [Compression](compression.md) | Brotli compression for responses                           |
 | [Single Entry Point](single-entry-point.md) | Laravel/Symfony routing mode                               |
-| [Metrics](metrics.md) | Health checks and Prometheus metrics                       |
+| [Metrics](metrics.md) | Prometheus metrics for monitoring                          |
+| [Health Checks](health-checks.md) | Docker and Kubernetes probes                               |
 | [Error Pages](error-pages.md) | Custom HTML error pages for 4xx/5xx                        |
 | [Graceful Shutdown](graceful-shutdown.md) | Zero-downtime deployments with connection draining         |
 | [Configuration](configuration.md) | Environment variables reference                            |

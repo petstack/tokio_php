@@ -32,6 +32,12 @@ services:
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 #    logging:
 #      driver: "none"  # или ограничить: driver: "json-file", options: { max-size: "1m" }
 
@@ -53,11 +59,18 @@ services:
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - TLS_CERT=/certs/cert.pem
       - TLS_KEY=/certs/key.pem
+      - INTERNAL_ADDR=0.0.0.0:9090
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
       - ACCESS_LOG=${ACCESS_LOG:-1}
     volumes:
       - ./www:/var/www/html:ro
       - ./certs:/certs:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     profiles:
       - tls
