@@ -135,3 +135,12 @@ Static file caching works together with Brotli compression. Compressed responses
 - `Vary: Accept-Encoding`
 
 The `Vary` header ensures proper cache key separation for compressed vs uncompressed versions.
+
+### Compression Size Limits
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MIN_COMPRESSION_SIZE` | 256 bytes | Files smaller than this are not compressed |
+| `MAX_COMPRESSION_SIZE` | 3 MB | Files larger than this are not compressed |
+
+Files outside this range are served without compression to avoid overhead (small files) or blocking (large files).

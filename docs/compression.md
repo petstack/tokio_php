@@ -7,7 +7,7 @@ tokio_php automatically compresses responses using Brotli for clients that suppo
 Compression is applied when all conditions are met:
 
 1. Client sends `Accept-Encoding: br` header
-2. Response body is >= 256 bytes
+2. Response body is >= 256 bytes and <= 3 MB
 3. Content-Type is compressible (text-based)
 
 ## Compression Results
@@ -195,21 +195,23 @@ fn compress_brotli(data: &[u8]) -> Vec<u8> {
 
 ## Configuration
 
-Currently, compression settings are hardcoded:
+Compression settings are defined in `src/server/response/compression.rs`:
 
 | Setting | Value | Description |
 |---------|-------|-------------|
-| Min size | 256 bytes | Don't compress small responses |
-| Quality | 4 | Brotli quality level (0-11) |
-| Window | 22 | Brotli window size |
+| `MIN_COMPRESSION_SIZE` | 256 bytes | Don't compress small responses |
+| `MAX_COMPRESSION_SIZE` | 3 MB | Don't compress large responses (too slow) |
+| `BROTLI_QUALITY` | 4 | Brotli quality level (0-11) |
+| `BROTLI_WINDOW` | 20 | Brotli window size |
 
-Future versions may expose these as environment variables.
+Files larger than 3 MB are served uncompressed to avoid blocking the response.
 
 ## Limitations
 
 - Only Brotli is supported (no gzip fallback)
 - Pre-compressed files are not served directly
 - Compression is not streaming (full response buffered)
+- Files > 3 MB are not compressed (to avoid blocking)
 
 ## Best Practices
 

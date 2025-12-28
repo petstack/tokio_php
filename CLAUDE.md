@@ -432,8 +432,12 @@ Full superglobals: `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQU
 
 Brotli compression is automatically applied when:
 - Client sends `Accept-Encoding: br` header
-- Response body >= 256 bytes
+- Response body >= 256 bytes and <= 3 MB
 - Content-Type is compressible (text/html, text/css, application/json, etc.)
+
+Size limits (defined in `src/server/response/compression.rs`):
+- `MIN_COMPRESSION_SIZE` = 256 bytes (smaller files don't benefit)
+- `MAX_COMPRESSION_SIZE` = 3 MB (larger files take too long)
 
 Compressed responses include:
 - `Content-Encoding: br` header

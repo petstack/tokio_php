@@ -7,7 +7,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Response, StatusCode};
 
-use super::compression::{compress_brotli, should_compress_mime, MIN_COMPRESSION_SIZE};
+use super::compression::{compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE};
 use super::EMPTY_BODY;
 use crate::server::config::StaticCacheTtl;
 
@@ -238,8 +238,10 @@ pub async fn serve_static_file(
                 .to_string();
 
             // Check if we should compress this file
-            let should_compress =
-                use_brotli && contents.len() >= MIN_COMPRESSION_SIZE && should_compress_mime(&mime);
+            let should_compress = use_brotli
+                && contents.len() >= MIN_COMPRESSION_SIZE
+                && contents.len() <= MAX_COMPRESSION_SIZE
+                && should_compress_mime(&mime);
 
             let (final_body, is_compressed) = if should_compress {
                 if let Some(compressed) = compress_brotli(&contents) {

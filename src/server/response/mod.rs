@@ -8,7 +8,7 @@ use http_body_util::Full;
 use hyper::{Response, StatusCode};
 
 use crate::types::ScriptResponse;
-use compression::{compress_brotli, should_compress_mime, MIN_COMPRESSION_SIZE};
+use compression::{compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE};
 
 pub use compression::accepts_brotli;
 pub use static_file::serve_static_file;
@@ -128,8 +128,10 @@ pub fn from_script_response(
 
     // Determine body and compression
     let body_bytes = script_response.body;
-    let should_compress =
-        use_brotli && body_bytes.len() >= MIN_COMPRESSION_SIZE && should_compress_mime(&actual_content_type);
+    let should_compress = use_brotli
+        && body_bytes.len() >= MIN_COMPRESSION_SIZE
+        && body_bytes.len() <= MAX_COMPRESSION_SIZE
+        && should_compress_mime(&actual_content_type);
 
     let (final_body, is_compressed) = if should_compress {
         match compress_brotli(body_bytes.as_bytes()) {

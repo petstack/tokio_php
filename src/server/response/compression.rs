@@ -3,6 +3,9 @@
 /// Minimum size to consider compression (smaller bodies don't benefit)
 pub const MIN_COMPRESSION_SIZE: usize = 256;
 
+/// Maximum size to compress (larger files take too long, diminishing returns)
+pub const MAX_COMPRESSION_SIZE: usize = 3 * 1024 * 1024; // 3 MB
+
 /// Brotli compression quality (0-11, higher = better compression but slower)
 const BROTLI_QUALITY: u32 = 4;
 
