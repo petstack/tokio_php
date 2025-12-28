@@ -1,124 +1,145 @@
 <?php
-// Handle different header tests
 $action = $_GET['action'] ?? '';
+$message = '';
 
 switch ($action) {
     case 'redirect':
         header('Location: /headers.php?action=redirected');
         exit;
-
     case 'redirect301':
         http_response_code(301);
         header('Location: /headers.php?action=redirected');
         exit;
-
     case 'redirected':
         $message = 'You were redirected here!';
         break;
-
     case 'json':
         header('Content-Type: application/json');
-        echo json_encode([
-            'status' => 'ok',
-            'message' => 'This is JSON response',
-            'time' => date('Y-m-d H:i:s')
-        ]);
+        echo json_encode(['status' => 'ok', 'message' => 'JSON response', 'time' => date('Y-m-d H:i:s')]);
         exit;
-
     case 'custom':
         header('X-Custom-Header: Hello from PHP');
         header('X-Powered-By: tokio_php');
-        header('X-Request-Time: ' . date('c'));
+        $message = 'Custom headers added. Check DevTools Network tab.';
         break;
-
     case '404':
         http_response_code(404);
+        $message = 'This page returned 404 status code.';
         break;
-
     case '500':
         http_response_code(500);
+        $message = 'This page returned 500 status code.';
         break;
-
     case 'nocontent':
         http_response_code(204);
         exit;
-
-    case 'earlyhints':
-        // HTTP 103 Early Hints - send preload hints before main response
-        http_response_code(103);
-        header('Link: </style.css>; rel=preload; as=style');
-        header('Link: </script.js>; rel=preload; as=script', false);
-        // Note: In a real scenario, you would flush this and then send 200 OK
-        // For testing, we just check if 103 status code works
-        exit;
-
-    default:
-        $message = '';
 }
 ?>
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Headers Test - tokio_php</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Headers - tokio_php</title>
     <style>
-        body { font-family: sans-serif; margin: 50px auto; max-width: 700px; background: #1a1a2e; color: #eee; padding: 20px; }
-        h1 { color: #00d9ff; }
-        .info { background: #16213e; padding: 15px; border-radius: 8px; margin: 20px 0; }
-        .info h3 { color: #e94560; margin-top: 0; }
-        pre { background: #0f0f23; padding: 10px; border-radius: 4px; }
-        a { color: #00d9ff; }
-        .btn { display: inline-block; background: #e94560; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; margin: 5px; }
-        .btn:hover { background: #c73e54; }
-        code { background: #0f0f23; padding: 2px 6px; border-radius: 4px; }
-        .success { background: #2d5a3d; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 720px; margin: 40px auto; padding: 20px; background: #fff; color: #333; line-height: 1.6; }
+        h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+        .subtitle { color: #666; margin-bottom: 32px; }
+        .section { margin-bottom: 28px; }
+        .section-title { font-size: 12px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+        a { color: #0066cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 13px; font-family: 'SF Mono', Consolas, monospace; }
+        pre { background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 13px; overflow-x: auto; font-family: 'SF Mono', Consolas, monospace; }
+        .btn { display: inline-block; padding: 8px 16px; background: #0066cc; color: #fff; border-radius: 6px; font-size: 14px; margin-right: 8px; margin-bottom: 8px; }
+        .btn:hover { background: #0052a3; text-decoration: none; }
+        .card { background: #fafafa; border: 1px solid #e8e8e8; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .nav { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #eee; }
+        .success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; }
+
+        .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+        .tab { padding: 6px 12px; background: #f5f5f5; border: 1px solid #e8e8e8; border-radius: 6px; font-family: 'SF Mono', Consolas, monospace; font-size: 13px; color: #666; cursor: pointer; transition: all 0.15s ease; }
+        .tab:hover { background: #eee; color: #333; }
+        .tab.active { background: #0066cc; border-color: #0066cc; color: #fff; }
+        .tab-content { display: none; background: #fafafa; border: 1px solid #e8e8e8; border-radius: 8px; overflow: hidden; }
+        .tab-content.active { display: block; }
+        .tab-header { padding: 10px 14px; background: #f0f0f0; border-bottom: 1px solid #e8e8e8; font-size: 12px; color: #666; }
+        .tab-body { max-height: 320px; overflow-y: auto; }
+        .tab-empty { padding: 24px; text-align: center; color: #999; font-size: 13px; }
+        .kv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .kv-table tr { border-bottom: 1px solid #eee; }
+        .kv-table tr:last-child { border-bottom: none; }
+        .kv-table tr:hover { background: #f5f5f5; }
+        .kv-table td { padding: 8px 14px; vertical-align: top; }
+        .kv-table .key { width: 35%; font-family: 'SF Mono', Consolas, monospace; color: #0066cc; word-break: break-all; }
+        .kv-table .val { color: #333; word-break: break-all; font-family: 'SF Mono', Consolas, monospace; }
+        .kv-table .val-string { color: #22863a; }
+        .kv-table .val-number { color: #005cc5; }
+        .kv-table .val-array { color: #6f42c1; }
     </style>
 </head>
 <body>
-    <h1>Headers Test</h1>
-    <p>Test PHP <code>header()</code> function support</p>
+    <div class="nav"><a href="/">Home</a></div>
 
-    <?php if (!empty($message)): ?>
-    <div class="success">
-        <strong><?= htmlspecialchars($message) ?></strong>
-    </div>
+    <h1>Headers</h1>
+    <p class="subtitle">Test <code>header()</code> function</p>
+
+    <?php if ($message): ?>
+    <div class="success"><?= htmlspecialchars($message) ?></div>
     <?php endif; ?>
 
-    <div class="info">
-        <h3>Redirect Tests</h3>
+    <div class="section">
+        <div class="section-title">Redirects</div>
         <a class="btn" href="/headers.php?action=redirect">302 Redirect</a>
         <a class="btn" href="/headers.php?action=redirect301">301 Redirect</a>
     </div>
 
-    <div class="info">
-        <h3>Content-Type Tests</h3>
+    <div class="section">
+        <div class="section-title">Content-Type</div>
         <a class="btn" href="/headers.php?action=json">JSON Response</a>
     </div>
 
-    <div class="info">
-        <h3>Status Code Tests</h3>
+    <div class="section">
+        <div class="section-title">Status Codes</div>
         <a class="btn" href="/headers.php?action=404">404 Not Found</a>
         <a class="btn" href="/headers.php?action=500">500 Error</a>
         <a class="btn" href="/headers.php?action=nocontent">204 No Content</a>
     </div>
 
-    <div class="info">
-        <h3>Custom Headers</h3>
+    <div class="section">
+        <div class="section-title">Custom Headers</div>
         <a class="btn" href="/headers.php?action=custom">Add Custom Headers</a>
-        <p style="color: #8892bf;">Check browser DevTools Network tab to see headers</p>
     </div>
 
-    <div class="info">
-        <h3>Test with curl</h3>
-        <pre>curl -v http://localhost:8080/headers.php?action=redirect</pre>
-        <pre>curl -v http://localhost:8080/headers.php?action=json</pre>
-        <pre>curl -v http://localhost:8080/headers.php?action=custom</pre>
-    </div>
-
-    <div class="info">
-        <h3>Current Headers (from PHP)</h3>
+    <div class="section">
+        <div class="section-title">Current Response Headers</div>
         <pre><?= htmlspecialchars(print_r(headers_list(), true)) ?></pre>
     </div>
 
-    <p><a href="/">← Back to home</a></p>
+    <div class="section">
+        <div class="section-title">Superglobals</div>
+        <div class="tabs">
+            <div class="tab active" data-tab="get">$_GET</div>
+            <div class="tab" data-tab="post">$_POST</div>
+            <div class="tab" data-tab="server">$_SERVER</div>
+            <div class="tab" data-tab="cookie">$_COOKIE</div>
+            <div class="tab" data-tab="files">$_FILES</div>
+            <div class="tab" data-tab="request">$_REQUEST</div>
+        </div>
+        <?php include __DIR__ . '/_tabs.php'; ?>
+    </div>
+
+    <script>
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+        document.querySelector('.tab.active').click();
+    </script>
 </body>
 </html>

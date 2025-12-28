@@ -3,68 +3,183 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>tokio_php - Rust + PHP</title>
+    <title>tokio_php</title>
     <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 800px;
-            margin: 50px auto;
+            max-width: 720px;
+            margin: 40px auto;
             padding: 20px;
-            background: #1a1a2e;
-            color: #eee;
+            background: #fff;
+            color: #333;
+            line-height: 1.6;
         }
-        h1 { color: #00d9ff; }
-        .info { background: #16213e; padding: 20px; border-radius: 8px; margin: 20px 0; }
-        .info h2 { color: #e94560; margin-top: 0; }
-        code { background: #0f0f23; padding: 2px 6px; border-radius: 4px; }
-        a { color: #00d9ff; }
-        ul { line-height: 2; }
+        h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+        .subtitle { color: #666; margin-bottom: 32px; }
+        .section { margin-bottom: 28px; }
+        .section-title { font-size: 12px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+        .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+        .row:last-child { border-bottom: none; }
+        .label { color: #666; }
+        .value { color: #333; font-weight: 500; }
+        a { color: #0066cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        ul { list-style: none; }
+        li { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+        li:last-child { border-bottom: none; }
+        .desc { color: #999; font-size: 13px; margin-left: 8px; }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+        .tab {
+            padding: 6px 12px;
+            background: #f5f5f5;
+            border: 1px solid #e8e8e8;
+            border-radius: 6px;
+            font-family: 'SF Mono', Consolas, monospace;
+            font-size: 13px;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .tab:hover { background: #eee; color: #333; }
+        .tab.active { background: #0066cc; border-color: #0066cc; color: #fff; }
+
+        /* Tab content */
+        .tab-content {
+            display: none;
+            background: #fafafa;
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .tab-content.active { display: block; }
+        .tab-header {
+            padding: 10px 14px;
+            background: #f0f0f0;
+            border-bottom: 1px solid #e8e8e8;
+            font-size: 12px;
+            color: #666;
+        }
+        .tab-body {
+            max-height: 320px;
+            overflow-y: auto;
+        }
+        .tab-empty {
+            padding: 24px;
+            text-align: center;
+            color: #999;
+            font-size: 13px;
+        }
+
+        /* Key-value table */
+        .kv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .kv-table tr { border-bottom: 1px solid #eee; }
+        .kv-table tr:last-child { border-bottom: none; }
+        .kv-table tr:hover { background: #f5f5f5; }
+        .kv-table td { padding: 8px 14px; vertical-align: top; }
+        .kv-table .key {
+            width: 35%;
+            font-family: 'SF Mono', Consolas, monospace;
+            color: #0066cc;
+            word-break: break-all;
+        }
+        .kv-table .val {
+            color: #333;
+            word-break: break-all;
+            font-family: 'SF Mono', Consolas, monospace;
+        }
+        .kv-table .val-string { color: #22863a; }
+        .kv-table .val-number { color: #005cc5; }
+        .kv-table .val-array { color: #6f42c1; }
     </style>
 </head>
 <body>
-    <h1>🚀 tokio_php</h1>
-    <p>Async Rust web server running PHP via php-embed</p>
+    <h1>tokio_php</h1>
+    <p class="subtitle">Async PHP server powered by Rust</p>
 
-    <div class="info">
-        <h2>PHP Info</h2>
-        <p><strong>PHP Version:</strong> <?= PHP_VERSION ?></p>
-        <p><strong>Server Time:</strong> <?= date('Y-m-d H:i:s') ?></p>
-        <p><strong>Server Software:</strong> <?= $_SERVER['SERVER_SOFTWARE'] ?? 'tokio_php' ?></p>
-        <p><strong>SAPI:</strong> <?= php_sapi_name() ?></p>
+    <div class="section">
+        <div class="section-title">Server</div>
+        <div class="row"><span class="label">PHP</span><span class="value"><?= PHP_VERSION ?></span></div>
+        <div class="row"><span class="label">SAPI</span><span class="value"><?= php_sapi_name() ?></span></div>
+        <div class="row"><span class="label">Time</span><span class="value"><?= date('H:i:s') ?></span></div>
+        <div class="row"><span class="label">Memory</span><span class="value"><?= number_format(memory_get_usage(true) / 1024 / 1024, 1) ?> MB</span></div>
     </div>
 
-    <div class="info">
-        <h2>System Info</h2>
-        <p><strong>OS:</strong> <?= php_uname() ?></p>
-        <p><strong>Memory Usage:</strong> <?= number_format(memory_get_usage(true) / 1024 / 1024, 2) ?> MB</p>
-    </div>
-
-    <div class="info">
-        <h2>Available Pages</h2>
+    <div class="section">
+        <div class="section-title">Pages</div>
         <ul>
-            <li><a href="/info.php">PHP Info</a> - Full phpinfo() output</li>
-            <li><a href="/hello.php?name=World">Hello Example (GET)</a> - Test $_GET parameters</li>
-            <li><a href="/form.php">Form Example (POST)</a> - Test $_POST parameters</li>
-            <li><a href="/cookie.php">Cookie Example</a> - Test $_COOKIE parameters</li>
-            <li><a href="/session.php">Session Example</a> - Test $_SESSION with visit counter</li>
-            <li><a href="/upload.php">Upload Example</a> - Test $_FILES file uploads</li>
-            <li><a href="/headers.php">Headers Example</a> - Test header() and redirects</li>
+            <li><a href="/info.php">phpinfo()</a><span class="desc">Full PHP info</span></li>
+            <li><a href="/hello.php?name=World">hello.php</a><span class="desc">GET params</span></li>
+            <li><a href="/form.php">form.php</a><span class="desc">POST form</span></li>
+            <li><a href="/cookie.php">cookie.php</a><span class="desc">Cookies</span></li>
+            <li><a href="/upload.php">upload.php</a><span class="desc">File uploads</span></li>
+            <li><a href="/headers.php">headers.php</a><span class="desc">Headers &amp; redirects</span></li>
+            <li><a href="/opcache_status.php">opcache_status.php</a><span class="desc">OPcache stats</span></li>
+            <li><a href="/ext_test.php">ext_test.php</a><span class="desc">Extension test</span></li>
         </ul>
     </div>
 
-    <div class="info">
-        <h2>Features</h2>
-        <ul>
-            <li>✓ <code>$_GET</code> - Query string parameters</li>
-            <li>✓ <code>$_POST</code> - Form POST data</li>
-            <li>✓ <code>$_COOKIE</code> - HTTP cookies</li>
-            <li>✓ <code>$_SESSION</code> - PHP sessions</li>
-            <li>✓ <code>$_FILES</code> - File uploads</li>
-            <li>✓ <code>$_SERVER</code> - Server variables</li>
-            <li>✓ <code>$_REQUEST</code> - Merged GET/POST</li>
-            <li>✓ <code>header()</code> - Custom headers & redirects</li>
-            <li>✓ Static file serving</li>
-        </ul>
+    <div class="section">
+        <div class="section-title">Superglobals</div>
+        <div class="tabs">
+            <div class="tab active" data-tab="get">$_GET</div>
+            <div class="tab" data-tab="post">$_POST</div>
+            <div class="tab" data-tab="server">$_SERVER</div>
+            <div class="tab" data-tab="cookie">$_COOKIE</div>
+            <div class="tab" data-tab="files">$_FILES</div>
+            <div class="tab" data-tab="request">$_REQUEST</div>
+        </div>
+
+        <?php
+        function renderTable(array $data, string $id, string $title): void {
+            $count = count($data);
+            echo "<div class=\"tab-content\" id=\"tab-{$id}\">";
+            echo "<div class=\"tab-header\">{$title} ({$count} " . ($count === 1 ? 'item' : 'items') . ")</div>";
+            echo "<div class=\"tab-body\">";
+            if (empty($data)) {
+                echo "<div class=\"tab-empty\">Empty</div>";
+            } else {
+                echo "<table class=\"kv-table\">";
+                foreach ($data as $key => $value) {
+                    $key = htmlspecialchars((string)$key);
+                    if (is_array($value)) {
+                        $displayValue = htmlspecialchars(json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                        $class = 'val-array';
+                    } elseif (is_numeric($value)) {
+                        $displayValue = htmlspecialchars((string)$value);
+                        $class = 'val-number';
+                    } else {
+                        $displayValue = htmlspecialchars((string)$value);
+                        $class = 'val-string';
+                    }
+                    echo "<tr><td class=\"key\">{$key}</td><td class=\"val {$class}\">{$displayValue}</td></tr>";
+                }
+                echo "</table>";
+            }
+            echo "</div></div>";
+        }
+
+        renderTable($_GET, 'get', '$_GET');
+        renderTable($_POST, 'post', '$_POST');
+        renderTable($_SERVER, 'server', '$_SERVER');
+        renderTable($_COOKIE, 'cookie', '$_COOKIE');
+        renderTable($_FILES, 'files', '$_FILES');
+        renderTable($_REQUEST, 'request', '$_REQUEST');
+        ?>
     </div>
+
+    <script>
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+        document.querySelector('.tab-content').classList.add('active');
+    </script>
 </body>
 </html>

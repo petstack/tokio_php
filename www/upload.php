@@ -1,154 +1,138 @@
 <?php
 $message = '';
-$uploaded_file_info = null;
+$uploaded = null;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_FILES['file']) && $_FILES['file']['error'] === 0) {
-        $uploaded_file_info = $_FILES['file'];
-
-        // Read first 100 bytes of file content for preview
-        $preview = '';
-        if (file_exists($_FILES['file']['tmp_name'])) {
-            $content = file_get_contents($_FILES['file']['tmp_name'], false, null, 0, 100);
-            // Check if binary
-            if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $content)) {
-                $preview = '[Binary file - ' . strlen(file_get_contents($_FILES['file']['tmp_name'])) . ' bytes]';
-            } else {
-                $preview = htmlspecialchars($content);
-                if (strlen(file_get_contents($_FILES['file']['tmp_name'])) > 100) {
-                    $preview .= '...';
-                }
-            }
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['file'])) {
+    if ($_FILES['file']['error'] === 0) {
+        $uploaded = $_FILES['file'];
+        if (file_exists($uploaded['tmp_name'])) {
+            $content = file_get_contents($uploaded['tmp_name'], false, null, 0, 100);
+            $uploaded['preview'] = preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $content)
+                ? '[Binary file]'
+                : htmlspecialchars($content) . (filesize($uploaded['tmp_name']) > 100 ? '...' : '');
         }
-        $uploaded_file_info['preview'] = $preview;
-
         $message = 'File uploaded successfully!';
-    } elseif (isset($_FILES['file'])) {
-        $error_messages = [
-            1 => 'File exceeds upload_max_filesize',
-            2 => 'File exceeds MAX_FILE_SIZE',
-            3 => 'File was only partially uploaded',
-            4 => 'No file was uploaded',
-            6 => 'Missing a temporary folder',
-            7 => 'Failed to write file to disk',
-            8 => 'A PHP extension stopped the upload',
-        ];
-        $error_code = $_FILES['file']['error'];
-        $message = 'Upload error: ' . ($error_messages[$error_code] ?? "Unknown error ($error_code)");
+    } else {
+        $errors = [1 => 'File too large', 2 => 'File too large', 3 => 'Partial upload', 4 => 'No file', 6 => 'No temp folder', 7 => 'Write failed'];
+        $message = 'Error: ' . ($errors[$_FILES['file']['error']] ?? 'Unknown');
     }
 }
-
-// Get form field value if submitted
-$description = htmlspecialchars($_POST['description'] ?? '');
 ?>
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>File Upload Test - tokio_php</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload - tokio_php</title>
     <style>
-        body { font-family: sans-serif; margin: 50px auto; max-width: 700px; background: #1a1a2e; color: #eee; padding: 20px; }
-        h1 { color: #00d9ff; }
-        .info { background: #16213e; padding: 15px; border-radius: 8px; margin: 20px 0; }
-        .info h3 { color: #e94560; margin-top: 0; }
-        pre { background: #0f0f23; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; overflow-x: auto; }
-        a { color: #00d9ff; }
-        .form-group { margin: 15px 0; }
-        label { display: block; margin-bottom: 5px; color: #8892bf; }
-        input[type="file"], input[type="text"] {
-            width: 100%; padding: 10px; border: 1px solid #4a4a6a;
-            background: #16213e; color: #eee; border-radius: 4px;
-            box-sizing: border-box;
-        }
-        button {
-            background: #e94560; color: white; padding: 10px 20px;
-            border: none; border-radius: 4px; cursor: pointer; font-size: 16px;
-        }
-        button:hover { background: #c73e54; }
-        .success { background: #2d5a3d; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
-        .error { background: #5a2d2d; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; }
-        code { background: #0f0f23; padding: 2px 6px; border-radius: 4px; }
-        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        td, th { padding: 8px; text-align: left; border-bottom: 1px solid #4a4a6a; }
-        th { color: #8892bf; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 720px; margin: 40px auto; padding: 20px; background: #fff; color: #333; line-height: 1.6; }
+        h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+        .subtitle { color: #666; margin-bottom: 32px; }
+        .section { margin-bottom: 28px; }
+        .section-title { font-size: 12px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+        a { color: #0066cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 13px; font-family: 'SF Mono', Consolas, monospace; }
+        pre { background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 13px; overflow-x: auto; font-family: 'SF Mono', Consolas, monospace; }
+        .card { background: #fafafa; border: 1px solid #e8e8e8; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .nav { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #eee; }
+        .success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; }
+        .error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; }
+        input[type="file"] { margin-bottom: 12px; }
+        button { padding: 10px 20px; background: #0066cc; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+        button:hover { background: #0052a3; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        td { padding: 8px 0; border-bottom: 1px solid #eee; }
+        td:first-child { color: #666; width: 120px; }
+
+        .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+        .tab { padding: 6px 12px; background: #f5f5f5; border: 1px solid #e8e8e8; border-radius: 6px; font-family: 'SF Mono', Consolas, monospace; font-size: 13px; color: #666; cursor: pointer; transition: all 0.15s ease; }
+        .tab:hover { background: #eee; color: #333; }
+        .tab.active { background: #0066cc; border-color: #0066cc; color: #fff; }
+        .tab-content { display: none; background: #fafafa; border: 1px solid #e8e8e8; border-radius: 8px; overflow: hidden; }
+        .tab-content.active { display: block; }
+        .tab-header { padding: 10px 14px; background: #f0f0f0; border-bottom: 1px solid #e8e8e8; font-size: 12px; color: #666; }
+        .tab-body { max-height: 320px; overflow-y: auto; }
+        .tab-empty { padding: 24px; text-align: center; color: #999; font-size: 13px; }
+        .kv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .kv-table tr { border-bottom: 1px solid #eee; }
+        .kv-table tr:last-child { border-bottom: none; }
+        .kv-table tr:hover { background: #f5f5f5; }
+        .kv-table td { padding: 8px 14px; vertical-align: top; }
+        .kv-table .key { width: 35%; font-family: 'SF Mono', Consolas, monospace; color: #0066cc; word-break: break-all; }
+        .kv-table .val { color: #333; word-break: break-all; font-family: 'SF Mono', Consolas, monospace; }
+        .kv-table .val-string { color: #22863a; }
+        .kv-table .val-number { color: #005cc5; }
+        .kv-table .val-array { color: #6f42c1; }
     </style>
 </head>
 <body>
-    <h1>File Upload Test</h1>
-    <p>Test <code>$_FILES</code> support in tokio_php</p>
+    <div class="nav"><a href="/">Home</a></div>
+
+    <h1>File Upload</h1>
+    <p class="subtitle">Test <code>$_FILES</code> superglobal</p>
 
     <?php if ($message): ?>
-    <div class="<?= strpos($message, 'error') !== false ? 'error' : 'success' ?>">
-        <strong><?= $message ?></strong>
+    <div class="<?= strpos($message, 'Error') !== false ? 'error' : 'success' ?>"><?= htmlspecialchars($message) ?></div>
+    <?php endif; ?>
+
+    <?php if ($uploaded): ?>
+    <div class="section">
+        <div class="section-title">Uploaded File</div>
+        <div class="card">
+            <table>
+                <tr><td>Name</td><td><code><?= htmlspecialchars($uploaded['name']) ?></code></td></tr>
+                <tr><td>Type</td><td><code><?= htmlspecialchars($uploaded['type']) ?></code></td></tr>
+                <tr><td>Size</td><td><?= number_format($uploaded['size']) ?> bytes</td></tr>
+                <tr><td>Temp</td><td><code><?= htmlspecialchars($uploaded['tmp_name']) ?></code></td></tr>
+            </table>
+            <?php if (!empty($uploaded['preview'])): ?>
+            <div class="section-title" style="margin-top: 16px;">Preview</div>
+            <pre><?= $uploaded['preview'] ?></pre>
+            <?php endif; ?>
+        </div>
     </div>
     <?php endif; ?>
 
-    <?php if ($uploaded_file_info): ?>
-    <div class="info">
-        <h3>Uploaded File Details</h3>
-        <table>
-            <tr><th>Property</th><th>Value</th></tr>
-            <tr><td>Original Name</td><td><code><?= htmlspecialchars($uploaded_file_info['name']) ?></code></td></tr>
-            <tr><td>MIME Type</td><td><code><?= htmlspecialchars($uploaded_file_info['type']) ?></code></td></tr>
-            <tr><td>Temp Path</td><td><code><?= htmlspecialchars($uploaded_file_info['tmp_name']) ?></code></td></tr>
-            <tr><td>Size</td><td><code><?= number_format($uploaded_file_info['size']) ?> bytes</code></td></tr>
-            <tr><td>Error Code</td><td><code><?= $uploaded_file_info['error'] ?></code> (0 = success)</td></tr>
-        </table>
-
-        <h3>Content Preview</h3>
-        <pre><?= $uploaded_file_info['preview'] ?></pre>
-    </div>
-    <?php endif; ?>
-
-    <div class="info">
-        <h3>Upload Single File</h3>
-        <form method="POST" enctype="multipart/form-data" action="/upload.php">
-            <div class="form-group">
-                <label for="file">Select File:</label>
-                <input type="file" id="file" name="file">
-            </div>
-            <div class="form-group">
-                <label for="description">Description (optional):</label>
-                <input type="text" id="description" name="description" placeholder="Enter file description">
-            </div>
-            <button type="submit">Upload File</button>
-        </form>
+    <div class="section">
+        <div class="section-title">Upload Form</div>
+        <div class="card">
+            <form method="POST" enctype="multipart/form-data">
+                <input type="file" name="file">
+                <button type="submit">Upload</button>
+            </form>
+        </div>
     </div>
 
-    <div class="info">
-        <h3>Upload Multiple Files</h3>
-        <form method="POST" enctype="multipart/form-data" action="/upload.php">
-            <div class="form-group">
-                <label for="files">Select Multiple Files:</label>
-                <input type="file" id="files" name="files[]" multiple>
-            </div>
-            <button type="submit">Upload Files</button>
-        </form>
-        <p style="color: #8892bf; margin-top: 10px;">Hold Ctrl/Cmd to select multiple files</p>
+    <div class="section">
+        <div class="section-title">Test with curl</div>
+        <pre>curl -F "file=@/path/to/file.txt" http://localhost:8080/upload.php</pre>
     </div>
 
-    <?php if ($description): ?>
-    <div class="info">
-        <h3>Form Data</h3>
-        <p><strong>Description:</strong> <?= $description ?></p>
-    </div>
-    <?php endif; ?>
-
-    <div class="info">
-        <h3>$_FILES contents:</h3>
-        <pre><?= htmlspecialchars(print_r($_FILES, true)) ?></pre>
-
-        <h3>$_POST contents:</h3>
-        <pre><?= htmlspecialchars(print_r($_POST, true)) ?></pre>
+    <div class="section">
+        <div class="section-title">Superglobals</div>
+        <div class="tabs">
+            <div class="tab" data-tab="get">$_GET</div>
+            <div class="tab" data-tab="post">$_POST</div>
+            <div class="tab" data-tab="server">$_SERVER</div>
+            <div class="tab" data-tab="cookie">$_COOKIE</div>
+            <div class="tab active" data-tab="files">$_FILES</div>
+            <div class="tab" data-tab="request">$_REQUEST</div>
+        </div>
+        <?php include __DIR__ . '/_tabs.php'; ?>
     </div>
 
-    <div class="info">
-        <h3>Test with curl</h3>
-        <p>Single file:</p>
-        <pre>curl -F "file=@/path/to/file.txt" -F "description=Test" http://localhost:8080/upload.php</pre>
-        <p>Multiple files:</p>
-        <pre>curl -F "files[]=@file1.txt" -F "files[]=@file2.txt" http://localhost:8080/upload.php</pre>
-    </div>
-
-    <p><a href="/">← Back to home</a></p>
+    <script>
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+        document.querySelector('.tab.active').click();
+    </script>
 </body>
 </html>
