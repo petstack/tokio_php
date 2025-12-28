@@ -642,11 +642,26 @@ PHP_FUNCTION(tokio_request_id)
     RETURN_LONG((zend_long)tls_request_id);
 }
 
-/* tokio_worker_id(): int - get worker thread ID (placeholder) */
+/* tokio_worker_id(): int - get worker thread ID
+ * Reads from $_SERVER['TOKIO_WORKER_ID'] which is set by Rust in server_vars.
+ */
 PHP_FUNCTION(tokio_worker_id)
 {
+    zval *server_arr, *worker_id_val;
+
     ZEND_PARSE_PARAMETERS_NONE();
-    /* TODO: Pass actual worker ID from Rust */
+
+    /* Get $_SERVER from the symbol table */
+    server_arr = zend_hash_str_find(&EG(symbol_table), "_SERVER", sizeof("_SERVER")-1);
+    if (server_arr && Z_TYPE_P(server_arr) == IS_ARRAY) {
+        /* Get TOKIO_WORKER_ID from $_SERVER */
+        worker_id_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_WORKER_ID", sizeof("TOKIO_WORKER_ID")-1);
+        if (worker_id_val && Z_TYPE_P(worker_id_val) == IS_STRING) {
+            RETURN_LONG(atoll(Z_STRVAL_P(worker_id_val)));
+        }
+    }
+
+    /* Fallback to 0 if not set */
     RETURN_LONG(0);
 }
 

@@ -106,7 +106,7 @@ thread_local! {
 fn pack_into_buffer<'a>(
     buf: &mut Vec<u8>,
     pairs: impl Iterator<Item = (&'a String, &'a String)>,
-    extra: Option<(&str, &str)>,
+    extras: &[(&str, &str)],
 ) -> (usize, usize) {
     buf.clear();
     let mut count = 0;
@@ -120,7 +120,7 @@ fn pack_into_buffer<'a>(
         count += 1;
     }
 
-    if let Some((key, value)) = extra {
+    for (key, value) in extras {
         buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
         buf.extend_from_slice(key.as_bytes());
         buf.push(0);
@@ -179,6 +179,7 @@ struct ExtExecutionTiming {
 fn execute_script_with_ffi(
     request: &ScriptRequest,
     request_id: u64,
+    worker_id: usize,
     profiling: bool,
 ) -> Result<(StdoutCapture, ExtExecutionTiming), String> {
     let mut timing = ExtExecutionTiming::default();
@@ -202,9 +203,13 @@ fn execute_script_with_ffi(
     // 2. Set $_SERVER variables (batch)
     let phase_start = Instant::now();
     let req_id_value = request_id.to_string();
+    let worker_id_value = worker_id.to_string();
     let (buf_len, count) = SERVER_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.server_vars.iter().map(|(k, v)| (k, v)), Some(("TOKIO_REQUEST_ID", &req_id_value)))
+        pack_into_buffer(&mut buf, request.server_vars.iter().map(|(k, v)| (k, v)), &[
+            ("TOKIO_REQUEST_ID", &req_id_value),
+            ("TOKIO_WORKER_ID", &worker_id_value),
+        ])
     });
     if count > 0 {
         SERVER_BUFFER.with(|buf| unsafe {
@@ -220,7 +225,7 @@ fn execute_script_with_ffi(
     let phase_start = Instant::now();
     let (buf_len, count) = GET_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.get_params.iter().map(|(k, v)| (k, v)), None)
+        pack_into_buffer(&mut buf, request.get_params.iter().map(|(k, v)| (k, v)), &[])
     });
     if count > 0 {
         GET_BUFFER.with(|buf| unsafe {
@@ -236,7 +241,7 @@ fn execute_script_with_ffi(
     let phase_start = Instant::now();
     let (buf_len, count) = POST_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.post_params.iter().map(|(k, v)| (k, v)), None)
+        pack_into_buffer(&mut buf, request.post_params.iter().map(|(k, v)| (k, v)), &[])
     });
     if count > 0 {
         POST_BUFFER.with(|buf| unsafe {
@@ -252,7 +257,7 @@ fn execute_script_with_ffi(
     let phase_start = Instant::now();
     let (buf_len, count) = COOKIE_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.cookies.iter().map(|(k, v)| (k, v)), None)
+        pack_into_buffer(&mut buf, request.cookies.iter().map(|(k, v)| (k, v)), &[])
     });
     if count > 0 {
         COOKIE_BUFFER.with(|buf| unsafe {
@@ -465,7 +470,7 @@ fn ext_worker_main_loop(
                     };
 
                     // Execute script with FFI superglobals (no eval overhead!)
-                    match execute_script_with_ffi(&request, request_id, profiling) {
+                    match execute_script_with_ffi(&request, request_id, id, profiling) {
                         Ok((capture, mut timing)) => {
                             // Add request_init timing
                             timing.ffi_request_init_us = ffi_request_init_us;
