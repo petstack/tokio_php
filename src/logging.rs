@@ -190,8 +190,10 @@ impl tracing::field::Visit for FieldVisitor {
 }
 
 /// Log an access request directly (bypassing tracing for simpler output).
+#[allow(clippy::too_many_arguments)]
 pub fn log_access(
     ts: &str,
+    request_id: &str,
     ip: &str,
     method: &str,
     path: &str,
@@ -237,7 +239,8 @@ pub fn log_access(
         "type": "access",
         "msg": msg,
         "ctx": {
-            "service": "tokio_php"
+            "service": "tokio_php",
+            "request_id": request_id,
         },
         "data": data,
     });

@@ -217,7 +217,7 @@ All logs use unified JSON format. Enable access logs with `ACCESS_LOG=1`.
 ### Access Log Example
 
 ```json
-{"ts":"2025-01-15T10:30:00.456Z","level":"info","type":"access","msg":"GET /api/users 200","ctx":{"service":"tokio_php"},"data":{"method":"GET","path":"/api/users","status":200,"bytes":1234,"duration_ms":5.25,"ip":"10.0.0.1","ua":"curl/8.0"}}
+{"ts":"2025-01-15T10:30:00.456Z","level":"info","type":"access","msg":"GET /api/users 200","ctx":{"service":"tokio_php","request_id":"65bdbab40000"},"data":{"method":"GET","path":"/api/users","status":200,"bytes":1234,"duration_ms":5.25,"ip":"10.0.0.1","ua":"curl/8.0"}}
 ```
 
 ### Access Log Data Fields
@@ -252,6 +252,50 @@ docker compose logs | jq -c 'select(.type == "app")'
 ```
 
 Compatible with: Fluentd, Fluent Bit, Logstash, CloudWatch, Loki, Vector.
+
+## Request ID
+
+Every request gets a unique ID for tracing and correlation across services.
+
+### Generation
+
+Request IDs are 12-character hex strings: 8 chars timestamp + 4 chars counter.
+
+```
+65bdbab40000
+^^^^^^^^----
+    |     |
+    |     +-- Counter (4 hex chars)
+    +-------- Timestamp ms (8 hex chars)
+```
+
+### Propagation
+
+- Incoming `X-Request-ID` header → used as-is
+- No header → server generates new ID
+
+### Response Header
+
+Every response includes `X-Request-ID`:
+
+```bash
+curl -sI http://localhost:8080/index.php | grep x-request-id
+x-request-id: 65bdbab40000
+
+# Propagate existing ID
+curl -sI -H "X-Request-ID: my-trace-123" http://localhost:8080/ | grep x-request-id
+x-request-id: my-trace-123
+```
+
+### Log Correlation
+
+Request ID appears in `ctx.request_id` in access logs:
+
+```json
+{"ts":"...","level":"info","type":"access","msg":"GET / 200","ctx":{"service":"tokio_php","request_id":"65bdbab40000"},...}
+```
+
+Use for distributed tracing across microservices.
 
 ## Docker Services
 

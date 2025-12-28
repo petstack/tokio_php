@@ -7,6 +7,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Generate a short unique request ID (12 chars).
+/// Format: timestamp_hex (8) + random (4) = 12 chars
+fn generate_request_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u32;
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    format!("{:08x}{:04x}", ts, count & 0xFFFF)
+}
+
 /// Format current time as ISO 8601 (lightweight, no chrono dependency).
 pub fn chrono_lite_iso8601() -> String {
     let now = SystemTime::now()
@@ -259,6 +274,14 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let request_start = Instant::now();
 
+        // Generate unique request ID (use existing X-Request-ID or generate new)
+        let request_id = req
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| generate_request_id());
+
         // Increment request method metrics
         self.request_metrics.increment_method(req.method());
 
@@ -352,6 +375,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         self.request_metrics.record_response_time(response_time_us);
         self.request_metrics.increment_status(response.status().as_u16());
 
+        // Add X-Request-ID header to response
+        response
+            .headers_mut()
+            .insert("x-request-id", request_id.parse().unwrap());
+
         // Access logging
         if access_log_enabled {
             let duration = request_start.elapsed();
@@ -361,6 +389,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
             access_log::log_request(
                 &ts,
+                &request_id,
                 &ip_str,
                 &method_str,
                 &uri_str,

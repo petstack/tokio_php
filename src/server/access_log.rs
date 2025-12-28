@@ -20,6 +20,7 @@ pub fn is_enabled() -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn log_request(
     ts: &str,
+    request_id: &str,
     ip: &str,
     method: &str,
     path: &str,
@@ -34,7 +35,8 @@ pub fn log_request(
     tls: Option<&str>,
 ) {
     crate::logging::log_access(
-        ts, ip, method, path, query, http, status, bytes, duration_ms, ua, referer, xff, tls,
+        ts, request_id, ip, method, path, query, http, status, bytes, duration_ms, ua, referer,
+        xff, tls,
     );
 }
 

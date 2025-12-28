@@ -239,10 +239,17 @@ ACCESS_LOG=1
 Access logs use unified JSON format:
 
 ```json
-{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"access","msg":"GET /api/users 200","ctx":{"service":"tokio_php"},"data":{"method":"GET","path":"/api/users","status":200,"bytes":1234,"duration_ms":5.25,"ip":"10.0.0.1"}}
+{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"access","msg":"GET /api/users 200","ctx":{"service":"tokio_php","request_id":"65bdbab40000"},"data":{"method":"GET","path":"/api/users","status":200,"bytes":1234,"duration_ms":5.25,"ip":"10.0.0.1"}}
 ```
 
-**Data fields:**
+**Context fields (`ctx`):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `service` | string | Service name (`tokio_php`) |
+| `request_id` | string | Unique request ID for tracing |
+
+**Data fields (`data`):**
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -258,6 +265,27 @@ Access logs use unified JSON format:
 | `referer` | string? | Referer |
 | `xff` | string? | X-Forwarded-For |
 | `tls` | string? | TLS protocol |
+
+### Request ID
+
+Every request includes a unique ID for distributed tracing:
+
+- **Response header**: `X-Request-ID` in every response
+- **Log field**: `ctx.request_id` in access logs
+- **Propagation**: Incoming `X-Request-ID` header is preserved
+
+```bash
+# Check response header
+curl -sI http://localhost:8080/index.php | grep x-request-id
+x-request-id: 65bdbab40000
+
+# Propagate existing ID
+curl -sI -H "X-Request-ID: trace-123" http://localhost:8080/ | grep x-request-id
+x-request-id: trace-123
+
+# Filter logs by request ID
+docker compose logs | jq -c 'select(.ctx.request_id == "trace-123")'
+```
 
 **Docker/Kubernetes integration:**
 
