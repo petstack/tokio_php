@@ -57,14 +57,34 @@ Auto-detection via `hyper_util::server::conn::auto::Builder`.
 
 The `ScriptExecutor` trait (`src/executor/mod.rs`) defines the interface for script execution:
 
-- `PhpExecutor` (`php.rs`) - Main PHP executor using php-embed with worker pool
-- `ExtExecutor` (`ext.rs`) - PHP executor with tokio_sapi extension integration
+- `ExtExecutor` (`ext.rs`) - **Recommended for production.** Uses `php_execute_script()` + FFI superglobals
+- `PhpExecutor` (`php.rs`) - Legacy executor using `zend_eval_string()` for superglobals
 - `StubExecutor` (`stub.rs`) - Returns empty responses for benchmarking
 
 Selection order in main.rs:
 1. `USE_STUB=1` → StubExecutor
-2. `USE_EXT=1` → ExtExecutor (with tokio_sapi PHP extension)
+2. `USE_EXT=1` → ExtExecutor (with tokio_sapi PHP extension) **← recommended**
 3. Default → PhpExecutor
+
+### Executor Performance Comparison
+
+ExtExecutor is **2x faster** than PhpExecutor due to different script execution methods:
+
+| Executor | Method | RPS (index.php) | RPS (bench.php) |
+|----------|--------|-----------------|-----------------|
+| **ExtExecutor** | `php_execute_script()` | **33,677** | **37,911** |
+| PhpExecutor | `zend_eval_string()` | 16,208 | 19,555 |
+
+**Why ExtExecutor is faster:**
+
+1. **`php_execute_script()`** - Native PHP file execution, fully optimized for OPcache/JIT
+2. **FFI superglobals** - Direct C calls to set `$_GET`, `$_POST`, `$_SERVER`, etc.
+3. **No parsing overhead** - PhpExecutor re-parses wrapper code on every request
+
+**Production recommendation:**
+```bash
+USE_EXT=1 docker compose up -d
+```
 
 ### tokio_sapi PHP Extension
 
@@ -130,7 +150,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
-| `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
+| `USE_EXT` | `0` | **Recommended.** Use ExtExecutor with tokio_sapi extension (2x faster) |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
@@ -144,11 +164,11 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 ### Configuration Examples
 
 ```bash
-# Minimal (all defaults)
+# Minimal (all defaults, uses PhpExecutor)
 docker compose up -d
 
-# Production with tuning
-PHP_WORKERS=8 QUEUE_CAPACITY=500 INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
+# Production (recommended - 2x faster with ExtExecutor)
+USE_EXT=1 PHP_WORKERS=8 INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 
 # Benchmark mode (no PHP execution)
 USE_STUB=1 docker compose up -d

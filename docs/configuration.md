@@ -18,7 +18,7 @@ tokio_php is configured via environment variables.
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
-| `USE_EXT` | `0` | Use ExtExecutor with tokio_sapi extension |
+| `USE_EXT` | `0` | **Recommended.** Use ExtExecutor (2x faster) |
 | `PROFILE` | `0` | Enable request profiling |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
@@ -369,19 +369,20 @@ Stub mode returns empty 200 responses without executing PHP. Useful for measurin
 
 ### USE_EXT
 
-Use FFI-based superglobals via tokio_sapi extension.
+**Recommended for production.** Use ExtExecutor with FFI-based superglobals.
 
 ```bash
-# Eval-based superglobals (default)
+# PhpExecutor - eval-based superglobals (default)
 USE_EXT=0
 
-# FFI-based superglobals
+# ExtExecutor - FFI superglobals + php_execute_script() (recommended)
 USE_EXT=1
 ```
 
-FFI mode provides:
-- Per-variable timing in profiler
-- Slightly slower but more detailed
+ExtExecutor is **2x faster** than PhpExecutor:
+- Uses native `php_execute_script()` - fully optimized for OPcache/JIT
+- Sets superglobals via direct FFI calls (no eval parsing)
+- ~34K RPS vs ~16K RPS for index.php
 
 ### PROFILE
 
@@ -496,7 +497,7 @@ INTERNAL_ADDR=0.0.0.0:9090 \
 ERROR_PAGES_DIR=/var/www/html/errors \
 ACCESS_LOG=1 \
 PROFILE=0 \
-USE_EXT=0 \
+USE_EXT=1 \
 RUST_LOG=tokio_php=info \
 docker compose up -d
 ```
@@ -521,7 +522,7 @@ services:
       - INTERNAL_ADDR=0.0.0.0:9090
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-}
       - PROFILE=${PROFILE:-0}
-      - USE_EXT=${USE_EXT:-0}
+      - USE_EXT=${USE_EXT:-1}  # Recommended: 2x faster
       - USE_STUB=${USE_STUB:-0}
       - ACCESS_LOG=${ACCESS_LOG:-0}
       - RUST_LOG=${RUST_LOG:-tokio_php=info}

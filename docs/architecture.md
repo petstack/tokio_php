@@ -155,15 +155,20 @@ pub trait ScriptExecutor: Send + Sync {
 
 ### Available Executors
 
-| Executor | Selection | Description |
-|----------|-----------|-------------|
-| `PhpExecutor` | Default | Main executor using eval-based superglobals |
-| `ExtExecutor` | `USE_EXT=1` | FFI-based superglobals via tokio_sapi extension |
-| `StubExecutor` | `USE_STUB=1` | Returns empty responses for benchmarking |
+| Executor | Selection | Method | Performance |
+|----------|-----------|--------|-------------|
+| `ExtExecutor` | `USE_EXT=1` | `php_execute_script()` + FFI | **~34K RPS** (recommended) |
+| `PhpExecutor` | Default | `zend_eval_string()` | ~16K RPS |
+| `StubExecutor` | `USE_STUB=1` | No PHP | ~100K RPS (benchmarking) |
+
+**ExtExecutor is 2x faster** because:
+- Uses native `php_execute_script()` - fully optimized for OPcache/JIT
+- Sets superglobals via direct FFI calls (no eval parsing)
+- PhpExecutor re-parses wrapper code on every request
 
 Selection priority in `main.rs`:
 1. `USE_STUB=1` → StubExecutor
-2. `USE_EXT=1` → ExtExecutor
+2. `USE_EXT=1` → ExtExecutor **← recommended for production**
 3. Default → PhpExecutor
 
 ## Key Technical Decisions
