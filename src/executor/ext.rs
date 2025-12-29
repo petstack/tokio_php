@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 use super::common::{
     php_request_shutdown, php_request_startup, ts_resource_ex,
-    tokio_php_heartbeat, HeartbeatContext, StdoutCapture, WorkerPool, WorkerRequest,
+    tokio_php_heartbeat, StdoutCapture, WorkerPool, WorkerRequest,
     FINALIZE_CODE, FINALIZE_NAME,
 };
 use super::sapi;
