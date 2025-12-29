@@ -84,15 +84,15 @@ USE_STUB=1 docker compose up -d
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Tokio Runtime                         │
+│                    Tokio Runtime                        │
 ├─────────────────────────────────────────────────────────┤
 │  Hyper HTTP Server (HTTP/1.1, HTTP/2, TLS)              │
 ├─────────────────────────────────────────────────────────┤
-│  Request Router                                          │
+│  Request Router                                         │
 │  ├── Static Files (Brotli, Cache-Control)               │
-│  └── PHP Scripts                                         │
+│  └── PHP Scripts                                        │
 ├─────────────────────────────────────────────────────────┤
-│  Worker Pool (N threads)                                 │
+│  Worker Pool (N threads)                                │
 │  ├── Worker 0: php-embed SAPI + OPcache                 │
 │  ├── Worker 1: php-embed SAPI + OPcache                 │
 │  └── Worker N: php-embed SAPI + OPcache                 │

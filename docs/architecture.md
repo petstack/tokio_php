@@ -255,38 +255,38 @@ This solves the issue where `header('Location: ...'); exit();` wouldn't work wit
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     nginx + PHP-FPM                              │
+│                     nginx + PHP-FPM                             │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │  Client ──► nginx ──► FastCGI socket ──► php-fpm (process)      │
-│         HTTP    parse    encode/decode      execute              │
-│                                                                  │
-│  Overhead:                                                       │
+│         HTTP    parse    encode/decode      execute             │
+│                                                                 │
+│  Overhead:                                                      │
 │  • nginx HTTP parsing + routing (~1ms)                          │
 │  • FastCGI protocol encode/decode (~0.5ms)                      │
 │  • Unix socket communication (~0.5ms)                           │
-│  • Process context switches                                      │
+│  • Process context switches                                     │
 │  • Response: php-fpm → nginx → client (reverse path)            │
-│                                                                  │
-│  Total overhead: ~4ms                                            │
-│                                                                  │
+│                                                                 │
+│  Total overhead: ~4ms                                           │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
-│                        tokio_php                                 │
+│                        tokio_php                                │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │  Client ──► tokio_php (HTTP + PHP in single process)            │
 │         HTTP    Hyper parses, worker thread executes PHP        │
-│                                                                  │
-│  Advantages:                                                     │
+│                                                                 │
+│  Advantages:                                                    │
 │  • No network hop between web server and PHP                    │
 │  • Threads instead of processes (no context switch)             │
 │  • Direct shared memory via TSRM                                │
-│  • Single binary deployment                                      │
-│                                                                  │
-│  Total overhead: ~0.1ms                                          │
-│                                                                  │
+│  • Single binary deployment                                     │
+│                                                                 │
+│  Total overhead: ~0.1ms                                         │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -349,35 +349,35 @@ FrankenPHP is a modern PHP application server written in Go, built on Caddy. It 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        FrankenPHP                                │
+│                        FrankenPHP                               │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │  Client ──► Caddy (Go) ──► CGO bridge ──► PHP (Zend Engine)     │
-│                                                                  │
-│  Overhead:                                                       │
+│                                                                 │
+│  Overhead:                                                      │
 │  • CGO call overhead (~1-2ms per request)                       │
 │  • Go ↔ C memory copying                                        │
-│  • Goroutine scheduling                                          │
-│  • Caddy middleware processing                                   │
-│                                                                  │
-│  Total overhead: ~2.5ms                                          │
-│                                                                  │
+│  • Goroutine scheduling                                         │
+│  • Caddy middleware processing                                  │
+│                                                                 │
+│  Total overhead: ~2.5ms                                         │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
-│                        tokio_php                                 │
+│                        tokio_php                                │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │  Client ──► Hyper (Rust) ──► direct FFI ──► PHP (Zend Engine)   │
-│                                                                  │
-│  Advantages:                                                     │
+│                                                                 │
+│  Advantages:                                                    │
 │  • No CGO overhead (Rust has zero-cost FFI)                     │
-│  • Direct memory access, no copying                              │
-│  • Predictable thread scheduling                                 │
-│  • Minimal HTTP processing                                       │
-│                                                                  │
-│  Total overhead: ~0.1ms                                          │
-│                                                                  │
+│  • Direct memory access, no copying                             │
+│  • Predictable thread scheduling                                │
+│  • Minimal HTTP processing                                      │
+│                                                                 │
+│  Total overhead: ~0.1ms                                         │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
