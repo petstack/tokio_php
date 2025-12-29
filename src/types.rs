@@ -1,5 +1,7 @@
 //! Core types for script execution requests and responses.
 
+use std::time::Duration;
+
 use crate::profiler::ProfileData;
 
 /// Key-value pair type for parameters (faster than HashMap for small collections).
@@ -46,6 +48,8 @@ pub struct ScriptRequest {
     pub files: Vec<(String, Vec<UploadedFile>)>,
     /// Enable profiling for this request
     pub profile: bool,
+    /// Request timeout (None = no timeout)
+    pub timeout: Option<Duration>,
 }
 
 impl ScriptRequest {

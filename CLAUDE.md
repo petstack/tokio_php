@@ -109,9 +109,32 @@ See [docs/architecture.md](docs/architecture.md#comparison-with-php-fpm) for det
 ### tokio_sapi PHP Extension
 
 Located in `ext/` directory. Provides:
-- PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_async_call()`
-- C API for future FFI superglobals optimization
+- PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_request_heartbeat()`
+- C API for FFI superglobals optimization (no eval overhead)
 - Built as both shared library (.so) and static library (.a)
+
+#### tokio_request_heartbeat(int $time = 10): bool
+
+Extends the request timeout deadline for long-running scripts. Useful for preventing 504 Gateway Timeout while processing large datasets or slow external APIs.
+
+```php
+<?php
+// Long-running script that needs more time
+foreach ($large_dataset as $item) {
+    process_item($item);
+
+    // Extend deadline by 30 seconds and PHP's time limit
+    set_time_limit(30);
+    tokio_request_heartbeat(30);
+}
+```
+
+Returns `false` if:
+- No timeout configured (`REQUEST_TIMEOUT=off`)
+- `$time <= 0`
+- `$time > REQUEST_TIMEOUT` limit (e.g., if `REQUEST_TIMEOUT=5m`, max is 300)
+
+**Note**: Also call `set_time_limit()` to extend PHP's internal timeout.
 
 ### PHP Worker Pool
 
@@ -167,6 +190,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., 404.html) |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration (1d, 1w, 1m, 1y, off) |
+| `REQUEST_TIMEOUT` | `2m` | Request timeout (30s, 2m, 5m, off). Returns 504 on timeout. Use `tokio_request_heartbeat()` to extend |
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |

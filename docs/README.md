@@ -25,6 +25,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 | [Metrics](metrics.md) | Prometheus metrics for monitoring                          |
 | [Health Checks](health-checks.md) | Docker and Kubernetes probes                               |
 | [Rate Limiting](rate-limiting.md) | Per-IP request throttling                                  |
+| [Request Heartbeat](request-heartbeat.md) | Extend timeout for long-running scripts                    |
 | [Error Pages](error-pages.md) | Custom HTML error pages for 4xx/5xx                        |
 | [Graceful Shutdown](graceful-shutdown.md) | Zero-downtime deployments with connection draining         |
 | [Security](security.md) | Non-root execution, best practices                         |

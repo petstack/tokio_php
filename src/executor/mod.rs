@@ -25,6 +25,9 @@ pub use ext::ExtExecutor;
 #[cfg(feature = "php")]
 pub use common::QUEUE_FULL_ERROR;
 
+#[cfg(feature = "php")]
+pub use common::REQUEST_TIMEOUT_ERROR;
+
 use crate::types::{ScriptRequest, ScriptResponse};
 
 /// Error type for script execution.
@@ -42,6 +45,17 @@ impl ExecutorError {
 
     #[cfg(not(feature = "php"))]
     pub fn is_queue_full(&self) -> bool {
+        false
+    }
+
+    /// Returns true if this error indicates a request timeout.
+    #[cfg(feature = "php")]
+    pub fn is_timeout(&self) -> bool {
+        self.message == REQUEST_TIMEOUT_ERROR
+    }
+
+    #[cfg(not(feature = "php"))]
+    pub fn is_timeout(&self) -> bool {
         false
     }
 }

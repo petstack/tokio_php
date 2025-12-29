@@ -79,6 +79,78 @@ impl Default for StaticCacheTtl {
     }
 }
 
+/// Request timeout configuration.
+/// - None: timeout disabled ("off")
+/// - Some(duration): timeout after specified duration
+#[derive(Clone, Debug)]
+pub struct RequestTimeout(pub Option<Duration>);
+
+impl RequestTimeout {
+    /// Parse duration string (e.g., "30s", "2m", "5m", "off").
+    /// Default: 2 minutes.
+    pub fn parse(s: &str) -> Self {
+        let s = s.trim().to_lowercase();
+
+        if s == "off" || s == "0" || s.is_empty() {
+            return Self(None);
+        }
+
+        // Parse format: number + unit (e.g., "30s", "2m", "1h")
+        let (num_str, unit) = if s.ends_with('s') {
+            (&s[..s.len()-1], "s")
+        } else if s.ends_with('m') {
+            (&s[..s.len()-1], "m")
+        } else if s.ends_with('h') {
+            (&s[..s.len()-1], "h")
+        } else {
+            // Try parsing as seconds
+            if let Ok(secs) = s.parse::<u64>() {
+                return Self(Some(Duration::from_secs(secs)));
+            }
+            return Self::default();
+        };
+
+        let num: u64 = match num_str.parse() {
+            Ok(n) => n,
+            Err(_) => return Self::default(),
+        };
+
+        let secs = match unit {
+            "s" => num,
+            "m" => num * 60,
+            "h" => num * 3600,
+            _ => return Self::default(),
+        };
+
+        Self(Some(Duration::from_secs(secs)))
+    }
+
+    /// Check if timeout is enabled.
+    #[inline]
+    pub fn is_enabled(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Get timeout duration.
+    #[inline]
+    pub fn as_duration(&self) -> Option<Duration> {
+        self.0
+    }
+
+    /// Get timeout in seconds (0 if disabled).
+    #[inline]
+    pub fn as_secs(&self) -> u64 {
+        self.0.map(|d| d.as_secs()).unwrap_or(0)
+    }
+}
+
+impl Default for RequestTimeout {
+    fn default() -> Self {
+        // Default: 2 minutes
+        Self(Some(Duration::from_secs(120)))
+    }
+}
+
 /// TLS connection information for profiling
 #[derive(Clone, Default)]
 pub struct TlsInfo {
@@ -108,6 +180,8 @@ pub struct ServerConfig {
     pub drain_timeout: Duration,
     /// Static file cache TTL (default: 1d, "off" to disable)
     pub static_cache_ttl: StaticCacheTtl,
+    /// Request timeout (default: 2m, "off" to disable)
+    pub request_timeout: RequestTimeout,
 }
 
 impl ServerConfig {
@@ -123,6 +197,7 @@ impl ServerConfig {
             error_pages_dir: None,
             drain_timeout: Duration::from_secs(30),
             static_cache_ttl: StaticCacheTtl::default(),
+            request_timeout: RequestTimeout::default(),
         }
     }
 
@@ -164,6 +239,11 @@ impl ServerConfig {
 
     pub fn with_static_cache_ttl(mut self, ttl: StaticCacheTtl) -> Self {
         self.static_cache_ttl = ttl;
+        self
+    }
+
+    pub fn with_request_timeout(mut self, timeout: RequestTimeout) -> Self {
+        self.request_timeout = timeout;
         self
     }
 

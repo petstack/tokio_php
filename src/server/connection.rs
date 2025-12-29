@@ -91,7 +91,7 @@ use hyper_util::server::conn::auto;
 use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use super::access_log;
 use super::config::TlsInfo;
@@ -134,6 +134,7 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub error_pages: ErrorPages,
     pub rate_limiter: Option<Arc<RateLimiter>>,
     pub static_cache_ttl: super::config::StaticCacheTtl,
+    pub request_timeout: super::config::RequestTimeout,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -802,6 +803,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 server_vars,
                 files,
                 profile: profiling_enabled,
+                timeout: self.request_timeout.as_duration(),
             };
 
             // Track pending requests for metrics (guard ensures cleanup on cancel)
@@ -834,7 +836,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     from_script_response(resp, profiling_enabled, use_brotli)
                 }
                 Err(e) => {
-                    if e.is_queue_full() {
+                    if e.is_timeout() {
+                        // Request timed out
+                        warn!("Request timeout: {}", uri_path);
+                        Response::builder()
+                            .status(StatusCode::GATEWAY_TIMEOUT)
+                            .header("Content-Type", "text/plain")
+                            .body(Full::new(Bytes::from_static(b"504 Gateway Timeout")))
+                            .unwrap()
+                    } else if e.is_queue_full() {
                         // Queue is full - server overloaded
                         self.request_metrics.inc_dropped();
                         Response::builder()

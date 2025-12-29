@@ -38,6 +38,8 @@ services:
       - RATE_WINDOW=${RATE_WINDOW:-60}
       # STATIC_CACHE_TTL: cache duration for static files (1d, 1w, 1m, 1y, off)
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
+      # REQUEST_TIMEOUT: request timeout (30s, 2m, 5m, off). Returns 504 on timeout
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
     volumes:
       - ./www:/var/www/html:ro
     restart: unless-stopped
@@ -77,6 +79,7 @@ services:
       - RATE_LIMIT=${RATE_LIMIT:-0}
       - RATE_WINDOW=${RATE_WINDOW:-60}
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
     volumes:
       - ./www:/var/www/html:ro
       - ./certs:/certs:ro

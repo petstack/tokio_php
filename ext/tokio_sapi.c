@@ -22,6 +22,13 @@
 static __thread tokio_request_context *tls_request_ctx = NULL;
 static __thread uint64_t tls_request_id = 0;
 
+/* Heartbeat context for request timeout extension */
+static __thread void *tls_heartbeat_ctx = NULL;
+static __thread uint64_t tls_heartbeat_max_secs = 0;
+/* Forward declaration for heartbeat callback type */
+typedef int64_t (*tokio_heartbeat_fn_t)(void *ctx, uint64_t secs);
+static __thread tokio_heartbeat_fn_t tls_heartbeat_callback = NULL;
+
 /* Get or create thread-local request context */
 static tokio_request_context* get_request_context(void)
 {
@@ -612,6 +619,35 @@ void tokio_sapi_request_shutdown(void)
 {
     free_request_context();
     tls_request_id = 0;
+    tls_heartbeat_ctx = NULL;
+    tls_heartbeat_max_secs = 0;
+    tls_heartbeat_callback = NULL;
+}
+
+/* ============================================================================
+ * Heartbeat API for request timeout extension
+ * ============================================================================ */
+
+/* Set heartbeat context and callback (called from Rust before PHP execution)
+ * NOTE: This function is no longer used. Heartbeat info is now passed via $_SERVER
+ * because the static library and dynamic extension have separate TLS storage. */
+void tokio_sapi_set_heartbeat_ctx(void *ctx, uint64_t max_secs, tokio_heartbeat_fn_t callback)
+{
+    tls_heartbeat_ctx = ctx;
+    tls_heartbeat_max_secs = max_secs;
+    tls_heartbeat_callback = callback;
+}
+
+/* Get heartbeat context (for internal use) */
+void* tokio_sapi_get_heartbeat_ctx(void)
+{
+    return tls_heartbeat_ctx;
+}
+
+/* Get max heartbeat extension (for internal use) */
+uint64_t tokio_sapi_get_heartbeat_max_secs(void)
+{
+    return tls_heartbeat_max_secs;
 }
 
 /* ============================================================================
@@ -704,6 +740,80 @@ PHP_FUNCTION(tokio_async_call)
     RETURN_FALSE;
 }
 
+/* tokio_request_heartbeat(int $time = 10): bool - extend request timeout
+ *
+ * Extends the request timeout deadline by $time seconds.
+ * Returns false if:
+ * - No timeout is configured (REQUEST_TIMEOUT=off)
+ * - $time <= 0
+ * - $time > REQUEST_TIMEOUT limit (e.g., if REQUEST_TIMEOUT=5m, max is 300)
+ *
+ * Can be called multiple times to keep extending the deadline.
+ * Other PHP limits (set_time_limit, max_execution_time) still apply.
+ */
+PHP_FUNCTION(tokio_request_heartbeat)
+{
+    zend_long time = 10;
+
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(time)
+    ZEND_PARSE_PARAMETERS_END();
+
+    /* Get heartbeat info from $_SERVER (set by Rust via superglobals)
+     * This is necessary because the extension (.so) and static library (.a)
+     * have separate TLS storage when loaded dynamically. */
+    zval *server_arr = zend_hash_str_find(&EG(symbol_table), "_SERVER", sizeof("_SERVER")-1);
+    if (!server_arr || Z_TYPE_P(server_arr) != IS_ARRAY) {
+        RETURN_FALSE;
+    }
+
+    /* Get context pointer from $_SERVER['TOKIO_HEARTBEAT_CTX'] */
+    zval *ctx_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_HEARTBEAT_CTX", sizeof("TOKIO_HEARTBEAT_CTX")-1);
+    if (!ctx_val || Z_TYPE_P(ctx_val) != IS_STRING) {
+        RETURN_FALSE;
+    }
+    void *ctx = (void*)strtoull(Z_STRVAL_P(ctx_val), NULL, 16);
+    if (ctx == NULL) {
+        RETURN_FALSE;
+    }
+
+    /* Get max_secs from $_SERVER['TOKIO_HEARTBEAT_MAX_SECS'] */
+    zval *max_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_HEARTBEAT_MAX_SECS", sizeof("TOKIO_HEARTBEAT_MAX_SECS")-1);
+    if (!max_val || Z_TYPE_P(max_val) != IS_STRING) {
+        RETURN_FALSE;
+    }
+    uint64_t max_secs = strtoull(Z_STRVAL_P(max_val), NULL, 10);
+    if (max_secs == 0) {
+        RETURN_FALSE;
+    }
+
+    /* Get callback pointer from $_SERVER['TOKIO_HEARTBEAT_CALLBACK'] */
+    zval *cb_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_HEARTBEAT_CALLBACK", sizeof("TOKIO_HEARTBEAT_CALLBACK")-1);
+    if (!cb_val || Z_TYPE_P(cb_val) != IS_STRING) {
+        RETURN_FALSE;
+    }
+    tokio_heartbeat_fn_t callback = (tokio_heartbeat_fn_t)strtoull(Z_STRVAL_P(cb_val), NULL, 16);
+    if (callback == NULL) {
+        RETURN_FALSE;
+    }
+
+    /* Validate time parameter */
+    if (time <= 0) {
+        RETURN_FALSE;
+    }
+
+    /* Check against max extension limit */
+    if ((uint64_t)time > max_secs) {
+        RETURN_FALSE;
+    }
+
+    /* Call Rust callback to update deadline */
+    int64_t result = callback(ctx, (uint64_t)time);
+
+    RETURN_BOOL(result != 0);
+}
+
 /* ============================================================================
  * Arginfo for PHP 8+ (fixes "Missing arginfo" warnings)
  * ============================================================================ */
@@ -722,6 +832,10 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_tokio_async_call, 0, 2, MAY_BE_S
     ZEND_ARG_TYPE_INFO(0, data, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_request_heartbeat, 0, 0, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, time, IS_LONG, 0, "10")
+ZEND_END_ARG_INFO()
+
 /* ============================================================================
  * PHP Extension registration
  * ============================================================================ */
@@ -731,6 +845,7 @@ static const zend_function_entry tokio_sapi_functions[] = {
     PHP_FE(tokio_worker_id, arginfo_tokio_worker_id)
     PHP_FE(tokio_server_info, arginfo_tokio_server_info)
     PHP_FE(tokio_async_call, arginfo_tokio_async_call)
+    PHP_FE(tokio_request_heartbeat, arginfo_tokio_request_heartbeat)
     PHP_FE_END
 };
 

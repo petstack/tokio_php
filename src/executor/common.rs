@@ -6,10 +6,10 @@
 use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 use crate::executor::sapi;
@@ -57,6 +57,8 @@ pub struct WorkerRequest {
     pub request: ScriptRequest,
     pub response_tx: oneshot::Sender<Result<ScriptResponse, String>>,
     pub queued_at: Instant,
+    /// Heartbeat context for timeout extension (shared with async side)
+    pub heartbeat_ctx: Option<Arc<HeartbeatContext>>,
 }
 
 /// Handle to a worker thread
@@ -69,6 +71,92 @@ const DEFAULT_QUEUE_MULTIPLIER: usize = 100;
 
 /// Error returned when queue is full
 pub const QUEUE_FULL_ERROR: &str = "Queue full";
+
+/// Error returned when request times out
+pub const REQUEST_TIMEOUT_ERROR: &str = "Request timeout";
+
+// =============================================================================
+// Heartbeat Context for Request Timeout Extension
+// =============================================================================
+
+/// Context for request heartbeat mechanism.
+/// Allows PHP scripts to extend their timeout deadline.
+#[repr(C)]
+pub struct HeartbeatContext {
+    /// Current deadline as Unix timestamp in seconds
+    deadline: AtomicU64,
+    /// Maximum extension allowed per heartbeat call (= original REQUEST_TIMEOUT)
+    max_extension_secs: u64,
+}
+
+impl HeartbeatContext {
+    /// Creates a new heartbeat context with the given timeout.
+    pub fn new(timeout_secs: u64) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        Self {
+            deadline: AtomicU64::new(now + timeout_secs),
+            max_extension_secs: timeout_secs,
+        }
+    }
+
+    /// Extends the deadline by `secs` seconds.
+    /// Returns false if `secs` exceeds the max extension limit.
+    pub fn heartbeat(&self, secs: u64) -> bool {
+        if secs == 0 || secs > self.max_extension_secs {
+            return false;
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        self.deadline.store(now + secs, Ordering::Release);
+        true
+    }
+
+    /// Returns the remaining time until deadline, or None if already expired.
+    pub fn remaining(&self) -> Option<Duration> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let deadline = self.deadline.load(Ordering::Acquire);
+
+        if now >= deadline {
+            None
+        } else {
+            Some(Duration::from_secs(deadline - now))
+        }
+    }
+
+    /// Returns the max extension limit in seconds.
+    pub fn max_extension(&self) -> u64 {
+        self.max_extension_secs
+    }
+}
+
+/// FFI callback from PHP extension to perform heartbeat.
+/// Returns 1 on success, 0 on failure.
+/// Takes `*mut c_void` for FFI compatibility (cast from HeartbeatContext pointer).
+#[no_mangle]
+pub extern "C" fn tokio_php_heartbeat(ctx: *mut std::ffi::c_void, secs: u64) -> i64 {
+    if ctx.is_null() {
+        return 0;
+    }
+
+    let ctx = unsafe { &*(ctx as *mut HeartbeatContext) };
+
+    if ctx.heartbeat(secs) {
+        1
+    } else {
+        0
+    }
+}
 
 /// Generic worker pool for PHP execution
 pub struct WorkerPool {
@@ -134,8 +222,16 @@ impl WorkerPool {
 
     /// Executes a request asynchronously via the worker pool.
     /// Returns QUEUE_FULL_ERROR if the queue is full.
+    /// Returns REQUEST_TIMEOUT_ERROR if the request times out.
+    ///
+    /// Supports heartbeat mechanism: if timeout is configured, creates a HeartbeatContext
+    /// that allows PHP scripts to extend the deadline via tokio_request_heartbeat().
     pub async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
-        let (response_tx, response_rx) = oneshot::channel();
+        let (response_tx, mut response_rx) = oneshot::channel();
+        let timeout = request.timeout;
+
+        // Create heartbeat context if timeout is configured
+        let heartbeat_ctx = timeout.map(|t| Arc::new(HeartbeatContext::new(t.as_secs())));
 
         // Use try_send to avoid blocking and detect queue full
         self.request_tx
@@ -143,15 +239,51 @@ impl WorkerPool {
                 request,
                 response_tx,
                 queued_at: Instant::now(),
+                heartbeat_ctx: heartbeat_ctx.clone(),
             })
             .map_err(|e| match e {
                 mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
                 mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
             })?;
 
-        response_rx
-            .await
-            .map_err(|_| "Worker dropped response".to_string())?
+        // Apply timeout with heartbeat support if configured
+        if let Some(ctx) = heartbeat_ctx {
+            // Polling loop: check deadline and wait for response
+            // Poll interval: 100ms for responsive heartbeat, capped at remaining time
+            const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+            loop {
+                match ctx.remaining() {
+                    None => {
+                        // Deadline expired
+                        return Err(REQUEST_TIMEOUT_ERROR.to_string());
+                    }
+                    Some(remaining) => {
+                        // Wait for response or poll interval, whichever is shorter
+                        let wait_time = remaining.min(POLL_INTERVAL);
+
+                        tokio::select! {
+                            biased;
+                            result = &mut response_rx => {
+                                return match result {
+                                    Ok(r) => r,
+                                    Err(_) => Err("Worker dropped response".to_string()),
+                                };
+                            }
+                            _ = tokio::time::sleep(wait_time) => {
+                                // Continue loop to check deadline again
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // No timeout configured - wait indefinitely
+            response_rx
+                .await
+                .map_err(|_| "Worker dropped response".to_string())?
+        }
     }
 
     /// Returns the queue capacity
@@ -321,9 +453,20 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     code
 }
 
-/// Builds combined code: superglobals + require script (single eval)
+/// Builds combined code: set_time_limit + superglobals + require script (single eval)
 pub fn build_combined_code(request: &ScriptRequest) -> String {
-    let mut code = build_superglobals_code(request);
+    let mut code = String::with_capacity(4096);
+
+    // Inject set_time_limit() if timeout is configured
+    if let Some(timeout) = request.timeout {
+        // Use ceiling to ensure at least 1 second for very short timeouts
+        let secs = timeout.as_secs().max(1);
+        code.push_str("set_time_limit(");
+        code.push_str(&secs.to_string());
+        code.push_str(");");
+    }
+
+    code.push_str(&build_superglobals_code(request));
     code.push_str("require'");
     write_escaped(&mut code, &request.script_path);
     code.push_str("';");
@@ -569,7 +712,9 @@ pub fn worker_main_loop(
         };
 
         match work {
-            Ok(WorkerRequest { request, response_tx, queued_at }) => {
+            Ok(WorkerRequest { request, response_tx, queued_at, heartbeat_ctx: _ }) => {
+                // Note: heartbeat_ctx is ignored here - it's only used in ExtExecutor
+                // which has the tokio_sapi extension for heartbeat support
                 let profiling = request.profile && profiler::is_enabled();
 
                 // Measure queue wait time

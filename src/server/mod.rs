@@ -258,6 +258,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 error_pages: self.error_pages.clone(),
                 rate_limiter: self.rate_limiter.clone(),
                 static_cache_ttl: self.config.static_cache_ttl.clone(),
+                request_timeout: self.config.request_timeout.clone(),
             });
 
             let handle = tokio::spawn(async move {

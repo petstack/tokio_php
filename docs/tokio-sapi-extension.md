@@ -57,6 +57,27 @@ print_r($info);
 ?>
 ```
 
+### tokio_request_heartbeat()
+
+Extends the request timeout deadline for long-running operations. See [Request Heartbeat](request-heartbeat.md) for full documentation.
+
+```php
+<?php
+// Extend deadline by 30 seconds (must be <= REQUEST_TIMEOUT)
+set_time_limit(30);
+$success = tokio_request_heartbeat(30);
+
+if ($success) {
+    echo "Deadline extended\n";
+}
+?>
+```
+
+**Parameters:**
+- `int $time = 10` - Seconds to extend deadline
+
+**Returns:** `bool` - `true` on success, `false` if timeout disabled or value exceeds limit.
+
 ### tokio_async_call()
 
 Placeholder for future async PHP-to-Rust calls (not yet implemented).
@@ -74,8 +95,14 @@ The extension adds additional `$_SERVER` variables:
 
 ```php
 <?php
-echo $_SERVER['TOKIO_REQUEST_ID'];  // Current request ID
-echo $_SERVER['TOKIO_WORKER_ID'];   // Current worker ID
+// Request identification
+echo $_SERVER['TOKIO_REQUEST_ID'];          // Current request ID
+echo $_SERVER['TOKIO_WORKER_ID'];           // Current worker ID
+
+// Heartbeat (internal, used by tokio_request_heartbeat())
+echo $_SERVER['TOKIO_HEARTBEAT_CTX'];       // Hex pointer to context
+echo $_SERVER['TOKIO_HEARTBEAT_MAX_SECS'];  // Max extension (= REQUEST_TIMEOUT)
+echo $_SERVER['TOKIO_HEARTBEAT_CALLBACK'];  // Hex pointer to callback
 ?>
 ```
 

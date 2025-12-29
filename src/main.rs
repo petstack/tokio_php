@@ -162,6 +162,18 @@ async fn async_main(
     }
     config = config.with_static_cache_ttl(static_cache_ttl);
 
+    // Request timeout (default: 2m, "off" to disable)
+    let request_timeout = std::env::var("REQUEST_TIMEOUT")
+        .ok()
+        .map(|v| server::config::RequestTimeout::parse(&v))
+        .unwrap_or_default();
+    if request_timeout.is_enabled() {
+        info!("Request timeout: {}s", request_timeout.as_secs());
+    } else {
+        info!("Request timeout: disabled");
+    }
+    config = config.with_request_timeout(request_timeout);
+
     // Check for stub mode (via env var or feature)
     let use_stub = std::env::var("USE_STUB")
         .map(|v| v == "1" || v.to_lowercase() == "true")

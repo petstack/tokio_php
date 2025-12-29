@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 use super::common::{
     php_request_shutdown, php_request_startup, ts_resource_ex,
-    StdoutCapture, WorkerPool, WorkerRequest,
+    tokio_php_heartbeat, HeartbeatContext, StdoutCapture, WorkerPool, WorkerRequest,
     FINALIZE_CODE, FINALIZE_NAME,
 };
 use super::sapi;
@@ -62,6 +62,7 @@ extern "C" {
 
     // Script execution
     fn tokio_sapi_execute_script(path: *const c_char) -> c_int;
+
 }
 
 // =============================================================================
@@ -150,12 +151,20 @@ struct ExtExecutionTiming {
 // Script Execution (using FFI for superglobals - no eval overhead!)
 // =============================================================================
 
+/// Heartbeat info for passing via $_SERVER
+struct HeartbeatInfo {
+    ctx_hex: String,
+    max_secs: String,
+    callback_hex: String,
+}
+
 /// Execute PHP script using FFI for superglobals (faster than eval!)
 fn execute_script_with_ffi(
     request: &ScriptRequest,
     request_id: u64,
     worker_id: usize,
     profiling: bool,
+    heartbeat: Option<HeartbeatInfo>,
 ) -> Result<(StdoutCapture, ExtExecutionTiming), String> {
     let mut timing = ExtExecutionTiming::default();
 
@@ -181,10 +190,17 @@ fn execute_script_with_ffi(
     let worker_id_value = worker_id.to_string();
     let (buf_len, count) = SERVER_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.server_vars.iter().map(|(k, v)| (k, v)), &[
+        // Build extra vars including heartbeat info if available
+        let mut extra_vars: Vec<(&str, &str)> = vec![
             ("TOKIO_REQUEST_ID", &req_id_value),
             ("TOKIO_WORKER_ID", &worker_id_value),
-        ])
+        ];
+        if let Some(ref hb) = heartbeat {
+            extra_vars.push(("TOKIO_HEARTBEAT_CTX", &hb.ctx_hex));
+            extra_vars.push(("TOKIO_HEARTBEAT_MAX_SECS", &hb.max_secs));
+            extra_vars.push(("TOKIO_HEARTBEAT_CALLBACK", &hb.callback_hex));
+        }
+        pack_into_buffer(&mut buf, request.server_vars.iter().map(|(k, v)| (k, v)), &extra_vars)
     });
     if count > 0 {
         SERVER_BUFFER.with(|buf| unsafe {
@@ -293,6 +309,21 @@ fn execute_script_with_ffi(
     }
     if profiling {
         timing.ffi_init_eval_us = init_start.elapsed().as_micros() as u64;
+    }
+
+    // Set time limit if configured
+    if let Some(timeout) = request.timeout {
+        let secs = timeout.as_secs().max(1);
+        let code = format!("set_time_limit({});", secs);
+        let code_c = CString::new(code).unwrap();
+        let name = b"set_time_limit\0";
+        unsafe {
+            zend_eval_string(
+                code_c.as_ptr() as *mut c_char,
+                ptr::null_mut(),
+                name.as_ptr() as *mut c_char,
+            );
+        }
     }
 
     // Execute script via FFI
@@ -412,7 +443,7 @@ fn ext_worker_main_loop(
         };
 
         match work {
-            Ok(WorkerRequest { request, response_tx, queued_at }) => {
+            Ok(WorkerRequest { request, response_tx, queued_at, heartbeat_ctx }) => {
                 let profiling = request.profile && profiler::is_enabled();
                 let request_id = next_request_id();
 
@@ -438,6 +469,17 @@ fn ext_worker_main_loop(
                     unsafe {
                         tokio_sapi_request_init(request_id);
                     }
+
+                    // Build heartbeat info for passing via $_SERVER
+                    // (TLS doesn't work between static lib and dynamic extension)
+                    let heartbeat_info = heartbeat_ctx.as_ref().map(|ctx| {
+                        let ctx_ptr = Arc::as_ptr(ctx) as *mut c_void;
+                        HeartbeatInfo {
+                            ctx_hex: format!("{:x}", ctx_ptr as usize),
+                            max_secs: ctx.max_extension().to_string(),
+                            callback_hex: format!("{:x}", tokio_php_heartbeat as usize),
+                        }
+                    });
                     let ffi_request_init_us = if profiling {
                         req_init_start.elapsed().as_micros() as u64
                     } else {
@@ -445,7 +487,7 @@ fn ext_worker_main_loop(
                     };
 
                     // Execute script with FFI superglobals (no eval overhead!)
-                    match execute_script_with_ffi(&request, request_id, id, profiling) {
+                    match execute_script_with_ffi(&request, request_id, id, profiling, heartbeat_info) {
                         Ok((capture, mut timing)) => {
                             // Add request_init timing
                             timing.ffi_request_init_us = ffi_request_init_us;

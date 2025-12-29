@@ -184,4 +184,10 @@ int tokio_sapi_get_response_code(void);
 /* Execute script */
 int tokio_sapi_execute_script(const char *path);
 
+/* Heartbeat API for request timeout extension */
+typedef int64_t (*tokio_heartbeat_fn_t)(void *ctx, uint64_t secs);
+void tokio_sapi_set_heartbeat_ctx(void *ctx, uint64_t max_secs, tokio_heartbeat_fn_t callback);
+void* tokio_sapi_get_heartbeat_ctx(void);
+uint64_t tokio_sapi_get_heartbeat_max_secs(void);
+
 #endif /* TOKIO_SAPI_H */

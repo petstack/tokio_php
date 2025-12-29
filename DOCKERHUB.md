@@ -83,6 +83,7 @@ All tags are multi-arch (`amd64` + `arm64`).
 |----------|---------|-------------|
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., `404.html`, `500.html`) |
 | `STATIC_CACHE_TTL` | `1d` | Cache-Control max-age for static files. Values: `off`, `1h`, `1d`, `1w` |
+| `REQUEST_TIMEOUT` | `2m` | Request timeout. Values: `30s`, `2m`, `5m`, `off`. Returns 504 on timeout |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout in seconds |
 
 ### Rate Limiting
