@@ -179,7 +179,6 @@ wrk -t4 -c100 -d10s http://localhost:8081/index.php
 | `php8.4-alpine3.23` | PHP 8.4, Alpine 3.23 |
 | `php8.4-alpine3.22` | PHP 8.4, Alpine 3.22 |
 | `php8.4-alpine3.21` | PHP 8.4, Alpine 3.21 |
-| `php8.4-alpine3.20` | PHP 8.4, Alpine 3.20 |
 | `php8.5-alpine3.23` | PHP 8.5, Alpine 3.23 |
 | `php8.5-alpine3.22` | PHP 8.5, Alpine 3.22 |
 | `php8.5-alpine3.21` | PHP 8.5, Alpine 3.21 |
