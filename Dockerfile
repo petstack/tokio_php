@@ -1,4 +1,7 @@
-FROM php:8.4-zts-alpine AS builder
+# PHP version: 8.4 or 8.5
+ARG PHP_VERSION=8.4
+
+FROM php:${PHP_VERSION}-zts-alpine AS builder
 
 # Install Rust and build dependencies (including PHP library dependencies)
 RUN apk add --no-cache \
@@ -40,6 +43,9 @@ RUN phpize && \
     make && \
     make install
 
+# Save extension directory path for runtime stage
+RUN php-config --extension-dir > /tmp/php_ext_dir
+
 # Also build as static library for linking with Rust
 RUN cc -c -fPIC -I. -I/usr/local/include/php -I/usr/local/include/php/main \
     -I/usr/local/include/php/TSRM -I/usr/local/include/php/Zend \
@@ -59,16 +65,25 @@ COPY build.rs ./
 RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
 
 # Runtime stage - use same ZTS image
-FROM php:8.4-zts-alpine
+ARG PHP_VERSION=8.4
+FROM php:${PHP_VERSION}-zts-alpine
 
 # Install runtime dependencies and create www-data user
 RUN apk add --no-cache libgcc curl && \
     addgroup -g 82 -S www-data 2>/dev/null || true && \
     adduser -u 82 -D -S -G www-data www-data 2>/dev/null || true
 
+# Copy extension directory path from builder
+COPY --from=builder /tmp/php_ext_dir /tmp/php_ext_dir
+
 # Copy tokio_sapi extension from builder to correct PHP extensions directory
-COPY --from=builder /usr/local/lib/php/extensions/no-debug-zts-20240924/tokio_sapi.so \
-     /usr/local/lib/php/extensions/no-debug-zts-20240924/
+# Uses dynamic path detection to support PHP 8.4 and 8.5
+RUN EXT_DIR=$(php-config --extension-dir) && \
+    mkdir -p "$EXT_DIR"
+COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
+RUN EXT_DIR=$(php-config --extension-dir) && \
+    cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
+    rm /tmp/tokio_sapi.so /tmp/php_ext_dir
 
 # Configure tokio_sapi extension (dynamic .so for PHP functions)
 RUN echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
