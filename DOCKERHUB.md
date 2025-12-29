@@ -2,6 +2,8 @@
 
 High-performance async PHP server written in Rust. Uses Tokio for async I/O and php-embed SAPI for PHP execution.
 
+**Supported Architectures:** `linux/amd64`, `linux/arm64`
+
 ## Features
 
 - **HTTP/1.1 & HTTP/2** - Full protocol support with automatic detection
@@ -33,14 +35,18 @@ docker run -d -p 8080:8080 \
 
 ## Available Tags
 
-| Tag | PHP | Alpine | Description |
-|-----|-----|--------|-------------|
-| `8.5-alpine3.23`, `latest` | 8.5 | 3.23 | Latest PHP with newest Alpine |
-| `8.5-alpine3.22` | 8.5 | 3.22 | PHP 8.5 with Alpine 3.22 |
-| `8.5-alpine3.21` | 8.5 | 3.21 | PHP 8.5 with Alpine 3.21 |
-| `8.4-alpine3.23` | 8.4 | 3.23 | Stable PHP with newest Alpine |
-| `8.4-alpine3.22` | 8.4 | 3.22 | PHP 8.4 with Alpine 3.22 |
-| `8.4-alpine3.21` | 8.4 | 3.21 | PHP 8.4 with Alpine 3.21 |
+All tags are multi-arch (`amd64` + `arm64`).
+
+| Tag | PHP | Alpine |
+|-----|-----|--------|
+| `latest`, `php8.4` | 8.4 | 3.23 |
+| `php8.5` | 8.5 | 3.23 |
+| `php8.4-alpine3.23` | 8.4 | 3.23 |
+| `php8.4-alpine3.22` | 8.4 | 3.22 |
+| `php8.4-alpine3.21` | 8.4 | 3.21 |
+| `php8.5-alpine3.23` | 8.5 | 3.23 |
+| `php8.5-alpine3.22` | 8.5 | 3.22 |
+| `php8.5-alpine3.21` | 8.5 | 3.21 |
 
 ## Environment Variables
 
