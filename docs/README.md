@@ -30,7 +30,20 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 ## Quick Start
 
 ```bash
-# Build and run (PHP 8.4, ExtExecutor enabled by default)
+# Run from Docker Hub
+docker run -d -p 8080:8080 -v ./www:/var/www/html diolektor/tokio_php
+
+# Or with specific version
+docker run -d -p 8080:8080 -v ./www:/var/www/html diolektor/tokio_php:php8.5
+
+# Test
+curl http://localhost:8080/
+```
+
+### Build from Source
+
+```bash
+# Build and run (PHP 8.4)
 docker compose build
 docker compose up -d
 
@@ -38,17 +51,11 @@ docker compose up -d
 PHP_VERSION=8.5 docker compose build
 PHP_VERSION=8.5 docker compose up -d
 
-# Test
-curl http://localhost:8081/
-
 # With TLS/HTTPS
 docker compose --profile tls up -d
 
 # View logs
 docker compose logs -f
-
-# Stop
-docker compose down
 ```
 
 ## Performance
@@ -127,6 +134,11 @@ tokio_php/
 ├── LICENSE               # AGPL-3.0
 └── README.md             # Project overview
 ```
+
+## Links
+
+- [Docker Hub](https://hub.docker.com/r/diolektor/tokio_php)
+- [GitHub](https://github.com/petstack/tokio_php)
 
 ## License
 

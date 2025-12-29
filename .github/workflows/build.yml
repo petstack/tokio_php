@@ -1,0 +1,90 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  IMAGE_NAME: diolektor/tokio_php
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # PHP 8.4
+          - php_version: "8.4"
+            alpine_version: "3.20"
+          - php_version: "8.4"
+            alpine_version: "3.21"
+          - php_version: "8.4"
+            alpine_version: "3.22"
+          - php_version: "8.4"
+            alpine_version: "3.23"
+          # PHP 8.5
+          - php_version: "8.5"
+            alpine_version: "3.21"
+          - php_version: "8.5"
+            alpine_version: "3.22"
+          - php_version: "8.5"
+            alpine_version: "3.23"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.release
+          build-args: |
+            PHP_VERSION=${{ matrix.php_version }}
+            ALPINE_VERSION=${{ matrix.alpine_version }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:php${{ matrix.php_version }}-alpine${{ matrix.alpine_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Tag latest after all builds complete
+  tag-latest:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Tag latest images
+        run: |
+          # Tag php8.4-alpine3.23 as latest and php8.4
+          docker pull ${{ env.IMAGE_NAME }}:php8.4-alpine3.23
+          docker tag ${{ env.IMAGE_NAME }}:php8.4-alpine3.23 ${{ env.IMAGE_NAME }}:latest
+          docker tag ${{ env.IMAGE_NAME }}:php8.4-alpine3.23 ${{ env.IMAGE_NAME }}:php8.4
+          docker push ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:php8.4
+
+          # Tag php8.5-alpine3.23 as php8.5
+          docker pull ${{ env.IMAGE_NAME }}:php8.5-alpine3.23
+          docker tag ${{ env.IMAGE_NAME }}:php8.5-alpine3.23 ${{ env.IMAGE_NAME }}:php8.5
+          docker push ${{ env.IMAGE_NAME }}:php8.5

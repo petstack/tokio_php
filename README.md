@@ -17,8 +17,21 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 ## Quick Start
 
 ```bash
+# Run from Docker Hub
+docker run -d -p 8080:8080 -v ./www:/var/www/html diolektor/tokio_php
+
+# Or with specific PHP/Alpine version
+docker run -d -p 8080:8080 -v ./www:/var/www/html diolektor/tokio_php:php8.5-alpine3.23
+
+# Test
+curl http://localhost:8080/
+```
+
+## Build from Source
+
+```bash
 # Clone repository
-git clone https://github.com/yourname/tokio_php.git
+git clone https://github.com/petstack/tokio_php.git
 cd tokio_php
 
 # Build and run (PHP 8.4)
@@ -28,9 +41,6 @@ docker compose up -d
 # Build with PHP 8.5
 PHP_VERSION=8.5 docker compose build
 PHP_VERSION=8.5 docker compose up -d
-
-# Test
-curl http://localhost:8081/
 ```
 
 ## Configuration
@@ -159,12 +169,27 @@ wrk -t4 -c100 -d10s http://localhost:8081/index.php
 - Docker & Docker Compose
 - Or: Rust 1.70+, PHP 8.4/8.5 ZTS with php-embed
 
-## License
+## Docker Tags
 
-[AGPL-3.0](LICENSE)
+| Tag | Description |
+|-----|-------------|
+| `latest` | PHP 8.4, Alpine 3.23 |
+| `php8.4` | PHP 8.4, Alpine 3.23 |
+| `php8.5` | PHP 8.5, Alpine 3.23 |
+| `php8.4-alpine3.23` | PHP 8.4, Alpine 3.23 |
+| `php8.4-alpine3.22` | PHP 8.4, Alpine 3.22 |
+| `php8.4-alpine3.21` | PHP 8.4, Alpine 3.21 |
+| `php8.4-alpine3.20` | PHP 8.4, Alpine 3.20 |
+| `php8.5-alpine3.23` | PHP 8.5, Alpine 3.23 |
+| `php8.5-alpine3.22` | PHP 8.5, Alpine 3.22 |
+| `php8.5-alpine3.21` | PHP 8.5, Alpine 3.21 |
 
 ## Links
 
+- [Docker Hub](https://hub.docker.com/r/diolektor/tokio_php)
+- [GitHub](https://github.com/petstack/tokio_php)
 - [Documentation](docs/)
-- [Architecture](docs/architecture.md)
-- [Compression](docs/compression.md)
+
+## License
+
+[AGPL-3.0](LICENSE)

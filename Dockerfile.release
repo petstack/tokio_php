@@ -1,0 +1,120 @@
+# Minimal release image with only tokio_sapi.so and tokio_php binary
+#
+# Build args:
+#   PHP_VERSION: 8.4 or 8.5
+#   ALPINE_VERSION: 3.20, 3.21, 3.22, or 3.23
+#
+# Usage:
+#   docker build -f Dockerfile.release \
+#     --build-arg PHP_VERSION=8.4 \
+#     --build-arg ALPINE_VERSION=3.23 \
+#     -t tokio_php:php8.4-alpine3.23 .
+
+ARG PHP_VERSION=8.4
+ARG ALPINE_VERSION=3.23
+
+# =============================================================================
+# Builder stage
+# =============================================================================
+FROM php:${PHP_VERSION}-zts-alpine${ALPINE_VERSION} AS builder
+
+# Install Rust and build dependencies
+RUN apk add --no-cache \
+    rust \
+    cargo \
+    musl-dev \
+    pkgconfig \
+    clang \
+    llvm \
+    make \
+    g++ \
+    autoconf \
+    automake \
+    # Libraries required by PHP
+    readline-dev \
+    ncurses-dev \
+    curl-dev \
+    oniguruma-dev \
+    sqlite-dev \
+    argon2-dev \
+    libxml2-dev \
+    zlib-dev \
+    openssl-dev \
+    gnu-libiconv-dev
+
+WORKDIR /app
+
+# Build tokio_sapi PHP extension
+COPY ext ./ext
+WORKDIR /app/ext
+RUN phpize && \
+    ./configure --enable-tokio_sapi && \
+    make && \
+    make install
+
+# Save extension directory path
+RUN php-config --extension-dir > /tmp/php_ext_dir
+
+# Build static library for Rust linking
+RUN cc -c -fPIC -I. -I/usr/local/include/php -I/usr/local/include/php/main \
+    -I/usr/local/include/php/TSRM -I/usr/local/include/php/Zend \
+    -I/usr/local/include/php/ext -DHAVE_CONFIG_H -o tokio_sapi_static.o tokio_sapi.c && \
+    ar rcs libtokio_sapi.a tokio_sapi_static.o && \
+    cp libtokio_sapi.a /usr/local/lib/
+
+# Build Rust binary
+WORKDIR /app
+COPY Cargo.toml Cargo.lock* ./
+COPY src ./src
+COPY build.rs ./
+
+RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
+
+# =============================================================================
+# Minimal runtime stage
+# =============================================================================
+ARG PHP_VERSION
+ARG ALPINE_VERSION
+FROM php:${PHP_VERSION}-zts-alpine${ALPINE_VERSION}
+
+# Minimal runtime dependencies
+RUN apk add --no-cache libgcc
+
+# Copy extension
+COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
+RUN EXT_DIR=$(php-config --extension-dir) && \
+    cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
+    rm /tmp/tokio_sapi.so && \
+    echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
+
+# Configure OPcache + JIT
+RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.interned_strings_buffer=16" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.max_accelerated_files=10000" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.jit_buffer_size=64M" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini
+
+# Copy binary
+COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
+
+# Create document root directory
+RUN mkdir -p /var/www/html
+
+WORKDIR /var/www/html
+
+EXPOSE 8080
+
+# Labels
+ARG PHP_VERSION
+ARG ALPINE_VERSION
+LABEL org.opencontainers.image.title="tokio_php"
+LABEL org.opencontainers.image.description="Async PHP web server in Rust"
+LABEL org.opencontainers.image.licenses="AGPL-3.0"
+LABEL org.opencontainers.image.source="https://github.com/petstack/tokio_php"
+LABEL php.version="${PHP_VERSION}"
+LABEL alpine.version="${ALPINE_VERSION}"
+
+CMD ["tokio_php"]
