@@ -120,6 +120,7 @@ fn is_connection_error(err_str: &str) -> bool {
 }
 
 use super::internal::RequestMetrics;
+use crate::trace_context::TraceContext;
 
 /// Connection handler context.
 pub struct ConnectionContext<E: ScriptExecutor> {
@@ -299,13 +300,16 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let request_start = Instant::now();
 
-        // Generate unique request ID (use existing X-Request-ID or generate new)
+        // Extract or generate W3C Trace Context
+        let trace_ctx = TraceContext::from_headers(req.headers());
+
+        // Use trace_id as request_id for correlation, or fall back to X-Request-ID
         let request_id = req
             .headers()
             .get("x-request-id")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| generate_request_id());
+            .unwrap_or_else(|| format!("{}-{}", &trace_ctx.trace_id[..12], &trace_ctx.span_id[..4]));
 
         // Check rate limit (per-IP)
         if let Some(ref limiter) = self.rate_limiter {
@@ -369,7 +373,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         let mut response = match *req.method() {
             Method::GET | Method::POST | Method::HEAD => {
-                let mut resp = self.process_request(req, remote_addr, tls_info).await;
+                let mut resp = self.process_request(req, remote_addr, tls_info, &trace_ctx).await;
 
                 // HEAD: return headers only, no body
                 if is_head {
@@ -422,6 +426,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .headers_mut()
             .insert("x-request-id", request_id.parse().unwrap());
 
+        // Add W3C Trace Context header to response
+        response
+            .headers_mut()
+            .insert("traceparent", trace_ctx.to_traceparent().parse().unwrap());
+
         // Access logging
         if access_log_enabled {
             let duration = request_start.elapsed();
@@ -444,6 +453,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 referer_log.as_deref(),
                 xff_log.as_deref(),
                 tls_protocol_log.as_deref(),
+                Some(&trace_ctx.trace_id),
+                Some(&trace_ctx.span_id),
             );
         }
 
@@ -455,6 +466,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         req: Request<IncomingBody>,
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
+        trace_ctx: &TraceContext,
     ) -> Response<Full<Bytes>> {
         // Capture request timestamp at the very start
         let request_time = std::time::SystemTime::now()
@@ -776,6 +788,14 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             if !tls.protocol.is_empty() {
                 server_vars.push(("SSL_PROTOCOL".into(), tls.protocol.clone()));
             }
+        }
+
+        // W3C Trace Context for distributed tracing
+        server_vars.push(("HTTP_TRACEPARENT".into(), trace_ctx.to_traceparent()));
+        server_vars.push(("TRACE_ID".into(), trace_ctx.trace_id.clone()));
+        server_vars.push(("SPAN_ID".into(), trace_ctx.span_id.clone()));
+        if let Some(ref parent) = trace_ctx.parent_span_id {
+            server_vars.push(("PARENT_SPAN_ID".into(), parent.clone()));
         }
 
         if profiling_enabled {

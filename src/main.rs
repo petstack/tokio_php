@@ -2,6 +2,7 @@ mod executor;
 pub mod logging;
 pub mod profiler;
 mod server;
+pub mod trace_context;
 mod types;
 
 use std::net::SocketAddr;

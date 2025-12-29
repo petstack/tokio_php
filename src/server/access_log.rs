@@ -33,10 +33,12 @@ pub fn log_request(
     referer: Option<&str>,
     xff: Option<&str>,
     tls: Option<&str>,
+    trace_id: Option<&str>,
+    span_id: Option<&str>,
 ) {
     crate::logging::log_access(
         ts, request_id, ip, method, path, query, http, status, bytes, duration_ms, ua, referer,
-        xff, tls,
+        xff, tls, trace_id, span_id,
     );
 }
 

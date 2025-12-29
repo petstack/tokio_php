@@ -30,6 +30,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 | [Graceful Shutdown](graceful-shutdown.md) | Zero-downtime deployments with connection draining         |
 | [Security](security.md) | Non-root execution, best practices                         |
 | [Configuration](configuration.md) | Environment variables reference                            |
+| [Distributed Tracing](distributed-tracing.md) | W3C Trace Context for request correlation                  |
 | [tokio_sapi Extension](tokio-sapi-extension.md) | PHP extension for FFI superglobals                         |
 
 ## Quick Start

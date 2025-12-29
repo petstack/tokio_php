@@ -204,6 +204,8 @@ pub fn log_access(
     referer: Option<&str>,
     xff: Option<&str>,
     tls: Option<&str>,
+    trace_id: Option<&str>,
+    span_id: Option<&str>,
 ) {
     let msg = format!("{} {} {}", method, path, status);
 
@@ -231,15 +233,23 @@ pub fn log_access(
         data.insert("tls".into(), serde_json::json!(t));
     }
 
+    // Build context with trace information
+    let mut ctx = serde_json::Map::new();
+    ctx.insert("service".into(), serde_json::json!("tokio_php"));
+    ctx.insert("request_id".into(), serde_json::json!(request_id));
+    if let Some(tid) = trace_id {
+        ctx.insert("trace_id".into(), serde_json::json!(tid));
+    }
+    if let Some(sid) = span_id {
+        ctx.insert("span_id".into(), serde_json::json!(sid));
+    }
+
     let entry = serde_json::json!({
         "ts": ts,
         "level": "info",
         "type": "access",
         "msg": msg,
-        "ctx": {
-            "service": "tokio_php",
-            "request_id": request_id,
-        },
+        "ctx": ctx,
         "data": data,
     });
 

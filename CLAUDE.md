@@ -452,6 +452,59 @@ curl -k https://localhost:8443/index.php  # $_SERVER['SERVER_PROTOCOL'] = HTTP/2
 
 Full superglobals: `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST`
 
+## Distributed Tracing
+
+W3C Trace Context support for request correlation across microservices.
+
+### Headers
+
+| Header | Direction | Description |
+|--------|-----------|-------------|
+| `traceparent` | Request | Incoming W3C trace context (optional) |
+| `traceparent` | Response | Outgoing W3C trace context (always) |
+| `x-request-id` | Response | Short ID: `{trace_id[0:12]}-{span_id[0:4]}` |
+
+### PHP $_SERVER Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `TRACE_ID` | 32-char trace identifier | `0af7651916cd43dd8448eb211c80319c` |
+| `SPAN_ID` | 16-char span identifier | `b7ad6b7169203331` |
+| `PARENT_SPAN_ID` | Parent span (if propagated) | `a1b2c3d4e5f67890` |
+| `HTTP_TRACEPARENT` | Full W3C traceparent header | `00-0af7...-b7ad...-01` |
+
+### Usage in PHP
+
+```php
+<?php
+// Access trace context
+$traceId = $_SERVER['TRACE_ID'];
+$spanId = $_SERVER['SPAN_ID'];
+
+// Propagate to downstream services
+$ch = curl_init('https://api.example.com');
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "traceparent: 00-{$traceId}-" . bin2hex(random_bytes(8)) . "-01"
+]);
+```
+
+### Access Logs
+
+With `ACCESS_LOG=1`, logs include trace context in `ctx`:
+
+```json
+{
+  "ctx": {
+    "service": "tokio_php",
+    "request_id": "0af7651916cd-b7ad",
+    "trace_id": "0af7651916cd43dd8448eb211c80319c",
+    "span_id": "b7ad6b7169203331"
+  }
+}
+```
+
+See [docs/distributed-tracing.md](docs/distributed-tracing.md) for full documentation.
+
 ## Compression
 
 Brotli compression is automatically applied when:
