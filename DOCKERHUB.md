@@ -1,5 +1,9 @@
 # tokio_php
 
+> **Beta** — This project is experimental. The concept is being tested and validated. API and features may change. Not recommended for production use.
+>
+> Feedback welcome: [GitHub Issues](https://github.com/petstack/tokio_php/issues/new)
+
 High-performance async PHP server written in Rust. Uses Tokio for async I/O and php-embed SAPI for PHP execution.
 
 **Supported Architectures:** `linux/amd64`, `linux/arm64`

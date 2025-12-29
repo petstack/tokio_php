@@ -1,5 +1,9 @@
 # tokio_php
 
+> **Beta** — This project is experimental. The concept is being tested and validated. API and features may change. Not recommended for production use.
+>
+> Try it: [Docker Hub](https://hub.docker.com/r/diolektor/tokio_php) | Feedback: [GitHub Issues](https://github.com/petstack/tokio_php/issues/new)
+
 Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, worker pools, OPcache/JIT, Brotli compression.
 
 ## Features
