@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod executor;
 pub mod logging;
 pub mod profiler;

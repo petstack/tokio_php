@@ -40,23 +40,6 @@ extern "C" {
     fn tokio_sapi_request_init(request_id: u64) -> c_int;
     fn tokio_sapi_request_shutdown();
 
-    // Superglobal setters - direct access without eval!
-    fn tokio_sapi_set_server_var(
-        key: *const c_char, key_len: usize,
-        value: *const c_char, value_len: usize
-    );
-    fn tokio_sapi_set_get_var(
-        key: *const c_char, key_len: usize,
-        value: *const c_char, value_len: usize
-    );
-    fn tokio_sapi_set_post_var(
-        key: *const c_char, key_len: usize,
-        value: *const c_char, value_len: usize
-    );
-    fn tokio_sapi_set_cookie_var(
-        key: *const c_char, key_len: usize,
-        value: *const c_char, value_len: usize
-    );
     fn tokio_sapi_set_files_var(
         field: *const c_char, field_len: usize,
         name: *const c_char,
@@ -71,14 +54,6 @@ extern "C" {
     fn tokio_sapi_set_get_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
     fn tokio_sapi_set_post_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
     fn tokio_sapi_set_cookie_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
-
-    // Ultra-batch API - set ALL superglobals in one FFI call
-    fn tokio_sapi_set_all_superglobals(
-        server_buf: *const c_char, server_len: usize, server_count: usize,
-        get_buf: *const c_char, get_len: usize, get_count: usize,
-        post_buf: *const c_char, post_len: usize, post_count: usize,
-        cookie_buf: *const c_char, cookie_len: usize, cookie_count: usize,
-    );
 
     fn tokio_sapi_clear_superglobals();
     fn tokio_sapi_init_superglobals();   // Initialize superglobal array caches (call once per request)
@@ -528,10 +503,6 @@ struct ExtPool {
 }
 
 impl ExtPool {
-    fn new(num_workers: usize) -> Result<Self, String> {
-        Self::with_queue_capacity(num_workers, 0)
-    }
-
     fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, String> {
         // Initialize SAPI (same as PhpExecutor)
         sapi::init()?;
@@ -588,12 +559,6 @@ pub struct ExtExecutor {
 }
 
 impl ExtExecutor {
-    /// Creates a new ExtExecutor with the specified number of worker threads.
-    /// Uses default queue capacity (workers * 100).
-    pub fn new(num_workers: usize) -> Result<Self, ExecutorError> {
-        Self::with_queue_capacity(num_workers, 0)
-    }
-
     /// Creates a new ExtExecutor with custom queue capacity.
     /// If queue_capacity is 0, uses default (workers * 100).
     pub fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, ExecutorError> {

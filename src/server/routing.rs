@@ -1,6 +1,5 @@
 //! Request routing and path resolution.
 
-use std::path::Path;
 use std::sync::Arc;
 
 /// Resolve a URI path to a file path.
@@ -26,15 +25,6 @@ pub fn resolve_file_path(
     } else {
         format!("{}/{}", document_root, clean_path)
     }
-}
-
-/// Check if a path is a PHP file.
-#[inline]
-pub fn is_php_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e == "php")
-        .unwrap_or(false)
 }
 
 /// Check if a URI path looks like it should be handled as PHP.

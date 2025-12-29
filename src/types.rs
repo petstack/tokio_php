@@ -71,10 +71,3 @@ pub struct ScriptResponse {
     pub profile: Option<ProfileData>,
 }
 
-impl ScriptResponse {
-    /// Creates an empty response (for stub executor).
-    #[inline]
-    pub fn empty() -> Self {
-        Self::default()
-    }
-}

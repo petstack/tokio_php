@@ -343,11 +343,6 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         self.config.drain_timeout
     }
 
-    /// Get a reference to the active connections counter.
-    pub fn active_connections_counter(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.active_connections)
-    }
-
     /// Wait for all active connections to drain.
     /// Returns true if drained successfully, false if timeout was reached.
     pub async fn wait_for_drain(&self, timeout: Duration) -> bool {

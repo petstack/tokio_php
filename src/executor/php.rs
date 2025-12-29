@@ -19,10 +19,6 @@ struct PhpPool {
 }
 
 impl PhpPool {
-    fn new(num_workers: usize) -> Result<Self, String> {
-        Self::with_queue_capacity(num_workers, 0)
-    }
-
     fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, String> {
         // Initialize custom SAPI
         sapi::init()?;
@@ -76,12 +72,6 @@ pub struct PhpExecutor {
 }
 
 impl PhpExecutor {
-    /// Creates a new PHP executor with the specified number of worker threads.
-    /// Uses default queue capacity (workers * 100).
-    pub fn new(num_workers: usize) -> Result<Self, ExecutorError> {
-        Self::with_queue_capacity(num_workers, 0)
-    }
-
     /// Creates a new PHP executor with custom queue capacity.
     /// If queue_capacity is 0, uses default (workers * 100).
     pub fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, ExecutorError> {

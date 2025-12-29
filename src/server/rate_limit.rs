@@ -56,8 +56,6 @@ pub struct RateLimiter {
 pub struct RateLimitResult {
     /// Whether the request is allowed.
     pub allowed: bool,
-    /// Remaining requests in current window.
-    pub remaining: u64,
     /// Seconds until window resets.
     pub reset_after: u64,
 }
@@ -97,7 +95,6 @@ impl RateLimiter {
                         let reset_after = (self.window - elapsed).as_secs();
                         return RateLimitResult {
                             allowed: false,
-                            remaining: 0,
                             reset_after: reset_after.max(1),
                         };
                     }
@@ -119,7 +116,6 @@ impl RateLimiter {
             counter.window_start = now;
             RateLimitResult {
                 allowed: true,
-                remaining: self.limit - 1,
                 reset_after: self.window.as_secs(),
             }
         } else if counter.count < self.limit {
@@ -128,7 +124,6 @@ impl RateLimiter {
             let reset_after = (self.window - elapsed).as_secs();
             RateLimitResult {
                 allowed: true,
-                remaining: self.limit - counter.count,
                 reset_after: reset_after.max(1),
             }
         } else {
@@ -136,25 +131,9 @@ impl RateLimiter {
             let reset_after = (self.window - elapsed).as_secs();
             RateLimitResult {
                 allowed: false,
-                remaining: 0,
                 reset_after: reset_after.max(1),
             }
         }
-    }
-
-    /// Clean up expired entries to prevent memory growth.
-    /// Call periodically (e.g., every minute).
-    pub fn cleanup(&self) {
-        let now = Instant::now();
-        let mut counters = self.counters.write().unwrap();
-        counters.retain(|_, counter| {
-            now.duration_since(counter.window_start) < self.window * 2
-        });
-    }
-
-    /// Get current number of tracked IPs.
-    pub fn tracked_ips(&self) -> usize {
-        self.counters.read().unwrap().len()
     }
 }
 
@@ -171,7 +150,6 @@ mod tests {
         for i in 0..10 {
             let result = limiter.check(ip);
             assert!(result.allowed, "Request {} should be allowed", i);
-            assert_eq!(result.remaining, 10 - i - 1);
         }
     }
 
@@ -189,7 +167,6 @@ mod tests {
         // Next request should be blocked
         let result = limiter.check(ip);
         assert!(!result.allowed);
-        assert_eq!(result.remaining, 0);
     }
 
     #[test]

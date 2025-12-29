@@ -15,7 +15,6 @@ pub use static_file::serve_static_file;
 
 // Pre-allocated static bytes for common responses
 pub static EMPTY_BODY: Bytes = Bytes::from_static(b"");
-pub static NOT_FOUND_BODY: Bytes = Bytes::from_static(b"404 Not Found");
 pub static METHOD_NOT_ALLOWED_BODY: Bytes = Bytes::from_static(b"Method Not Allowed");
 pub static BAD_REQUEST_BODY: Bytes = Bytes::from_static(b"Failed to read request body");
 
@@ -30,17 +29,6 @@ pub fn empty_stub_response() -> Response<Full<Bytes>> {
         .header("Server", "tokio_php/0.1.0")
         .header("Content-Length", "0")
         .body(Full::new(EMPTY_BODY.clone()))
-        .unwrap()
-}
-
-/// Create an error response with the given status and body.
-#[inline]
-pub fn error_response(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(status)
-        .header("Content-Type", "text/plain")
-        .header("Server", "tokio_php/0.1.0")
-        .body(Full::new(Bytes::from(body.to_string())))
         .unwrap()
 }
 
