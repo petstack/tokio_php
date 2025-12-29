@@ -10,9 +10,6 @@ mod php;
 pub mod sapi;
 
 #[cfg(feature = "php")]
-pub mod ext_ffi;
-
-#[cfg(feature = "php")]
 mod ext;
 
 use async_trait::async_trait;
@@ -108,6 +105,7 @@ pub trait ScriptExecutor: Send + Sync {
 
     /// Fast path for executors that don't need request data.
     /// Default implementation calls execute with empty request.
+    #[allow(dead_code)]
     async fn execute_empty(&self) -> Result<ScriptResponse, ExecutorError> {
         self.execute(ScriptRequest::empty()).await
     }

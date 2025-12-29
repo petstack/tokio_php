@@ -93,7 +93,7 @@ extern "C" {
 // Batch Buffer Helper
 // =============================================================================
 
-/// Thread-local buffers for ultra-batch serialization (one per superglobal type)
+// Thread-local buffers for ultra-batch serialization (one per superglobal type)
 thread_local! {
     static SERVER_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     static GET_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };

@@ -67,8 +67,6 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> std::fmt::Result {
-        use std::fmt::Write as FmtWrite;
-
         let meta = event.metadata();
         let level = match *meta.level() {
             Level::TRACE => "debug",

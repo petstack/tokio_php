@@ -20,11 +20,6 @@ use crate::types::{ScriptRequest, ScriptResponse};
 // FFI Bindings (shared)
 // =============================================================================
 
-#[repr(C)]
-pub struct ZendFileHandle {
-    pub _data: [u8; 128],
-}
-
 #[link(name = "php")]
 extern "C" {
     pub fn php_request_startup() -> c_int;
@@ -544,6 +539,7 @@ pub fn execute_php_script_finish(
 
 /// Legacy wrapper - executes PHP script with immediate finalization
 /// Note: This doesn't capture shutdown handler output correctly!
+#[allow(dead_code)]
 pub fn execute_php_script(
     request: &ScriptRequest,
     profiling: bool,

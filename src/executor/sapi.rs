@@ -20,9 +20,10 @@ pub struct SapiHeader {
     pub header_len: usize,
 }
 
-/// sapi_header_op_enum - header operation type
+/// sapi_header_op_enum - header operation type (FFI enum, variants from C side)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum SapiHeaderOp {
     Replace = 0,
     Add = 1,
