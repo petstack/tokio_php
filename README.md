@@ -1,0 +1,170 @@
+# tokio_php
+
+Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, worker pools, OPcache/JIT, Brotli compression.
+
+## Features
+
+- **High Performance** — Async I/O via Tokio runtime, zero-copy architecture
+- **HTTP/1.1 & HTTP/2** — Full protocol support with automatic negotiation
+- **HTTPS/TLS 1.3** — Secure connections with ALPN for HTTP/2
+- **Worker Pool** — Multi-threaded PHP execution with configurable workers
+- **OPcache + JIT** — Bytecode caching and tracing JIT compilation
+- **Brotli Compression** — Automatic compression for text responses
+- **Static File Serving** — Efficient caching with configurable TTL
+- **Graceful Shutdown** — Connection draining for zero-downtime deployments
+- **PHP 8.4 & 8.5** — Support for latest PHP versions (ZTS)
+
+## Quick Start
+
+```bash
+# Clone repository
+git clone https://github.com/yourname/tokio_php.git
+cd tokio_php
+
+# Build and run (PHP 8.4)
+docker compose build
+docker compose up -d
+
+# Build with PHP 8.5
+PHP_VERSION=8.5 docker compose build
+PHP_VERSION=8.5 docker compose up -d
+
+# Test
+curl http://localhost:8081/
+```
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PHP_VERSION` | `8.4` | PHP version (8.4 or 8.5) |
+| `PHP_WORKERS` | `0` | Worker count (0 = auto-detect CPU cores) |
+| `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
+| `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
+| `INDEX_FILE` | — | Single entry point (e.g., `index.php`) |
+| `USE_EXT` | `1` | Use ExtExecutor (recommended) |
+| `USE_STUB` | `0` | Stub mode (no PHP, for benchmarks) |
+| `PROFILE` | `0` | Enable profiling headers |
+| `TLS_CERT` | — | Path to TLS certificate (PEM) |
+| `TLS_KEY` | — | Path to TLS private key (PEM) |
+| `STATIC_CACHE_TTL` | `1d` | Static file cache duration |
+| `ERROR_PAGES_DIR` | — | Custom HTML error pages directory |
+| `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout |
+| `INTERNAL_ADDR` | — | Internal server for /health, /metrics |
+| `RATE_LIMIT` | `0` | Max requests per IP (0 = disabled) |
+| `RATE_WINDOW` | `60` | Rate limit window (seconds) |
+
+## Examples
+
+```bash
+# Production with tuning
+PHP_WORKERS=8 PROFILE=1 docker compose up -d
+
+# Laravel/Symfony single entry point
+INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d
+
+# With TLS/HTTPS
+docker compose --profile tls up -d
+
+# Benchmark mode (no PHP)
+USE_STUB=1 docker compose up -d
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Tokio Runtime                         │
+├─────────────────────────────────────────────────────────┤
+│  Hyper HTTP Server (HTTP/1.1, HTTP/2, TLS)              │
+├─────────────────────────────────────────────────────────┤
+│  Request Router                                          │
+│  ├── Static Files (Brotli, Cache-Control)               │
+│  └── PHP Scripts                                         │
+├─────────────────────────────────────────────────────────┤
+│  Worker Pool (N threads)                                 │
+│  ├── Worker 0: php-embed SAPI + OPcache                 │
+│  ├── Worker 1: php-embed SAPI + OPcache                 │
+│  └── Worker N: php-embed SAPI + OPcache                 │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Superglobals
+
+Full PHP superglobals support:
+
+- `$_GET` — Query parameters
+- `$_POST` — POST data (form-urlencoded, JSON)
+- `$_SERVER` — Server variables, headers
+- `$_COOKIE` — Cookies
+- `$_FILES` — File uploads (multipart/form-data)
+- `$_REQUEST` — Merged GET + POST + COOKIE
+
+## Extension Functions
+
+When using `USE_EXT=1`, additional PHP functions are available:
+
+```php
+tokio_request_id();   // int - unique request ID
+tokio_worker_id();    // int - worker thread ID (0..N-1)
+tokio_server_info();  // array - server information
+```
+
+## Profiling
+
+Enable profiling to measure request timing:
+
+```bash
+PROFILE=1 docker compose up -d
+curl -sI -H "X-Profile: 1" http://localhost:8081/index.php | grep X-Profile
+```
+
+Response headers include:
+- `X-Profile-Total-Us` — Total request time (microseconds)
+- `X-Profile-Queue-Us` — Worker queue wait time
+- `X-Profile-Script-Us` — PHP script execution time
+- `X-Profile-PHP-Startup-Us` — php_request_startup() time
+- `X-Profile-PHP-Shutdown-Us` — php_request_shutdown() time
+
+## Compression
+
+Automatic Brotli compression when:
+- Client sends `Accept-Encoding: br`
+- Response body >= 256 bytes and <= 3 MB
+- Content-Type is compressible (text/html, application/json, etc.)
+
+## Internal Server
+
+Health checks and metrics endpoint:
+
+```bash
+INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
+
+curl http://localhost:9091/health
+curl http://localhost:9091/metrics
+```
+
+## Benchmark
+
+```bash
+# Install wrk
+brew install wrk  # macOS
+
+# Run benchmark
+wrk -t4 -c100 -d10s http://localhost:8081/index.php
+```
+
+## Requirements
+
+- Docker & Docker Compose
+- Or: Rust 1.70+, PHP 8.4/8.5 ZTS with php-embed
+
+## License
+
+[AGPL-3.0](LICENSE)
+
+## Links
+
+- [Documentation](docs/)
+- [Architecture](docs/architecture.md)
+- [Compression](docs/compression.md)

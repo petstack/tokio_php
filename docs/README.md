@@ -1,6 +1,8 @@
 # tokio_php Documentation
 
-Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
+Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, worker pools, OPcache/JIT, Brotli compression.
+
+**Supported PHP versions:** 8.4, 8.5 (ZTS)
 
 ## Features
 
@@ -10,6 +12,7 @@ Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
 | [HTTP/2 & TLS](http2-tls.md) | HTTP/1.1, HTTP/2, HTTPS with TLS 1.3                       |
 | [Superglobals](superglobals.md) | `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST` |
 | [OPcache & JIT](opcache-jit.md) | Bytecode caching and JIT compilation                       |
+| [OPcache Internals](opcache-internals.md) | Deep dive into OPcache architecture                        |
 | [Worker Pool](worker-pool.md) | Multi-threaded PHP execution, scaling                      |
 | [Profiler](profiler.md) | Request timing and performance analysis                    |
 | [Compression](compression.md) | Brotli compression for responses                           |
@@ -27,15 +30,19 @@ Async PHP web server written in Rust using Tokio runtime and php-embed SAPI.
 ## Quick Start
 
 ```bash
-# Build and run (ExtExecutor enabled by default)
+# Build and run (PHP 8.4, ExtExecutor enabled by default)
 docker compose build
 docker compose up -d
 
-# Test
-curl http://localhost:8080/index.php
+# Build with PHP 8.5
+PHP_VERSION=8.5 docker compose build
+PHP_VERSION=8.5 docker compose up -d
 
-# Production (explicit ExtExecutor for 2.5x faster than PHP-FPM)
-USE_EXT=1 docker compose up -d
+# Test
+curl http://localhost:8081/
+
+# With TLS/HTTPS
+docker compose --profile tls up -d
 
 # View logs
 docker compose logs -f
@@ -85,8 +92,8 @@ Use `USE_EXT=1` for production (2x faster).
 ## Requirements
 
 - Docker and Docker Compose
-- PHP 8.4 ZTS (Thread Safe) - included in Docker image
-- Rust 1.75+ (for development only)
+- PHP 8.4 or 8.5 ZTS (Thread Safe) — included in Docker image
+- Rust 1.70+ (for development only)
 
 ## Project Structure
 
@@ -111,11 +118,14 @@ tokio_php/
 │   ├── types.rs          # Request/Response types
 │   └── profiler.rs       # Timing profiler
 ├── ext/                  # tokio_sapi PHP extension
+├── docs/                 # Documentation
 ├── www/                  # Document root
 │   └── errors/           # Custom error pages
 ├── certs/                # TLS certificates
-├── Dockerfile            # Multi-stage build
-└── docker-compose.yml    # Service definitions
+├── Dockerfile            # Multi-stage build (PHP 8.4/8.5)
+├── docker-compose.yml    # Service definitions
+├── LICENSE               # AGPL-3.0
+└── README.md             # Project overview
 ```
 
 ## License
