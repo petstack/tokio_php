@@ -82,9 +82,9 @@ jobs:
 
       - name: Tag latest images
         run: |
-          # Tag php8.4-alpine3.23 as latest and php8.4 (multi-arch)
-          docker buildx imagetools create -t ${{ env.IMAGE_NAME }}:latest ${{ env.IMAGE_NAME }}:php8.4-alpine3.23
-          docker buildx imagetools create -t ${{ env.IMAGE_NAME }}:php8.4 ${{ env.IMAGE_NAME }}:php8.4-alpine3.23
-
-          # Tag php8.5-alpine3.23 as php8.5 (multi-arch)
+          # Tag php8.5-alpine3.23 as latest and php8.5 (multi-arch)
+          docker buildx imagetools create -t ${{ env.IMAGE_NAME }}:latest ${{ env.IMAGE_NAME }}:php8.5-alpine3.23
           docker buildx imagetools create -t ${{ env.IMAGE_NAME }}:php8.5 ${{ env.IMAGE_NAME }}:php8.5-alpine3.23
+
+          # Tag php8.4-alpine3.23 as php8.4 (multi-arch)
+          docker buildx imagetools create -t ${{ env.IMAGE_NAME }}:php8.4 ${{ env.IMAGE_NAME }}:php8.4-alpine3.23

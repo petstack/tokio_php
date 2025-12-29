@@ -43,14 +43,14 @@ All tags are multi-arch (`amd64` + `arm64`).
 
 | Tag | PHP | Alpine |
 |-----|-----|--------|
-| `latest`, `php8.4` | 8.4 | 3.23 |
-| `php8.5` | 8.5 | 3.23 |
-| `php8.4-alpine3.23` | 8.4 | 3.23 |
-| `php8.4-alpine3.22` | 8.4 | 3.22 |
-| `php8.4-alpine3.21` | 8.4 | 3.21 |
+| `latest`, `php8.5` | 8.5 | 3.23 |
+| `php8.4` | 8.4 | 3.23 |
 | `php8.5-alpine3.23` | 8.5 | 3.23 |
 | `php8.5-alpine3.22` | 8.5 | 3.22 |
 | `php8.5-alpine3.21` | 8.5 | 3.21 |
+| `php8.4-alpine3.23` | 8.4 | 3.23 |
+| `php8.4-alpine3.22` | 8.4 | 3.22 |
+| `php8.4-alpine3.21` | 8.4 | 3.21 |
 
 ## Environment Variables
 
