@@ -268,6 +268,7 @@ services:
 ## Links
 
 - **GitHub**: [https://github.com/petstack/tokio_php](https://github.com/petstack/tokio_php)
+- **Documentation**: [https://github.com/petstack/tokio_php/tree/master/docs](https://github.com/petstack/tokio_php/tree/master/docs)
 - **Issues**: [https://github.com/petstack/tokio_php/issues](https://github.com/petstack/tokio_php/issues)
 
 ## License
