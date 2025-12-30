@@ -9,7 +9,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 use crate::executor::sapi;
@@ -81,56 +81,51 @@ pub const REQUEST_TIMEOUT_ERROR: &str = "Request timeout";
 
 /// Context for request heartbeat mechanism.
 /// Allows PHP scripts to extend their timeout deadline.
+/// Uses Instant-based timing for minimal syscall overhead.
 #[repr(C)]
 pub struct HeartbeatContext {
-    /// Current deadline as Unix timestamp in seconds
-    deadline: AtomicU64,
+    /// Start time (reused from queued_at for zero extra Instant::now() calls)
+    start: Instant,
+    /// Current deadline as milliseconds from start
+    deadline_ms: AtomicU64,
     /// Maximum extension allowed per heartbeat call (= original REQUEST_TIMEOUT)
     max_extension_secs: u64,
 }
 
 impl HeartbeatContext {
-    /// Creates a new heartbeat context with the given timeout.
-    pub fn new(timeout_secs: u64) -> Self {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
+    /// Creates a new heartbeat context reusing an existing Instant.
+    /// This avoids calling Instant::now() which has syscall overhead.
+    pub fn new(start: Instant, timeout_secs: u64) -> Self {
+        let deadline_ms = timeout_secs * 1000;
         Self {
-            deadline: AtomicU64::new(now + timeout_secs),
+            start,
+            deadline_ms: AtomicU64::new(deadline_ms),
             max_extension_secs: timeout_secs,
         }
     }
 
-    /// Extends the deadline by `secs` seconds.
+    /// Extends the deadline by `secs` seconds from now.
     /// Returns false if `secs` exceeds the max extension limit.
     pub fn heartbeat(&self, secs: u64) -> bool {
         if secs == 0 || secs > self.max_extension_secs {
             return false;
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        self.deadline.store(now + secs, Ordering::Release);
+        let elapsed_ms = self.start.elapsed().as_millis() as u64;
+        let new_deadline_ms = elapsed_ms + secs * 1000;
+        self.deadline_ms.store(new_deadline_ms, Ordering::Release);
         true
     }
 
     /// Returns the remaining time until deadline, or None if already expired.
     pub fn remaining(&self) -> Option<Duration> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let deadline = self.deadline.load(Ordering::Acquire);
+        let elapsed_ms = self.start.elapsed().as_millis() as u64;
+        let deadline_ms = self.deadline_ms.load(Ordering::Acquire);
 
-        if now >= deadline {
+        if elapsed_ms >= deadline_ms {
             None
         } else {
-            Some(Duration::from_secs(deadline - now))
+            Some(Duration::from_millis(deadline_ms - elapsed_ms))
         }
     }
 
@@ -227,18 +222,21 @@ impl WorkerPool {
     /// Supports heartbeat mechanism: if timeout is configured, creates a HeartbeatContext
     /// that allows PHP scripts to extend the deadline via tokio_request_heartbeat().
     pub async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
-        let (response_tx, mut response_rx) = oneshot::channel();
+        let (response_tx, response_rx) = oneshot::channel();
         let timeout = request.timeout;
 
-        // Create heartbeat context if timeout is configured
-        let heartbeat_ctx = timeout.map(|t| Arc::new(HeartbeatContext::new(t.as_secs())));
+        // Capture queued_at once - reused for both queue timing and HeartbeatContext
+        let queued_at = Instant::now();
+
+        // Create heartbeat context reusing queued_at (one Instant::now() for both)
+        let heartbeat_ctx = timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
 
         // Use try_send to avoid blocking and detect queue full
         self.request_tx
             .try_send(WorkerRequest {
                 request,
                 response_tx,
-                queued_at: Instant::now(),
+                queued_at,
                 heartbeat_ctx: heartbeat_ctx.clone(),
             })
             .map_err(|e| match e {
@@ -248,9 +246,8 @@ impl WorkerPool {
 
         // Apply timeout with heartbeat support if configured
         if let Some(ctx) = heartbeat_ctx {
-            // Polling loop: check deadline and wait for response
-            // Poll interval: 100ms for responsive heartbeat, capped at remaining time
-            const POLL_INTERVAL: Duration = Duration::from_millis(100);
+            // Pin the receiver for re-polling in loop
+            tokio::pin!(response_rx);
 
             loop {
                 match ctx.remaining() {
@@ -259,9 +256,7 @@ impl WorkerPool {
                         return Err(REQUEST_TIMEOUT_ERROR.to_string());
                     }
                     Some(remaining) => {
-                        // Wait for response or poll interval, whichever is shorter
-                        let wait_time = remaining.min(POLL_INTERVAL);
-
+                        // Sleep for full remaining time (no 100ms polling overhead)
                         tokio::select! {
                             biased;
                             result = &mut response_rx => {
@@ -270,8 +265,9 @@ impl WorkerPool {
                                     Err(_) => Err("Worker dropped response".to_string()),
                                 };
                             }
-                            _ = tokio::time::sleep(wait_time) => {
-                                // Continue loop to check deadline again
+                            _ = tokio::time::sleep(remaining) => {
+                                // Timeout reached, loop will check remaining() again
+                                // (in case heartbeat extended the deadline)
                                 continue;
                             }
                         }
