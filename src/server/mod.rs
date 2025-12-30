@@ -56,6 +56,10 @@ pub struct Server<E: ScriptExecutor> {
     shutdown_rx: watch::Receiver<bool>,
     /// Shutdown initiated flag
     shutdown_initiated: Arc<AtomicBool>,
+    /// Profiling enabled (PROFILE=1)
+    profile_enabled: bool,
+    /// Access logging enabled (ACCESS_LOG=1)
+    access_log_enabled: bool,
 }
 
 impl<E: ScriptExecutor + 'static> Server<E> {
@@ -99,16 +103,6 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             ErrorPages::new()
         };
 
-        // Create rate limiter if configured
-        let rate_limiter = RateLimiter::from_config().map(Arc::new);
-        if rate_limiter.is_some() {
-            info!(
-                "Rate limiting enabled: {} requests per {} seconds per IP",
-                rate_limit::get_limit(),
-                rate_limit::get_window_secs()
-            );
-        }
-
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -120,11 +114,50 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             active_connections: Arc::new(AtomicUsize::new(0)),
             request_metrics: Arc::new(RequestMetrics::new()),
             error_pages,
-            rate_limiter,
+            rate_limiter: None,
             shutdown_tx,
             shutdown_rx,
             shutdown_initiated: Arc::new(AtomicBool::new(false)),
+            profile_enabled: false,
+            access_log_enabled: false,
         })
+    }
+
+    /// Enable profiling for this server.
+    /// Requests with X-Profile: 1 header will include timing data.
+    pub fn with_profile_enabled(mut self, enabled: bool) -> Self {
+        self.profile_enabled = enabled;
+        if enabled {
+            info!("Profiler enabled (PROFILE=1)");
+        }
+        self
+    }
+
+    /// Enable access logging for this server.
+    pub fn with_access_log_enabled(mut self, enabled: bool) -> Self {
+        self.access_log_enabled = enabled;
+        if enabled {
+            info!("Access logging enabled (ACCESS_LOG=1)");
+        }
+        self
+    }
+
+    /// Configure rate limiting for this server.
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum requests per IP per window (None = disabled)
+    /// * `window_secs` - Window duration in seconds
+    pub fn with_rate_limiter(mut self, limit: Option<u64>, window_secs: u64) -> Self {
+        if let Some(limit) = limit {
+            let limiter = RateLimiter::new(limit, window_secs);
+            info!(
+                "Rate limiting enabled: {} requests per {} seconds per IP",
+                limiter.limit(),
+                limiter.window_secs()
+            );
+            self.rate_limiter = Some(Arc::new(limiter));
+        }
+        self
     }
 
     /// Get current active connections count.
@@ -261,6 +294,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 rate_limiter: self.rate_limiter.clone(),
                 static_cache_ttl: self.config.static_cache_ttl.clone(),
                 request_timeout: self.config.request_timeout.clone(),
+                profile_enabled: self.profile_enabled,
+                access_log_enabled: self.access_log_enabled,
             });
 
             let handle = tokio::spawn(async move {

@@ -1,26 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-/// Global flag to enable/disable profiling via PROFILE env var
-static PROFILING_ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Initialize profiler from environment
-pub fn init() {
-    let enabled = std::env::var("PROFILE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    PROFILING_ENABLED.store(enabled, Ordering::Relaxed);
-
-    if enabled {
-        tracing::info!("Profiler enabled (PROFILE=1)");
-    }
-}
-
-/// Check if profiling is globally enabled
-#[inline]
-pub fn is_enabled() -> bool {
-    PROFILING_ENABLED.load(Ordering::Relaxed)
-}
+// Note: Global profiling state has been moved to config::MiddlewareConfig.profile.
+// The profiling check is now done at the connection layer using the config value
+// combined with the X-Profile: 1 request header.
 
 /// Profile data for a single request
 #[derive(Debug, Clone, Default)]

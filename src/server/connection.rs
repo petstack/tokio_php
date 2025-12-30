@@ -136,6 +136,10 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub rate_limiter: Option<Arc<RateLimiter>>,
     pub static_cache_ttl: super::config::StaticCacheTtl,
     pub request_timeout: super::config::RequestTimeout,
+    /// Profiling enabled (PROFILE=1). Requires X-Profile: 1 header per request.
+    pub profile_enabled: bool,
+    /// Access logging enabled (ACCESS_LOG=1).
+    pub access_log_enabled: bool,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -319,7 +323,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     .status(StatusCode::TOO_MANY_REQUESTS)
                     .header("Content-Type", "text/plain")
                     .header("Retry-After", result.reset_after.to_string())
-                    .header("X-RateLimit-Limit", super::rate_limit::get_limit().to_string())
+                    .header("X-RateLimit-Limit", limiter.limit().to_string())
                     .header("X-RateLimit-Remaining", "0")
                     .header("X-RateLimit-Reset", result.reset_after.to_string())
                     .header("x-request-id", request_id)
@@ -334,7 +338,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let is_head = *req.method() == Method::HEAD;
 
         // Capture data for access logging (before consuming request)
-        let access_log_enabled = access_log::is_enabled();
+        let access_log_enabled = self.access_log_enabled;
         let method_str = req.method().to_string();
         let uri_str = req.uri().path().to_string();
         let query_str = req.uri().query().map(|s| s.to_string());
@@ -513,7 +517,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-        let profiling_enabled = profile_requested && profiler::is_enabled();
+        let profiling_enabled = profile_requested && self.profile_enabled;
 
         // Check if client accepts Brotli compression
         let use_brotli = req

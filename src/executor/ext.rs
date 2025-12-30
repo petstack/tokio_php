@@ -23,7 +23,7 @@ use super::common::{
 };
 use super::sapi;
 use super::{ExecutorError, ScriptExecutor};
-use crate::profiler::{self, ProfileData};
+use crate::profiler::ProfileData;
 use crate::types::{ScriptRequest, ScriptResponse};
 
 // =============================================================================
@@ -444,7 +444,7 @@ fn ext_worker_main_loop(
 
         match work {
             Ok(WorkerRequest { request, response_tx, queued_at, heartbeat_ctx }) => {
-                let profiling = request.profile && profiler::is_enabled();
+                let profiling = request.profile;
                 let request_id = next_request_id();
 
                 // Measure queue wait time

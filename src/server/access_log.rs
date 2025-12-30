@@ -1,20 +1,7 @@
 //! Access logging.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// Global access log enabled flag.
-static ACCESS_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Initialize access logging.
-pub fn init(enabled: bool) {
-    ACCESS_LOG_ENABLED.store(enabled, Ordering::Relaxed);
-}
-
-/// Check if access logging is enabled.
-#[inline]
-pub fn is_enabled() -> bool {
-    ACCESS_LOG_ENABLED.load(Ordering::Relaxed)
-}
+// Note: Global state has been moved to config::MiddlewareConfig.access_log.
+// The access_log_enabled flag is now passed via ConnectionContext.
 
 /// Log an HTTP request using the unified log format.
 #[allow(clippy::too_many_arguments)]

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 use crate::executor::sapi;
-use crate::profiler::{self, ProfileData};
+use crate::profiler::ProfileData;
 use crate::types::{ScriptRequest, ScriptResponse};
 
 // =============================================================================
@@ -715,7 +715,7 @@ pub fn worker_main_loop(
             Ok(WorkerRequest { request, response_tx, queued_at, heartbeat_ctx: _ }) => {
                 // Note: heartbeat_ctx is ignored here - it's only used in ExtExecutor
                 // which has the tokio_sapi extension for heartbeat support
-                let profiling = request.profile && profiler::is_enabled();
+                let profiling = request.profile;
 
                 // Measure queue wait time
                 let queue_wait_us = if profiling {

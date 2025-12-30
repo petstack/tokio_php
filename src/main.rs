@@ -13,7 +13,7 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::{Config, ExecutorType};
-use crate::server::{access_log, rate_limit, Server, ServerConfig};
+use crate::server::{Server, ServerConfig};
 
 #[cfg(feature = "php")]
 use crate::executor::PhpExecutor;
@@ -42,17 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .with_ansi(false),
         )
         .init();
-
-    // Initialize profiler
-    profiler::init();
-
-    // Initialize access logging
-    access_log::init(config.middleware.access_log);
-
-    // Initialize rate limiting
-    if let Some(limit) = config.middleware.rate_limit {
-        rate_limit::init(limit, config.middleware.rate_window);
-    }
 
     // Log configuration summary
     config.log_summary();
@@ -115,13 +104,20 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     // Get worker parameters
     let worker_threads = config.executor.worker_count();
     let queue_capacity = config.executor.queue_capacity;
+    let profile_enabled = config.middleware.profile;
+    let access_log_enabled = config.middleware.access_log;
+    let rate_limit = config.middleware.rate_limit;
+    let rate_window = config.middleware.rate_window;
 
     // Create executor based on type
     match config.executor.executor_type {
         ExecutorType::Stub => {
             info!("Running in STUB mode (PHP disabled)");
             let executor = StubExecutor::new();
-            let server = Server::new(server_config, executor)?;
+            let server = Server::new(server_config, executor)?
+                .with_profile_enabled(profile_enabled)
+                .with_access_log_enabled(access_log_enabled)
+                .with_rate_limiter(rate_limit, rate_window);
             run_server(server).await
         }
         ExecutorType::Ext => {
@@ -145,7 +141,10 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                     executor.worker_count()
                 );
 
-                let server = Server::new(server_config, executor)?;
+                let server = Server::new(server_config, executor)?
+                    .with_profile_enabled(profile_enabled)
+                    .with_access_log_enabled(access_log_enabled)
+                    .with_rate_limiter(rate_limit, rate_window);
                 run_server(server).await
             }
 
@@ -153,7 +152,10 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
             {
                 info!("PHP feature not enabled, falling back to stub mode");
                 let executor = StubExecutor::new();
-                let server = Server::new(server_config, executor)?;
+                let server = Server::new(server_config, executor)?
+                    .with_profile_enabled(profile_enabled)
+                    .with_access_log_enabled(access_log_enabled)
+                    .with_rate_limiter(rate_limit, rate_window);
                 run_server(server).await
             }
         }
@@ -175,7 +177,10 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
 
                 info!("PHP executor ready ({} workers)", executor.worker_count());
 
-                let server = Server::new(server_config, executor)?;
+                let server = Server::new(server_config, executor)?
+                    .with_profile_enabled(profile_enabled)
+                    .with_access_log_enabled(access_log_enabled)
+                    .with_rate_limiter(rate_limit, rate_window);
                 run_server(server).await
             }
 
@@ -183,7 +188,10 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
             {
                 info!("PHP feature not enabled, falling back to stub mode");
                 let executor = StubExecutor::new();
-                let server = Server::new(server_config, executor)?;
+                let server = Server::new(server_config, executor)?
+                    .with_profile_enabled(profile_enabled)
+                    .with_access_log_enabled(access_log_enabled)
+                    .with_rate_limiter(rate_limit, rate_window);
                 run_server(server).await
             }
         }

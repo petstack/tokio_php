@@ -1,42 +1,12 @@
 //! Per-IP rate limiting with fixed window algorithm.
 
+// Note: Global state has been removed. Rate limiter is now configured via
+// Server::with_rate_limiter() method using values from config::MiddlewareConfig.
+
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
-
-/// Global rate limiter configuration.
-static RATE_LIMIT_ENABLED: AtomicBool = AtomicBool::new(false);
-static RATE_LIMIT: AtomicU64 = AtomicU64::new(100);
-static RATE_WINDOW_SECS: AtomicU64 = AtomicU64::new(60);
-
-/// Initialize rate limiting configuration.
-pub fn init(limit: u64, window_secs: u64) {
-    if limit > 0 && window_secs > 0 {
-        RATE_LIMIT.store(limit, Ordering::Relaxed);
-        RATE_WINDOW_SECS.store(window_secs, Ordering::Relaxed);
-        RATE_LIMIT_ENABLED.store(true, Ordering::Relaxed);
-    }
-}
-
-/// Check if rate limiting is enabled.
-#[inline]
-pub fn is_enabled() -> bool {
-    RATE_LIMIT_ENABLED.load(Ordering::Relaxed)
-}
-
-/// Get current rate limit.
-#[inline]
-pub fn get_limit() -> u64 {
-    RATE_LIMIT.load(Ordering::Relaxed)
-}
-
-/// Get current window in seconds.
-#[inline]
-pub fn get_window_secs() -> u64 {
-    RATE_WINDOW_SECS.load(Ordering::Relaxed)
-}
 
 /// Per-IP request counter for a time window.
 #[derive(Debug)]
@@ -70,13 +40,14 @@ impl RateLimiter {
         }
     }
 
-    /// Create from global configuration.
-    pub fn from_config() -> Option<Self> {
-        if is_enabled() {
-            Some(Self::new(get_limit(), get_window_secs()))
-        } else {
-            None
-        }
+    /// Get the rate limit value.
+    pub fn limit(&self) -> u64 {
+        self.limit
+    }
+
+    /// Get the window duration in seconds.
+    pub fn window_secs(&self) -> u64 {
+        self.window.as_secs()
     }
 
     /// Check if a request from the given IP is allowed.

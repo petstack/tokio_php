@@ -12,6 +12,8 @@ pub struct MiddlewareConfig {
     pub rate_window: u64,
     /// Access logging enabled.
     pub access_log: bool,
+    /// Profiling enabled (requires X-Profile: 1 header per request).
+    pub profile: bool,
 }
 
 impl MiddlewareConfig {
@@ -43,6 +45,7 @@ impl MiddlewareConfig {
             },
             rate_window,
             access_log: env_bool("ACCESS_LOG", false),
+            profile: env_bool("PROFILE", false),
         })
     }
 
