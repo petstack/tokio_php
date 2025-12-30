@@ -2,6 +2,7 @@ mod config;
 pub mod core;
 mod executor;
 pub mod logging;
+pub mod middleware;
 pub mod profiler;
 mod server;
 pub mod trace_context;

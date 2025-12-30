@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 
 /// HTTP response.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Response {
     status: StatusCode,
     headers: HeaderMap,

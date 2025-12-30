@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http::{HeaderMap, Method, Uri};
 
 /// HTTP request for middleware and executor.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Request {
     method: Method,
     uri: Uri,
