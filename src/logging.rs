@@ -47,12 +47,14 @@ pub struct LogContext<'a> {
 
 /// Custom JSON formatter for tracing.
 pub struct JsonFormatter {
-    service_name: &'static str,
+    service_name: String,
 }
 
 impl JsonFormatter {
-    pub fn new(service_name: &'static str) -> Self {
-        Self { service_name }
+    pub fn new(service_name: impl Into<String>) -> Self {
+        Self {
+            service_name: service_name.into(),
+        }
     }
 }
 
@@ -105,7 +107,7 @@ where
 
         // Build context
         let ctx = serde_json::json!({
-            "service": self.service_name
+            "service": &self.service_name
         });
 
         // Build data (remove message from fields for app logs)

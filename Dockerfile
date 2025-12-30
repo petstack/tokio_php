@@ -113,11 +113,7 @@ COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
 RUN mkdir -p /var/www/html && chown -R www-data:www-data /var/www/html
 
 # Copy PHP files
-COPY --chown=www-data:www-data www/symfony /var/www/html
-
-# Copy preload script
-COPY --chown=www-data:www-data www/preload.php /var/www/html/preload.php
-COPY --chown=www-data:www-data www/opcache_status.php /var/www/html/opcache_status.php
+COPY --chown=www-data:www-data www/ /var/www/html/
 
 EXPOSE 8080
 

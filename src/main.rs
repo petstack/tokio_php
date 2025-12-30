@@ -1,3 +1,4 @@
+mod config;
 mod executor;
 pub mod logging;
 pub mod profiler;
@@ -5,11 +6,10 @@ mod server;
 pub mod trace_context;
 mod types;
 
-use std::net::SocketAddr;
-use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::config::{Config, ExecutorType};
 use crate::server::{access_log, rate_limit, Server, ServerConfig};
 
 #[cfg(feature = "php")]
@@ -21,15 +21,21 @@ use crate::executor::ExtExecutor;
 use crate::executor::StubExecutor;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Load configuration from environment
+    let config = Config::from_env().map_err(|e| {
+        eprintln!("Configuration error: {}", e);
+        e
+    })?;
+
     // Initialize logging with custom JSON formatter
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "tokio_php=info".into()),
+                .unwrap_or_else(|_| config.logging.filter.clone().into()),
         )
         .with(
             tracing_subscriber::fmt::layer()
-                .event_format(logging::JsonFormatter::new("tokio_php"))
+                .event_format(logging::JsonFormatter::new(config.logging.service_name.clone()))
                 .with_ansi(false),
         )
         .init();
@@ -38,214 +44,145 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     profiler::init();
 
     // Initialize access logging
-    let access_log_enabled = std::env::var("ACCESS_LOG")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
-    access_log::init(access_log_enabled);
+    access_log::init(config.middleware.access_log);
 
-    // Initialize rate limiting (RATE_LIMIT=requests per window, RATE_WINDOW=seconds)
-    let rate_limit_value = std::env::var("RATE_LIMIT")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0);
-    let rate_window = std::env::var("RATE_WINDOW")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(60);
-    if rate_limit_value > 0 {
-        rate_limit::init(rate_limit_value, rate_window);
+    // Initialize rate limiting
+    if let Some(limit) = config.middleware.rate_limit {
+        rate_limit::init(limit, config.middleware.rate_window);
     }
 
+    // Log configuration summary
+    config.log_summary();
+
     info!("Starting tokio_php server...");
-
-    // Get worker count from env (0 = auto-detect)
-    let num_workers = std::env::var("PHP_WORKERS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
-
-    // Resolve 0 to actual CPU count
-    let worker_threads = if num_workers == 0 {
-        num_cpus::get()
-    } else {
-        num_workers
-    };
-
-    // Queue capacity (0 = default: workers * 100)
-    let queue_capacity = std::env::var("QUEUE_CAPACITY")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
 
     // Use single-threaded Tokio runtime - PHP workers handle blocking work
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
-    runtime.block_on(async_main(num_workers, worker_threads, queue_capacity))
+    runtime.block_on(async_main(config))
 }
 
-async fn async_main(
-    num_workers: usize,
-    worker_threads: usize,
-    queue_capacity: usize,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Configure server address
-    let addr: SocketAddr = std::env::var("LISTEN_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
-        .parse()?;
+async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Build ServerConfig from new Config
+    let mut server_config = ServerConfig::new(config.server.listen_addr)
+        .with_workers(config.executor.workers)
+        .with_document_root(config.server.document_root.to_str().unwrap_or("/var/www/html"));
 
     // TLS configuration
-    let tls_cert = std::env::var("TLS_CERT").ok();
-    let tls_key = std::env::var("TLS_KEY").ok();
-
-    // Index file for single entry point mode (Laravel/Symfony style routing)
-    // Filter out empty strings
-    let index_file = std::env::var("INDEX_FILE")
-        .ok()
-        .filter(|s| !s.is_empty());
-
-    // Document root (default: /var/www/html)
-    let document_root = std::env::var("DOCUMENT_ROOT")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "/var/www/html".to_string());
-
-    info!("Document root: {}", document_root);
-
-    let mut config = ServerConfig::new(addr)
-        .with_workers(num_workers)
-        .with_document_root(&document_root);
-
-    if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
-        info!("TLS enabled: cert={}, key={}", cert, key);
-        config = config.with_tls(cert, key);
+    if let (Some(cert), Some(key)) = (
+        config.server.tls.cert_path.as_ref(),
+        config.server.tls.key_path.as_ref(),
+    ) {
+        info!("TLS enabled: cert={:?}, key={:?}", cert, key);
+        server_config = server_config.with_tls(
+            cert.to_string_lossy().into_owned(),
+            key.to_string_lossy().into_owned(),
+        );
     }
 
-    if let Some(ref idx) = index_file {
-        config = config.with_index_file(idx.clone());
+    // Index file
+    if let Some(ref idx) = config.server.index_file {
+        server_config = server_config.with_index_file(idx.clone());
     }
 
-    // Internal server for /health and /metrics
-    if let Some(internal_addr) = std::env::var("INTERNAL_ADDR")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse().ok())
-    {
-        config = config.with_internal_addr(internal_addr);
+    // Internal server
+    if let Some(internal_addr) = config.server.internal_addr {
+        server_config = server_config.with_internal_addr(internal_addr);
     }
 
-    // Custom error pages directory
-    if let Some(error_pages_dir) = std::env::var("ERROR_PAGES_DIR")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
-        info!("Error pages directory: {}", error_pages_dir);
-        config = config.with_error_pages_dir(error_pages_dir);
+    // Error pages
+    if let Some(ref dir) = config.server.error_pages_dir {
+        info!("Error pages directory: {:?}", dir);
+        server_config = server_config.with_error_pages_dir(dir.to_string_lossy().into_owned());
     }
 
-    // Graceful shutdown drain timeout (default: 30 seconds)
-    let drain_timeout_secs = std::env::var("DRAIN_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(30);
-    config = config.with_drain_timeout(Duration::from_secs(drain_timeout_secs));
+    // Drain timeout
+    server_config = server_config.with_drain_timeout(config.server.drain_timeout);
 
-    // Static file cache TTL (default: 1d, "off" to disable)
-    let static_cache_ttl = std::env::var("STATIC_CACHE_TTL")
-        .ok()
-        .map(|v| server::config::StaticCacheTtl::parse(&v))
-        .unwrap_or_default();
-    if static_cache_ttl.is_enabled() {
-        info!("Static file caching: {} seconds", static_cache_ttl.as_secs());
-    } else {
-        info!("Static file caching: disabled");
-    }
-    config = config.with_static_cache_ttl(static_cache_ttl);
+    // Static cache TTL
+    let static_cache_ttl = crate::server::config::StaticCacheTtl(config.server.static_cache_ttl.0);
+    server_config = server_config.with_static_cache_ttl(static_cache_ttl);
 
-    // Request timeout (default: 2m, "off" to disable)
-    let request_timeout = std::env::var("REQUEST_TIMEOUT")
-        .ok()
-        .map(|v| server::config::RequestTimeout::parse(&v))
-        .unwrap_or_default();
-    if request_timeout.is_enabled() {
-        info!("Request timeout: {}s", request_timeout.as_secs());
-    } else {
-        info!("Request timeout: disabled");
-    }
-    config = config.with_request_timeout(request_timeout);
+    // Request timeout
+    let request_timeout = crate::server::config::RequestTimeout(config.server.request_timeout.0);
+    server_config = server_config.with_request_timeout(request_timeout);
 
-    // Check for stub mode (via env var or feature)
-    let use_stub = std::env::var("USE_STUB")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
+    // Get worker parameters
+    let worker_threads = config.executor.worker_count();
+    let queue_capacity = config.executor.queue_capacity;
 
-    #[cfg(all(feature = "stub", not(feature = "php")))]
-    let use_stub = true;
-
-    // Check for extension mode (USE_EXT=1 uses FFI superglobals)
-    let use_ext = std::env::var("USE_EXT")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
-
-    if use_stub {
-        info!("Running in STUB mode (PHP disabled)");
-        let executor = StubExecutor::new();
-        let server = Server::new(config, executor)?;
-        run_server(server).await
-    } else if use_ext {
-        #[cfg(feature = "php")]
-        {
-            info!(
-                "Initializing EXT executor with {} workers (FFI superglobals)...",
-                worker_threads
-            );
-
-            let executor = ExtExecutor::with_queue_capacity(worker_threads, queue_capacity)
-                .map_err(|e| {
-                    eprintln!("Failed to initialize ExtExecutor: {}", e);
-                    e
-                })?;
-
-            info!("ExtExecutor ready ({} workers, FFI mode)", executor.worker_count());
-
-            let server = Server::new(config, executor)?;
-            run_server(server).await
-        }
-
-        #[cfg(not(feature = "php"))]
-        {
-            info!("PHP feature not enabled, falling back to stub mode");
+    // Create executor based on type
+    match config.executor.executor_type {
+        ExecutorType::Stub => {
+            info!("Running in STUB mode (PHP disabled)");
             let executor = StubExecutor::new();
-            let server = Server::new(config, executor)?;
+            let server = Server::new(server_config, executor)?;
             run_server(server).await
         }
-    } else {
-        #[cfg(feature = "php")]
-        {
-            info!(
-                "Initializing PHP executor with {} workers...",
-                worker_threads
-            );
+        ExecutorType::Ext => {
+            #[cfg(feature = "php")]
+            {
+                info!(
+                    "Initializing EXT executor with {} workers (FFI superglobals)...",
+                    worker_threads
+                );
 
-            let executor = PhpExecutor::with_queue_capacity(worker_threads, queue_capacity)
-                .map_err(|e| {
-                    eprintln!("Failed to initialize PHP: {}", e);
-                    e
-                })?;
+                let executor =
+                    ExtExecutor::with_queue_capacity(worker_threads, queue_capacity).map_err(
+                        |e| {
+                            eprintln!("Failed to initialize ExtExecutor: {}", e);
+                            e
+                        },
+                    )?;
 
-            info!("PHP executor ready ({} workers)", executor.worker_count());
+                info!(
+                    "ExtExecutor ready ({} workers, FFI mode)",
+                    executor.worker_count()
+                );
 
-            let server = Server::new(config, executor)?;
-            run_server(server).await
+                let server = Server::new(server_config, executor)?;
+                run_server(server).await
+            }
+
+            #[cfg(not(feature = "php"))]
+            {
+                info!("PHP feature not enabled, falling back to stub mode");
+                let executor = StubExecutor::new();
+                let server = Server::new(server_config, executor)?;
+                run_server(server).await
+            }
         }
+        ExecutorType::Php => {
+            #[cfg(feature = "php")]
+            {
+                info!(
+                    "Initializing PHP executor with {} workers...",
+                    worker_threads
+                );
 
-        #[cfg(not(feature = "php"))]
-        {
-            info!("PHP feature not enabled, falling back to stub mode");
-            let executor = StubExecutor::new();
-            let server = Server::new(config, executor)?;
-            run_server(server).await
+                let executor =
+                    PhpExecutor::with_queue_capacity(worker_threads, queue_capacity).map_err(
+                        |e| {
+                            eprintln!("Failed to initialize PHP: {}", e);
+                            e
+                        },
+                    )?;
+
+                info!("PHP executor ready ({} workers)", executor.worker_count());
+
+                let server = Server::new(server_config, executor)?;
+                run_server(server).await
+            }
+
+            #[cfg(not(feature = "php"))]
+            {
+                info!("PHP feature not enabled, falling back to stub mode");
+                let executor = StubExecutor::new();
+                let server = Server::new(server_config, executor)?;
+                run_server(server).await
+            }
         }
     }
 }
