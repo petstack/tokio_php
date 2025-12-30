@@ -24,6 +24,7 @@ pub fn env_bool(key: &str, default: bool) -> bool {
 }
 
 /// Parse environment variable with type conversion.
+#[allow(dead_code)]
 pub fn env_parse<T: FromStr>(key: &str, default: T) -> Result<T, ConfigError>
 where
     T::Err: std::fmt::Display,
@@ -86,6 +87,7 @@ pub fn parse_duration(s: &str) -> Result<Option<Duration>, String> {
 }
 
 /// Parse environment variable as duration.
+#[allow(dead_code)]
 pub fn env_duration(key: &str, default: &str) -> Result<Option<Duration>, ConfigError> {
     let value = env_or(key, default);
     parse_duration(&value).map_err(|e| ConfigError::Parse {

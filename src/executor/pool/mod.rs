@@ -28,7 +28,10 @@
 mod error;
 mod thread;
 
+// Re-exports - allow unused since this is a library API
+#[allow(unused_imports)]
 pub use error::{PoolError, PoolResult};
+#[allow(unused_imports)]
 pub use thread::ThreadPool;
 
 use std::time::Duration;
@@ -37,6 +40,7 @@ use std::time::Duration;
 ///
 /// This trait defines the interface for executing tasks on a pool of workers.
 /// Implementations must be thread-safe and support async execution.
+#[allow(dead_code)]
 pub trait WorkerPool: Send + Sync {
     /// The request type sent to workers.
     type Request: Send + 'static;
@@ -76,6 +80,7 @@ pub trait WorkerPool: Send + Sync {
 
 /// Statistics about pool performance.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct PoolStats {
     /// Total requests processed.
     pub total_requests: u64,

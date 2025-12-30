@@ -13,6 +13,7 @@ pub type ParamList = Vec<(String, String)>;
 
 /// Represents an uploaded file from multipart form data.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct UploadedFile {
     /// Original filename
     pub name: String,
@@ -33,6 +34,7 @@ pub struct UploadedFile {
 
 /// Script execution request containing all HTTP request data.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct ScriptRequest {
     /// Path to the script file
     pub script_path: String,

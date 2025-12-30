@@ -5,6 +5,7 @@ use super::ConfigError;
 
 /// Log level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -13,6 +14,7 @@ pub enum LogLevel {
     Error,
 }
 
+#[allow(dead_code)]
 impl LogLevel {
     /// Parse log level from string.
     pub fn parse(s: &str) -> Self {
@@ -53,6 +55,7 @@ pub struct LoggingConfig {
     /// Service name for structured logging.
     pub service_name: String,
     /// Profiling enabled.
+    #[allow(dead_code)]
     pub profiling: bool,
 }
 

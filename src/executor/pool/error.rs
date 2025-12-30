@@ -5,6 +5,7 @@ use std::time::Duration;
 
 /// Errors that can occur during pool operations.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum PoolError {
     /// The request queue is full.
     QueueFull {
@@ -30,6 +31,7 @@ pub enum PoolError {
     Execution(String),
 }
 
+#[allow(dead_code)]
 impl PoolError {
     /// Check if this is a queue full error.
     pub fn is_queue_full(&self) -> bool {

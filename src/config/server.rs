@@ -31,6 +31,7 @@ impl StaticCacheTtl {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn as_duration(&self) -> Option<Duration> {
         self.0
     }
@@ -66,6 +67,7 @@ impl RequestTimeout {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn as_duration(&self) -> Option<Duration> {
         self.0
     }

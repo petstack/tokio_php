@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream};
 use tokio_rustls::rustls::pki_types::CertificateDer;
@@ -207,7 +207,7 @@ impl Listener for TlsListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
 
     #[test]
     fn test_tls_info() {

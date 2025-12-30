@@ -26,8 +26,11 @@ use tokio_rustls::rustls::ServerConfig as RustlsConfig;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
-pub use builder::{BuildError, ServerBuilder};
 pub use config::ServerConfig;
+
+// Re-export builder API (currently unused in main.rs but part of public API)
+#[allow(unused_imports)]
+pub use builder::{BuildError, ServerBuilder};
 use connection::ConnectionContext;
 use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics};

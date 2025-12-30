@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Generate a short unique request ID (12 chars).
 /// Format: timestamp_hex (8) + random (4) = 12 chars
+#[allow(dead_code)]
 fn generate_request_id() -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -104,7 +105,6 @@ use super::response::{
 };
 use super::routing::{is_direct_index_access, is_php_uri, resolve_file_path};
 use crate::executor::ScriptExecutor;
-use crate::profiler;
 use crate::types::ScriptRequest;
 
 /// Check if an error is a common connection reset or timeout.

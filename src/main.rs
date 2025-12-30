@@ -102,7 +102,9 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     server_config = server_config.with_request_timeout(request_timeout);
 
     // Get worker parameters
+    #[allow(unused_variables)]
     let worker_threads = config.executor.worker_count();
+    #[allow(unused_variables)]
     let queue_capacity = config.executor.queue_capacity;
     let profile_enabled = config.middleware.profile;
     let access_log_enabled = config.middleware.access_log;

@@ -13,8 +13,12 @@
 //!     .build(executor)?;
 //! ```
 
+// Allow dead code - this module provides a builder API that isn't used
+// in main.rs (which uses direct ServerConfig construction) but is part of
+// the public API for library users.
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::executor::ScriptExecutor;

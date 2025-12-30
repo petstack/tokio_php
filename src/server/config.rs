@@ -10,6 +10,7 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub struct StaticCacheTtl(pub Option<Duration>);
 
+#[allow(dead_code)]
 impl StaticCacheTtl {
     /// Parse duration string (e.g., "1d", "1w", "1m", "1y", "off").
     /// Default: 1 day.
@@ -85,6 +86,7 @@ impl Default for StaticCacheTtl {
 #[derive(Clone, Debug)]
 pub struct RequestTimeout(pub Option<Duration>);
 
+#[allow(dead_code)]
 impl RequestTimeout {
     /// Parse duration string (e.g., "30s", "2m", "5m", "off").
     /// Default: 2 minutes.

@@ -10,9 +10,11 @@ use tokio::sync::oneshot;
 use super::error::{PoolError, PoolResult};
 
 /// Default queue capacity multiplier per worker.
+#[allow(dead_code)]
 const DEFAULT_QUEUE_MULTIPLIER: usize = 100;
 
 /// A request wrapper with response channel.
+#[allow(dead_code)]
 pub struct WorkerRequest<Req, Res> {
     /// The actual request data.
     pub request: Req,
@@ -26,6 +28,7 @@ pub struct WorkerRequest<Req, Res> {
 ///
 /// Workers pull requests from a shared queue and execute them
 /// using a user-provided handler function.
+#[allow(dead_code)]
 pub struct ThreadPool<Req, Res>
 where
     Req: Send + 'static,
@@ -47,6 +50,7 @@ where
     name: String,
 }
 
+#[allow(dead_code)]
 impl<Req, Res> ThreadPool<Req, Res>
 where
     Req: Send + 'static,

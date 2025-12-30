@@ -121,14 +121,14 @@ pub trait Middleware: Send + Sync {
     ///
     /// Return `MiddlewareResult::Next(req)` to continue the chain,
     /// or `MiddlewareResult::Stop(res)` to short-circuit with a response.
-    fn on_request(&self, req: Request, ctx: &mut Context) -> MiddlewareResult {
+    fn on_request(&self, req: Request, _ctx: &mut Context) -> MiddlewareResult {
         MiddlewareResult::Next(req)
     }
 
     /// Process an outgoing response.
     ///
     /// Called in reverse order after the handler returns.
-    fn on_response(&self, res: Response, ctx: &Context) -> Response {
+    fn on_response(&self, res: Response, _ctx: &Context) -> Response {
         res
     }
 }
