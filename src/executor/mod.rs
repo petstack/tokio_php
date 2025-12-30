@@ -1,3 +1,4 @@
+pub mod pool;
 mod stub;
 
 #[cfg(feature = "php")]
