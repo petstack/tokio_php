@@ -31,6 +31,18 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 brotli = "7"
 
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+tokio-test = "0.4"
+
+# Integration tests run against a Docker container, not linked with PHP
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
+harness = true
+# These tests don't depend on the tokio_php library itself,
+# they only make HTTP requests to a running server
+
 [profile.release]
 lto = true
 codegen-units = 1
