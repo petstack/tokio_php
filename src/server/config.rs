@@ -160,7 +160,7 @@ pub struct TlsInfo {
 }
 
 /// Server configuration.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub addr: SocketAddr,
     pub document_root: Arc<str>,

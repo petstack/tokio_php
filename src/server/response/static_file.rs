@@ -298,14 +298,14 @@ mod tests {
         let epoch = UNIX_EPOCH;
         assert_eq!(format_http_date(epoch), "Thu, 01 Jan 1970 00:00:00 GMT");
 
-        // Known date: 2024-01-15 12:30:45 UTC
+        // Known date: 2024-01-15 12:40:45 UTC (timestamp 1705322445)
         let time = UNIX_EPOCH + std::time::Duration::from_secs(1705322445);
-        assert_eq!(format_http_date(time), "Mon, 15 Jan 2024 12:30:45 GMT");
+        assert_eq!(format_http_date(time), "Mon, 15 Jan 2024 12:40:45 GMT");
     }
 
     #[test]
     fn test_parse_http_date() {
-        let date = "Mon, 15 Jan 2024 12:30:45 GMT";
+        let date = "Mon, 15 Jan 2024 12:40:45 GMT";
         let parsed = parse_http_date(date).unwrap();
         let expected = UNIX_EPOCH + std::time::Duration::from_secs(1705322445);
         assert_eq!(parsed, expected);
@@ -315,7 +315,7 @@ mod tests {
     fn test_generate_etag() {
         let mtime = UNIX_EPOCH + std::time::Duration::from_secs(1705322445);
         let etag = generate_etag(1024, mtime);
-        assert_eq!(etag, "\"400-65a51a2d\"");
+        assert_eq!(etag, "\"400-65a527cd\"");
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod tests {
         // Same time - not modified
         assert!(is_cache_valid(
             None,
-            Some("Mon, 15 Jan 2024 12:30:45 GMT"),
+            Some("Mon, 15 Jan 2024 12:40:45 GMT"),
             &etag,
             mtime
         ));
@@ -353,7 +353,7 @@ mod tests {
         // Later time - not modified
         assert!(is_cache_valid(
             None,
-            Some("Mon, 15 Jan 2024 12:31:00 GMT"),
+            Some("Mon, 15 Jan 2024 12:41:00 GMT"),
             &etag,
             mtime
         ));
@@ -361,7 +361,7 @@ mod tests {
         // Earlier time - modified
         assert!(!is_cache_valid(
             None,
-            Some("Mon, 15 Jan 2024 12:30:00 GMT"),
+            Some("Mon, 15 Jan 2024 12:40:00 GMT"),
             &etag,
             mtime
         ));

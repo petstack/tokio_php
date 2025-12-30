@@ -249,6 +249,7 @@ mod tests {
             rate_limit: Some(100),
             rate_window: 120,
             access_log: false,
+            profile: false,
         };
 
         let mw = RateLimitMiddleware::from_config(&config);
@@ -258,6 +259,7 @@ mod tests {
             rate_limit: None,
             rate_window: 60,
             access_log: false,
+            profile: false,
         };
 
         let mw = RateLimitMiddleware::from_config(&config_disabled);

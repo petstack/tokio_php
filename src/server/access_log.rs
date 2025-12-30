@@ -29,15 +29,5 @@ pub fn log_request(
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_access_log_enabled() {
-        init(true);
-        assert!(is_enabled());
-        init(false);
-        assert!(!is_enabled());
-    }
-}
+// Tests removed: global state was removed in Phase 6.
+// Access log is now configured via Server::with_access_log_enabled() and ConnectionContext.

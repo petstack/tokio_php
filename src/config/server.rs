@@ -169,3 +169,156 @@ impl ServerConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // StaticCacheTtl tests
+    #[test]
+    fn test_static_cache_ttl_parse_day() {
+        let ttl = StaticCacheTtl::parse("1d");
+        assert!(ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 86400);
+    }
+
+    #[test]
+    fn test_static_cache_ttl_parse_week() {
+        let ttl = StaticCacheTtl::parse("1w");
+        assert!(ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 604800);
+    }
+
+    #[test]
+    fn test_static_cache_ttl_parse_minutes() {
+        // Note: "m" in parse_duration means minutes, not months
+        let ttl = StaticCacheTtl::parse("30m");
+        assert!(ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 1800); // 30 minutes
+    }
+
+    #[test]
+    fn test_static_cache_ttl_parse_year() {
+        let ttl = StaticCacheTtl::parse("1y");
+        assert!(ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 31536000); // 365 days
+    }
+
+    #[test]
+    fn test_static_cache_ttl_parse_off() {
+        let ttl = StaticCacheTtl::parse("off");
+        assert!(!ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 0);
+        assert!(ttl.as_duration().is_none());
+    }
+
+    #[test]
+    fn test_static_cache_ttl_parse_zero() {
+        let ttl = StaticCacheTtl::parse("0");
+        assert!(!ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 0);
+    }
+
+    #[test]
+    fn test_static_cache_ttl_default() {
+        let ttl = StaticCacheTtl::default();
+        assert!(ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 86400); // 1 day
+    }
+
+    #[test]
+    fn test_static_cache_ttl_invalid_fallback() {
+        let ttl = StaticCacheTtl::parse("invalid");
+        // Falls back to default (1 day)
+        assert!(ttl.is_enabled());
+        assert_eq!(ttl.as_secs(), 86400);
+    }
+
+    // RequestTimeout tests
+    #[test]
+    fn test_request_timeout_parse_seconds() {
+        let timeout = RequestTimeout::parse("30s");
+        assert!(timeout.is_enabled());
+        assert_eq!(timeout.as_secs(), 30);
+    }
+
+    #[test]
+    fn test_request_timeout_parse_minutes() {
+        let timeout = RequestTimeout::parse("2m");
+        assert!(timeout.is_enabled());
+        assert_eq!(timeout.as_secs(), 120);
+    }
+
+    #[test]
+    fn test_request_timeout_parse_hours() {
+        let timeout = RequestTimeout::parse("1h");
+        assert!(timeout.is_enabled());
+        assert_eq!(timeout.as_secs(), 3600);
+    }
+
+    #[test]
+    fn test_request_timeout_parse_off() {
+        let timeout = RequestTimeout::parse("off");
+        assert!(!timeout.is_enabled());
+        assert_eq!(timeout.as_secs(), 0);
+        assert!(timeout.as_duration().is_none());
+    }
+
+    #[test]
+    fn test_request_timeout_parse_zero() {
+        let timeout = RequestTimeout::parse("0");
+        assert!(!timeout.is_enabled());
+        assert_eq!(timeout.as_secs(), 0);
+    }
+
+    #[test]
+    fn test_request_timeout_default() {
+        let timeout = RequestTimeout::default();
+        assert!(timeout.is_enabled());
+        assert_eq!(timeout.as_secs(), 120); // 2 minutes
+    }
+
+    #[test]
+    fn test_request_timeout_invalid_fallback() {
+        let timeout = RequestTimeout::parse("invalid");
+        // Falls back to default (2 minutes)
+        assert!(timeout.is_enabled());
+        assert_eq!(timeout.as_secs(), 120);
+    }
+
+    // TlsConfig tests
+    #[test]
+    fn test_tls_config_disabled_by_default() {
+        let tls = TlsConfig::default();
+        assert!(!tls.is_enabled());
+        assert!(tls.cert_path.is_none());
+        assert!(tls.key_path.is_none());
+    }
+
+    #[test]
+    fn test_tls_config_enabled_when_both_paths_set() {
+        let tls = TlsConfig {
+            cert_path: Some(PathBuf::from("/path/to/cert.pem")),
+            key_path: Some(PathBuf::from("/path/to/key.pem")),
+        };
+        assert!(tls.is_enabled());
+    }
+
+    #[test]
+    fn test_tls_config_disabled_when_only_cert() {
+        let tls = TlsConfig {
+            cert_path: Some(PathBuf::from("/path/to/cert.pem")),
+            key_path: None,
+        };
+        assert!(!tls.is_enabled());
+    }
+
+    #[test]
+    fn test_tls_config_disabled_when_only_key() {
+        let tls = TlsConfig {
+            cert_path: None,
+            key_path: Some(PathBuf::from("/path/to/key.pem")),
+        };
+        assert!(!tls.is_enabled());
+    }
+}

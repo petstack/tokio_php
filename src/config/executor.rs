@@ -89,3 +89,67 @@ impl ExecutorConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_executor_type_default_is_ext() {
+        assert_eq!(ExecutorType::default(), ExecutorType::Ext);
+    }
+
+    #[test]
+    fn test_worker_count_explicit() {
+        let config = ExecutorConfig {
+            executor_type: ExecutorType::Ext,
+            workers: 4,
+            queue_capacity: 0,
+        };
+        assert_eq!(config.worker_count(), 4);
+    }
+
+    #[test]
+    fn test_worker_count_auto() {
+        let config = ExecutorConfig {
+            executor_type: ExecutorType::Ext,
+            workers: 0,
+            queue_capacity: 0,
+        };
+        // Auto-detect should return at least 1 CPU
+        assert!(config.worker_count() >= 1);
+        assert_eq!(config.worker_count(), num_cpus::get());
+    }
+
+    #[test]
+    fn test_queue_capacity_explicit() {
+        let config = ExecutorConfig {
+            executor_type: ExecutorType::Ext,
+            workers: 4,
+            queue_capacity: 500,
+        };
+        assert_eq!(config.actual_queue_capacity(), 500);
+    }
+
+    #[test]
+    fn test_queue_capacity_auto() {
+        let config = ExecutorConfig {
+            executor_type: ExecutorType::Ext,
+            workers: 4,
+            queue_capacity: 0,
+        };
+        // Auto = workers * 100
+        assert_eq!(config.actual_queue_capacity(), 400);
+    }
+
+    #[test]
+    fn test_queue_capacity_auto_with_auto_workers() {
+        let config = ExecutorConfig {
+            executor_type: ExecutorType::Ext,
+            workers: 0,
+            queue_capacity: 0,
+        };
+        // Auto = num_cpus * 100
+        assert_eq!(config.actual_queue_capacity(), num_cpus::get() * 100);
+    }
+}

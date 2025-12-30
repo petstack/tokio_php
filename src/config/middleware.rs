@@ -54,3 +54,64 @@ impl MiddlewareConfig {
         self.rate_limit.is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rate_limiting_disabled_when_zero() {
+        let config = MiddlewareConfig {
+            rate_limit: None,
+            rate_window: 60,
+            access_log: false,
+            profile: false,
+        };
+        assert!(!config.is_rate_limiting_enabled());
+    }
+
+    #[test]
+    fn test_rate_limiting_enabled_when_set() {
+        let config = MiddlewareConfig {
+            rate_limit: Some(100),
+            rate_window: 60,
+            access_log: false,
+            profile: false,
+        };
+        assert!(config.is_rate_limiting_enabled());
+        assert_eq!(config.rate_limit, Some(100));
+    }
+
+    #[test]
+    fn test_default_rate_window() {
+        let config = MiddlewareConfig {
+            rate_limit: Some(100),
+            rate_window: 60,
+            access_log: false,
+            profile: false,
+        };
+        assert_eq!(config.rate_window, 60);
+    }
+
+    #[test]
+    fn test_access_log_flag() {
+        let config = MiddlewareConfig {
+            rate_limit: None,
+            rate_window: 60,
+            access_log: true,
+            profile: false,
+        };
+        assert!(config.access_log);
+    }
+
+    #[test]
+    fn test_profile_flag() {
+        let config = MiddlewareConfig {
+            rate_limit: None,
+            rate_window: 60,
+            access_log: false,
+            profile: true,
+        };
+        assert!(config.profile);
+    }
+}

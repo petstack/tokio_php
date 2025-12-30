@@ -66,3 +66,60 @@ impl LoggingConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_level_parse_trace() {
+        assert_eq!(LogLevel::parse("trace"), LogLevel::Trace);
+        assert_eq!(LogLevel::parse("TRACE"), LogLevel::Trace);
+    }
+
+    #[test]
+    fn test_log_level_parse_debug() {
+        assert_eq!(LogLevel::parse("debug"), LogLevel::Debug);
+        assert_eq!(LogLevel::parse("DEBUG"), LogLevel::Debug);
+    }
+
+    #[test]
+    fn test_log_level_parse_info() {
+        assert_eq!(LogLevel::parse("info"), LogLevel::Info);
+        assert_eq!(LogLevel::parse("INFO"), LogLevel::Info);
+    }
+
+    #[test]
+    fn test_log_level_parse_warn() {
+        assert_eq!(LogLevel::parse("warn"), LogLevel::Warn);
+        assert_eq!(LogLevel::parse("warning"), LogLevel::Warn);
+        assert_eq!(LogLevel::parse("WARN"), LogLevel::Warn);
+        assert_eq!(LogLevel::parse("WARNING"), LogLevel::Warn);
+    }
+
+    #[test]
+    fn test_log_level_parse_error() {
+        assert_eq!(LogLevel::parse("error"), LogLevel::Error);
+        assert_eq!(LogLevel::parse("ERROR"), LogLevel::Error);
+    }
+
+    #[test]
+    fn test_log_level_parse_unknown_defaults_to_info() {
+        assert_eq!(LogLevel::parse("unknown"), LogLevel::Info);
+        assert_eq!(LogLevel::parse(""), LogLevel::Info);
+    }
+
+    #[test]
+    fn test_log_level_default() {
+        assert_eq!(LogLevel::default(), LogLevel::Info);
+    }
+
+    #[test]
+    fn test_log_level_display() {
+        assert_eq!(format!("{}", LogLevel::Trace), "trace");
+        assert_eq!(format!("{}", LogLevel::Debug), "debug");
+        assert_eq!(format!("{}", LogLevel::Info), "info");
+        assert_eq!(format!("{}", LogLevel::Warn), "warn");
+        assert_eq!(format!("{}", LogLevel::Error), "error");
+    }
+}
