@@ -1,6 +1,7 @@
 //! HTTP server with pluggable script executor.
 
 pub mod access_log;
+pub mod builder;
 pub mod config;
 pub mod connection;
 pub mod error_pages;
@@ -25,6 +26,7 @@ use tokio_rustls::rustls::ServerConfig as RustlsConfig;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
+pub use builder::{BuildError, ServerBuilder};
 pub use config::ServerConfig;
 use connection::ConnectionContext;
 use error_pages::ErrorPages;
