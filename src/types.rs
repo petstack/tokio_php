@@ -75,3 +75,21 @@ pub struct ScriptResponse {
     pub profile: Option<ProfileData>,
 }
 
+// =============================================================================
+// Conversions to/from core types
+// =============================================================================
+
+impl From<ScriptResponse> for crate::core::Response {
+    fn from(resp: ScriptResponse) -> Self {
+        let mut builder = crate::core::Response::builder()
+            .status(http::StatusCode::OK)
+            .body(resp.body);
+
+        for (name, value) in resp.headers {
+            builder = builder.header(&name, value);
+        }
+
+        builder.build()
+    }
+}
+
