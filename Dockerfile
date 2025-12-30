@@ -61,6 +61,10 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY build.rs ./
 
+# Run unit tests before building (fail fast if tests don't pass)
+# Note: --bin tokio_php excludes integration tests which require running server
+RUN cargo test --no-default-features --release --bin tokio_php
+
 # Build the application
 RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
 
