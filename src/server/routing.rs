@@ -1,5 +1,6 @@
 //! Request routing and path resolution.
 
+use std::path::Path;
 use std::sync::Arc;
 
 /// Resolve a URI path to a file path.
@@ -11,11 +12,30 @@ pub fn resolve_file_path(
     document_root: &str,
     index_file_path: Option<&Arc<str>>,
 ) -> String {
-    // In single entry point mode, always use the pre-validated index file
+    // In single entry point mode with try_files behavior
     if let Some(idx_path) = index_file_path {
+        // First, try the actual URI path (try_files behavior)
+        let static_path = resolve_uri_to_path(uri_path, document_root);
+        let path = Path::new(&static_path);
+
+        // Check if file exists, is a file (not directory), and is not .php
+        if path.is_file() {
+            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if extension != "php" {
+                return static_path;
+            }
+        }
+
+        // Fall back to index file
         return idx_path.to_string();
     }
 
+    resolve_uri_to_path(uri_path, document_root)
+}
+
+/// Resolve URI to file path without index_file consideration.
+#[inline]
+fn resolve_uri_to_path(uri_path: &str, document_root: &str) -> String {
     let decoded_path = percent_encoding::percent_decode_str(uri_path).decode_utf8_lossy();
 
     let clean_path = decoded_path.trim_start_matches('/').replace("..", "");
