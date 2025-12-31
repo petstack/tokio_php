@@ -4,6 +4,7 @@ $functions = [
     'tokio_request_id' => function_exists('tokio_request_id'),
     'tokio_worker_id' => function_exists('tokio_worker_id'),
     'tokio_server_info' => function_exists('tokio_server_info'),
+    'tokio_request_heartbeat' => function_exists('tokio_request_heartbeat'),
 ];
 $serverInfo = function_exists('tokio_server_info') ? tokio_server_info() : null;
 $requestId = function_exists('tokio_request_id') ? tokio_request_id() : null;
