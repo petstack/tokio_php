@@ -52,6 +52,7 @@ Access trace context in PHP via `$_SERVER`:
 
 ```php
 <?php
+
 // Trace identifiers
 $traceId = $_SERVER['TRACE_ID'];           // 32-char hex
 $spanId = $_SERVER['SPAN_ID'];             // 16-char hex
@@ -71,6 +72,7 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
 
 ```php
 <?php
+
 function log_with_trace(string $message, array $data = []): void {
     $entry = [
         'ts' => date('c'),
@@ -89,6 +91,7 @@ log_with_trace('Processing order', ['order_id' => 12345]);
 
 ```php
 <?php
+
 function create_child_traceparent(): string {
     $traceId = $_SERVER['TRACE_ID'];
     $newSpanId = bin2hex(random_bytes(8));
@@ -204,6 +207,7 @@ GET /logs/_search
 
 ```php
 <?php
+
 function call_api(string $url, array $data): array {
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -223,6 +227,7 @@ function call_api(string $url, array $data): array {
 
 ```php
 <?php
+
 function json_error(int $code, string $message): never {
     http_response_code($code);
     header('Content-Type: application/json');
@@ -238,6 +243,7 @@ function json_error(int $code, string $message): never {
 
 ```php
 <?php
+
 set_exception_handler(function (Throwable $e) {
     error_log(json_encode([
         'level' => 'error',
@@ -261,6 +267,9 @@ set_exception_handler(function (Throwable $e) {
 
 ## See Also
 
+- [Configuration](configuration.md) - ACCESS_LOG environment variable
+- [Middleware](middleware.md) - Access logging middleware
+- [Profiling](profiling.md) - Request timing with trace context
 - [W3C Trace Context Specification](https://www.w3.org/TR/trace-context/)
 - [OpenTelemetry PHP](https://opentelemetry.io/docs/instrumentation/php/)
 - [Jaeger Documentation](https://www.jaegertracing.io/docs/)

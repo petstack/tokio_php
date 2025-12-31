@@ -12,14 +12,16 @@ Compression is applied when all conditions are met:
 
 ## Compression Results
 
-Typical compression ratios:
+Typical compression ratios (approximate values):
 
 | Content | Original | Compressed | Ratio |
 |---------|----------|------------|-------|
-| HTML | 2,822 bytes | 1,013 bytes | 64% |
-| JSON | 5,000 bytes | 1,200 bytes | 76% |
-| CSS | 10,000 bytes | 2,500 bytes | 75% |
-| JavaScript | 50,000 bytes | 12,000 bytes | 76% |
+| HTML | ~3 KB | ~1 KB | 60-70% |
+| JSON | ~5 KB | ~1.2 KB | 70-80% |
+| CSS | ~10 KB | ~2.5 KB | 70-80% |
+| JavaScript | ~50 KB | ~12 KB | 70-80% |
+
+*Note: Actual ratios depend on content structure and repetition. Brotli typically achieves 15-25% better compression than gzip.*
 
 ## Testing
 
@@ -115,9 +117,9 @@ Compression works with PHP output:
 
 ```php
 <?php
+
 header('Content-Type: application/json');
 echo json_encode(['data' => str_repeat('x', 1000)]);
-?>
 ```
 
 ```bash
@@ -138,64 +140,82 @@ curl -sI -H "Accept-Encoding: br" http://localhost:8080/style.css
 
 ## Performance Impact
 
-Compression adds CPU overhead but reduces bandwidth:
+Compression adds CPU overhead but reduces bandwidth.
 
-| Metric | Without Compression | With Compression |
-|--------|---------------------|------------------|
-| Response size | 2,822 bytes | 1,013 bytes |
-| Transfer time | ~0.5ms | ~0.2ms |
-| CPU time | 0ms | ~0.1ms |
-| **Net benefit** | - | Faster for clients |
+**Trade-offs:**
+- **CPU cost**: Brotli quality 4 adds ~0.05-0.2ms per response (depends on size)
+- **Bandwidth savings**: 60-80% smaller responses
+- **Network latency**: Reduced transfer time, especially on slow connections
 
-Brotli is slower than gzip but provides better compression ratios. For most web content, the bandwidth savings outweigh the CPU cost.
+**When compression helps:**
+- Slow network connections (mobile, high latency)
+- Large text responses (HTML, JSON, JS)
+- CDN edge caching (compress once, serve many)
+
+**When to skip compression:**
+- Very small responses (< 256 bytes)
+- Already compressed content (images, video, woff2)
+- CPU-constrained environments under high load
+
+Brotli is slower than gzip but provides 15-25% better compression ratios. For most web content, the bandwidth savings outweigh the CPU cost.
 
 ## Implementation
 
 ### Detection
 
 ```rust
-fn accepts_brotli(headers: &HeaderMap) -> bool {
-    headers
-        .get(ACCEPT_ENCODING)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.contains("br"))
-        .unwrap_or(false)
+/// Check if the client accepts Brotli encoding
+pub fn accepts_brotli(accept_encoding: &str) -> bool {
+    accept_encoding
+        .split(',')
+        .any(|enc| enc.trim().starts_with("br"))
 }
 ```
 
 ### MIME Check
 
 ```rust
-fn should_compress_mime(content_type: &str) -> bool {
-    let compressible = [
-        "text/html", "text/css", "text/plain", "text/xml",
-        "application/javascript", "application/json",
-        "image/svg+xml", "font/ttf", "font/otf",
-        // ...
-    ];
-
-    compressible.iter().any(|m| content_type.starts_with(m))
+/// Check if the MIME type should be compressed.
+pub fn should_compress_mime(content_type: &str) -> bool {
+    let ct = content_type.split(';').next().unwrap_or("").trim();
+    matches!(
+        ct,
+        "text/html" | "text/css" | "text/plain" | "text/xml" | "text/javascript"
+        | "application/javascript" | "application/json" | "application/xml"
+        | "application/xhtml+xml" | "application/rss+xml" | "application/atom+xml"
+        | "application/manifest+json" | "application/ld+json"
+        | "image/svg+xml"
+        | "font/ttf" | "font/otf"
+        | "application/x-font-ttf" | "application/x-font-opentype"
+        | "application/vnd.ms-fontobject"
+    )
 }
 ```
 
 ### Compression
 
 ```rust
-fn compress_brotli(data: &[u8]) -> Vec<u8> {
-    let mut encoder = brotli::CompressorWriter::new(
-        Vec::new(),
-        4096,  // buffer size
-        4,     // quality (0-11, 4 is good balance)
-        22,    // window size
-    );
-    encoder.write_all(data).unwrap();
-    encoder.into_inner()
+/// Compress data using Brotli.
+/// Returns None if compression would not reduce size.
+pub fn compress_brotli(data: &[u8]) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(data.len() / 2);
+    let mut input = std::io::Cursor::new(data);
+    let params = brotli::enc::BrotliEncoderParams {
+        quality: BROTLI_QUALITY as i32,  // 4
+        lgwin: BROTLI_WINDOW as i32,     // 20
+        ..Default::default()
+    };
+
+    match brotli::BrotliCompress(&mut input, &mut output, &params) {
+        Ok(_) if output.len() < data.len() => Some(output),
+        _ => None, // Compression didn't help
+    }
 }
 ```
 
 ## Configuration
 
-Compression settings are defined in `src/server/response/compression.rs`:
+Compression settings are defined in `src/middleware/compression.rs`:
 
 | Setting | Value | Description |
 |---------|-------|-------------|
@@ -219,3 +239,10 @@ Files larger than 3 MB are served uncompressed to avoid blocking the response.
 2. **Use CDN** for caching compressed responses
 3. **Set appropriate Cache-Control** headers
 4. **Monitor CPU** under high load with many large responses
+
+## See Also
+
+- [Middleware](middleware.md) - Middleware system overview
+- [Static Caching](static-caching.md) - Cache-Control headers for static files
+- [Configuration](configuration.md) - Environment variables reference
+- [Profiling](profiling.md) - Request timing analysis

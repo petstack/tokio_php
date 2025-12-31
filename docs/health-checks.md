@@ -408,3 +408,9 @@ kubectl logs <pod-name> --tail=50
 5. **Add preStop hook** - allow load balancer to deregister pod
 6. **Set resource limits** - prevent probe timeouts from resource starvation
 7. **Use named ports** - clearer configuration, easier updates
+
+## See Also
+
+- [Internal Server](internal-server.md) - Full /health and /metrics endpoint reference
+- [Graceful Shutdown](graceful-shutdown.md) - Shutdown behavior and Kubernetes integration
+- [Configuration](configuration.md) - Environment variables reference

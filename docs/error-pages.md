@@ -77,185 +77,6 @@ If any condition is not met, the default behavior applies (plain text or PHP out
 - **Zero overhead**: When disabled (`ERROR_PAGES_DIR` empty), no additional processing
 - **Minimal latency**: Direct memory copy, no template rendering
 
-## Example Error Pages
-
-### 404.html
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>404 - Page Not Found</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #fff;
-        }
-        .container { text-align: center; padding: 2rem; }
-        .error-code {
-            font-size: 8rem;
-            font-weight: 700;
-            background: linear-gradient(45deg, #e94560, #ff6b6b);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            line-height: 1;
-        }
-        .error-message {
-            font-size: 1.5rem;
-            color: #a0a0a0;
-            margin: 1rem 0 2rem;
-        }
-        .back-link {
-            display: inline-block;
-            padding: 0.75rem 2rem;
-            background: #e94560;
-            color: #fff;
-            text-decoration: none;
-            border-radius: 4px;
-            transition: background 0.2s;
-        }
-        .back-link:hover { background: #ff6b6b; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="error-code">404</div>
-        <p class="error-message">The page you're looking for doesn't exist.</p>
-        <a href="/" class="back-link">Go Home</a>
-    </div>
-</body>
-</html>
-```
-
-### 500.html
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>500 - Internal Server Error</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #fff;
-        }
-        .container { text-align: center; padding: 2rem; }
-        .error-code {
-            font-size: 8rem;
-            font-weight: 700;
-            background: linear-gradient(45deg, #ff8c00, #ff6347);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            line-height: 1;
-        }
-        .error-message {
-            font-size: 1.5rem;
-            color: #a0a0a0;
-            margin: 1rem 0 2rem;
-        }
-        .back-link {
-            display: inline-block;
-            padding: 0.75rem 2rem;
-            background: #ff8c00;
-            color: #fff;
-            text-decoration: none;
-            border-radius: 4px;
-            transition: background 0.2s;
-        }
-        .back-link:hover { background: #ff6347; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="error-code">500</div>
-        <p class="error-message">Something went wrong on our end.</p>
-        <a href="/" class="back-link">Go Home</a>
-    </div>
-</body>
-</html>
-```
-
-### 503.html
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>503 - Service Unavailable</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #fff;
-        }
-        .container { text-align: center; padding: 2rem; }
-        .error-code {
-            font-size: 8rem;
-            font-weight: 700;
-            background: linear-gradient(45deg, #9b59b6, #8e44ad);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            line-height: 1;
-        }
-        .error-message {
-            font-size: 1.5rem;
-            color: #a0a0a0;
-            margin: 1rem 0 2rem;
-        }
-        .retry-message {
-            font-size: 1rem;
-            color: #666;
-            margin-bottom: 2rem;
-        }
-        .back-link {
-            display: inline-block;
-            padding: 0.75rem 2rem;
-            background: #9b59b6;
-            color: #fff;
-            text-decoration: none;
-            border-radius: 4px;
-            transition: background 0.2s;
-        }
-        .back-link:hover { background: #8e44ad; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="error-code">503</div>
-        <p class="error-message">Service temporarily unavailable.</p>
-        <p class="retry-message">The server is overloaded. Please try again in a moment.</p>
-        <a href="javascript:location.reload()" class="back-link">Retry</a>
-    </div>
-</body>
-</html>
-```
-
 ## Symfony Integration
 
 Symfony provides a command to [dump error pages as static HTML files](https://symfony.com/doc/current/controller/error_pages.html#dumping-error-pages-as-static-html-files). This approach is recommended for production because:
@@ -364,6 +185,7 @@ To trigger custom error pages from PHP, return the appropriate status code with 
 
 ```php
 <?php
+
 // Return 404 with empty body - error page will be injected
 http_response_code(404);
 exit;
@@ -377,6 +199,7 @@ For custom error handling in frameworks:
 
 ```php
 <?php
+
 // Laravel-style exception handler
 try {
     // ... application logic
@@ -429,6 +252,7 @@ curl -H "Accept: text/html" http://localhost:8080/index.php
 4. **Check response body is empty**:
    ```php
    <?php
+   
    // Wrong - body not empty, error page won't show
    http_response_code(404);
    echo "Not found";
@@ -442,18 +266,27 @@ curl -H "Accept: text/html" http://localhost:8080/index.php
 
 Check if files were loaded:
 ```bash
-docker compose logs tokio_php | grep -i error
+docker compose logs tokio_php | grep -i "error\|Loaded"
 ```
 
-Expected output:
+Expected output (JSON format):
+```json
+{"msg":"Error pages directory: \"/var/www/html/errors","level":"info","type":"app",...}
+{"msg":"Loaded 3 error pages: [404, 503, 500]","level":"info","type":"app",...}
 ```
-[INFO] Error pages directory: /var/www/html/errors
-[INFO] Loaded error page: 404 (1234 bytes)
-[INFO] Loaded error page: 500 (1198 bytes)
-[INFO] Loaded error page: 503 (1456 bytes)
+
+Or formatted:
+```bash
+docker compose logs tokio_php | jq -r 'select(.msg | contains("error") or contains("Loaded")) | .msg'
+```
+
+```
+Error pages directory: "/var/www/html/errors
+Loaded 3 error pages: [404, 503, 500]
 ```
 
 ## See Also
 
+- [Middleware](middleware.md) - Middleware system overview
 - [Configuration](configuration.md) - Environment variables reference
 - [Symfony Error Pages](https://symfony.com/doc/current/controller/error_pages.html) - Symfony's approach to error pages

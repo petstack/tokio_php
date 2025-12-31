@@ -1,14 +1,16 @@
 # OPcache & JIT
 
-tokio_php supports PHP's OPcache and JIT compiler, providing significant performance improvements.
+tokio_php supports PHP's OPcache and JIT compiler, providing significant performance improvements. For detailed OPcache internals, see [OPcache Internals](opcache-internals.md).
 
 ## Performance Impact
 
-| Configuration | Requests/sec | Latency | Improvement |
-|---------------|--------------|---------|-------------|
-| No OPcache | ~12,400 | 8.27ms | baseline |
-| OPcache | ~22,760 | 5.40ms | +84% |
-| OPcache + JIT | ~23,650 | 4.46ms | +91% |
+Approximate performance improvements (actual results depend on workload):
+
+| Configuration | Improvement |
+|---------------|-------------|
+| No OPcache | baseline |
+| OPcache | +50-100% |
+| OPcache + JIT | +80-150% (CPU-intensive code benefits most) |
 
 ## How It Works
 
@@ -32,7 +34,7 @@ JIT compiles hot PHP code paths to native machine code:
 2. **Compilation**: Compiles frequently executed loops/functions to native code
 3. **Execution**: Runs native code instead of interpreting opcodes
 
-Example performance on CPU-intensive code:
+Example of CPU-intensive code that benefits from JIT:
 
 ```php
 <?php
@@ -42,25 +44,27 @@ function fibonacci($n) {
     return fibonacci($n - 1) + fibonacci($n - 2);
 }
 
-$result = fibonacci(20);
-// Without JIT: 1.5ms
-// With JIT:    0.38ms (4x faster)
+$result = fibonacci(30);
+// JIT can provide 2-5x speedup for CPU-bound recursive code
 ```
 
 ## Configuration
 
-### Dockerfile Settings
+### Current Dockerfile Settings
 
 ```dockerfile
-RUN echo "zend_extension=opcache" >> /etc/php84/php.ini && \
-    echo "opcache.enable=1" >> /etc/php84/php.ini && \
-    echo "opcache.enable_cli=1" >> /etc/php84/php.ini && \
-    echo "opcache.memory_consumption=128" >> /etc/php84/php.ini && \
-    echo "opcache.interned_strings_buffer=16" >> /etc/php84/php.ini && \
-    echo "opcache.max_accelerated_files=10000" >> /etc/php84/php.ini && \
-    echo "opcache.validate_timestamps=0" >> /etc/php84/php.ini && \
-    echo "opcache.jit_buffer_size=64M" >> /etc/php84/php.ini && \
-    echo "opcache.jit=tracing" >> /etc/php84/php.ini
+# Configure OPcache + JIT + Preloading
+RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.interned_strings_buffer=16" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.max_accelerated_files=10000" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.revalidate_freq=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.jit_buffer_size=64M" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.preload=/var/www/html/preload.php" >> /usr/local/etc/php/conf.d/opcache.ini && \
+    echo "opcache.preload_user=www-data" >> /usr/local/etc/php/conf.d/opcache.ini
 ```
 
 ### Configuration Options
@@ -73,8 +77,11 @@ RUN echo "zend_extension=opcache" >> /etc/php84/php.ini && \
 | `opcache.interned_strings_buffer` | 16 | Memory for strings (MB) |
 | `opcache.max_accelerated_files` | 10000 | Max cached scripts |
 | `opcache.validate_timestamps` | 0 | Don't check file changes |
+| `opcache.revalidate_freq` | 0 | Check frequency in seconds |
 | `opcache.jit_buffer_size` | 64M | Memory for JIT code |
 | `opcache.jit` | tracing | JIT mode |
+| `opcache.preload` | path | Preload script path |
+| `opcache.preload_user` | www-data | User for preloading |
 
 ### JIT Modes
 
@@ -90,11 +97,13 @@ OPcache normally disables itself for the "embed" SAPI, considering it for short-
 
 ```rust
 // In src/executor/sapi.rs
-php_embed_module.name = "cli-server\0".as_ptr() as *mut c_char;
-php_embed_init(...);
+static SAPI_NAME: &[u8] = b"cli-server\0";
+
+// Before php_embed_init()
+php_embed_module.name = SAPI_NAME.as_ptr() as *mut c_char;
 ```
 
-This technique was borrowed from NGINX Unit's PHP implementation.
+This technique was borrowed from NGINX Unit's PHP implementation. See [Architecture](architecture.md) for more details on the executor system.
 
 ## Checking Status
 
@@ -204,8 +213,10 @@ opcache.jit_buffer_size=128M
 
 ; Preloading
 opcache.preload=/var/www/html/preload.php
-opcache.preload_user=root
+opcache.preload_user=www-data
 ```
+
+See [Configuration](configuration.md) for all environment variables.
 
 ### Development Settings
 
@@ -261,3 +272,11 @@ opcache.jit_buffer_size=64M
 ### Memory Issues
 
 If you see "Unable to reattach to base address" errors, increase shared memory limits in the container or reduce `opcache.memory_consumption`.
+
+## See Also
+
+- [OPcache Internals](opcache-internals.md) - Deep dive into OPcache data structures
+- [Architecture](architecture.md) - tokio_php system overview
+- [Worker Pool](worker-pool.md) - PHP worker management
+- [Profiling](profiling.md) - Performance measurement
+- [Configuration](configuration.md) - All environment variables

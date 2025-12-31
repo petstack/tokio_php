@@ -43,8 +43,11 @@ docker compose exec tokio_php ls -la /var/www/html/
 All application files are owned by `www-data`:
 
 ```dockerfile
-COPY --chown=www-data:www-data www/symfony /var/www/html
-COPY --chown=www-data:www-data www/preload.php /var/www/html/preload.php
+# Create directory with correct ownership
+RUN mkdir -p /var/www/html && chown -R www-data:www-data /var/www/html
+
+# Copy files with correct ownership
+COPY --chown=www-data:www-data www/ /var/www/html/
 ```
 
 ### Recommended Permissions
@@ -101,8 +104,8 @@ TLS_KEY=/certs/key.pem
 ```
 
 Features:
-- TLS 1.3 support
-- HTTP/2 via ALPN
+- TLS 1.2 and TLS 1.3 support
+- HTTP/2 via ALPN negotiation
 - Strong cipher suites (rustls defaults)
 
 ## Rate Limiting
@@ -228,6 +231,7 @@ Always validate input in PHP:
 
 ```php
 <?php
+
 // Validate and sanitize input
 $id = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
 if ($id === false) {
@@ -254,7 +258,7 @@ Log format includes:
 - User-Agent (`ua`)
 - X-Forwarded-For (`xff`)
 
-See [Configuration](configuration.md#access_log) for details.
+See [Configuration](configuration.md) for details.
 
 ## Security Checklist
 
@@ -285,3 +289,11 @@ If you discover a security vulnerability, please report it responsibly:
 1. Do not open a public issue
 2. Email security details privately
 3. Allow time for fix before disclosure
+
+## See Also
+
+- [Configuration](configuration.md) - Environment variables reference
+- [HTTP/2 & TLS](http2-tls.md) - TLS configuration details
+- [Rate Limiting](rate-limiting.md) - Abuse prevention
+- [Graceful Shutdown](graceful-shutdown.md) - Zero-downtime deployments
+- [Architecture](architecture.md) - System design overview

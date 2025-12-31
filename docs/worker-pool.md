@@ -85,28 +85,38 @@ Each worker thread runs a loop:
 
 ```rust
 loop {
-    // Wait for request
-    let request = rx.recv()?;
+    // Wait for request (mutex-protected shared receiver)
+    let work = {
+        let guard = rx.lock().unwrap();
+        guard.recv()
+    };
 
-    // PHP request lifecycle
-    php_request_startup();
+    match work {
+        Ok(WorkerRequest { request, response_tx, queued_at, heartbeat_ctx }) => {
+            // Start PHP request
+            php_request_startup();
 
-    // Set superglobals
-    inject_superglobals(&request);
+            // Set up stdout capture (memfd on Linux)
+            let capture = StdoutCapture::new()?;
 
-    // Execute script
-    execute_file(&request.script_path);
+            // Set superglobals + execute script
+            execute_php_script(&request);
 
-    // Capture output
-    let output = capture_output();
+            // Call php_request_shutdown WHILE stdout captured
+            // (captures shutdown handler output)
+            php_request_shutdown();
 
-    // Capture headers
-    let headers = capture_headers();
+            // Restore stdout and read output
+            let output = capture.finalize();
 
-    php_request_shutdown();
+            // Get headers via SAPI handler
+            let headers = get_captured_headers();
 
-    // Send response
-    tx.send(ScriptResponse { output, headers, status })?;
+            // Send response
+            response_tx.send(ScriptResponse { body: output, headers, .. })?;
+        }
+        Err(_) => break, // Channel closed, shutdown
+    }
 }
 ```
 
@@ -216,32 +226,55 @@ Thread-based (current) is simpler and faster:
 ```rust
 // src/executor/common.rs
 pub struct WorkerPool {
-    tx: mpsc::SyncSender<WorkerRequest>,
-    handles: Vec<JoinHandle<()>>,
+    request_tx: mpsc::SyncSender<WorkerRequest>,
+    workers: Vec<WorkerThread>,
+    worker_count: AtomicUsize,
+    queue_capacity: usize,
+}
+
+pub struct WorkerRequest {
+    pub request: ScriptRequest,
+    pub response_tx: oneshot::Sender<Result<ScriptResponse, String>>,
+    pub queued_at: Instant,
+    pub heartbeat_ctx: Option<Arc<HeartbeatContext>>,  // For timeout extension
 }
 
 impl WorkerPool {
-    pub fn new(worker_count: usize, queue_capacity: usize) -> Self {
-        let capacity = if queue_capacity == 0 {
-            worker_count * 100
-        } else {
-            queue_capacity
-        };
-
-        let (tx, rx) = mpsc::sync_channel(capacity);
-        let rx = Arc::new(Mutex::new(rx));
-
-        let handles: Vec<_> = (0..worker_count)
-            .map(|id| {
-                let rx = Arc::clone(&rx);
-                thread::spawn(move || worker_loop(id, rx))
-            })
-            .collect();
-
-        Self { tx, handles }
+    pub fn new<F>(num_workers: usize, name_prefix: &str, worker_fn: F) -> Result<Self, String>
+    where
+        F: Fn(usize, Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
+    {
+        Self::with_queue_capacity(num_workers, name_prefix, num_workers * 100, worker_fn)
     }
 }
 ```
+
+### Heartbeat Context
+
+Requests can extend their timeout deadline using `tokio_request_heartbeat()`:
+
+```rust
+// src/executor/common.rs
+pub struct HeartbeatContext {
+    start: Instant,
+    deadline_ms: AtomicU64,
+    max_extension_secs: u64,
+}
+
+impl HeartbeatContext {
+    pub fn heartbeat(&self, secs: u64) -> bool {
+        if secs == 0 || secs > self.max_extension_secs {
+            return false;
+        }
+        let elapsed_ms = self.start.elapsed().as_millis() as u64;
+        let new_deadline_ms = elapsed_ms + secs * 1000;
+        self.deadline_ms.store(new_deadline_ms, Ordering::Release);
+        true
+    }
+}
+```
+
+See [Request Heartbeat](request-heartbeat.md) for PHP usage.
 
 ### Request Distribution
 
@@ -267,17 +300,31 @@ This provides automatic load balancing - idle workers pick up work first.
 
 ## Graceful Shutdown
 
-On shutdown signal (SIGTERM):
+On shutdown signal (SIGTERM/SIGINT):
 
 1. Stop accepting new connections
-2. Finish in-flight requests
+2. Wait for in-flight requests (up to `DRAIN_TIMEOUT_SECS`)
 3. Drop channel sender (unblocks workers)
 4. Join worker threads
 
 ```bash
+# Configure drain timeout (default: 30 seconds)
+DRAIN_TIMEOUT_SECS=30 docker compose up -d
+
 # Graceful stop
 docker compose down
 
 # Force kill (not recommended)
 docker compose kill
 ```
+
+See [Graceful Shutdown](graceful-shutdown.md) for Kubernetes integration.
+
+## See Also
+
+- [Configuration](configuration.md) - `PHP_WORKERS`, `QUEUE_CAPACITY` environment variables
+- [Request Heartbeat](request-heartbeat.md) - Timeout extension mechanism
+- [Configuration](configuration.md#request_timeout) - `REQUEST_TIMEOUT` setting
+- [Graceful Shutdown](graceful-shutdown.md) - Kubernetes and deployment guide
+- [Architecture](architecture.md) - System design overview
+- [Internal Server](internal-server.md) - Metrics and health endpoints

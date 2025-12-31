@@ -5,38 +5,119 @@ tokio_php is a high-performance async web server that executes PHP scripts using
 ## System Overview
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│                    tokio_php Process                      │
-├───────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │           Main Thread (Tokio Runtime)               │  │
-│  │  ┌──────────────────┐  ┌─────────────────────┐      │  │
-│  │  │  HTTP Server     │  │  Internal Server    │      │  │
-│  │  │  (Hyper)         │  │ (/health, /metrics) │      │  │
-│  │  │  Port 8080       │  │  Port 9090          │      │  │
-│  │  └────────┬─────────┘  └─────────────────────┘      │  │
-│  │           │ async                                   │  │
-│  │           ▼                                         │  │
-│  │  ┌──────────────────────────────────────────┐       │  │
-│  │  │           Request Queue (mpsc)           │       │  │
-│  │  └──────────────────────────────────────────┘       │  │
-│  └─────────────────────────────────────────────────────┘  │
-│                          │                                │
-│          ┌───────────────┼───────────────┐                │
-│          ▼               ▼               ▼                │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐       │
-│  │ PHP Worker 0 │ │ PHP Worker 1 │ │ PHP Worker N │       │
-│  │   (thread)   │ │   (thread)   │ │   (thread)   │       │
-│  │              │ │              │ │              │       │
-│  │ php_request  │ │ php_request  │ │ php_request  │       │
-│  │  _startup()  │ │  _startup()  │ │  _startup()  │       │
-│  │     ↓        │ │     ↓        │ │     ↓        │       │
-│  │  execute()   │ │  execute()   │ │  execute()   │       │
-│  │     ↓        │ │     ↓        │ │     ↓        │       │
-│  │ php_request  │ │ php_request  │ │ php_request  │       │
-│  │ _shutdown()  │ │ _shutdown()  │ │ _shutdown()  │       │
-│  └──────────────┘ └──────────────┘ └──────────────┘       │
-└───────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         tokio_php Process                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                  Main Thread (Tokio Runtime)                  │  │
+│  │                                                               │  │
+│  │  ┌──────────────────────┐     ┌──────────────────────┐        │  │
+│  │  │     HTTP Server      │     │   Internal Server    │        │  │
+│  │  │       (Hyper)        │     │  (/health, /metrics) │        │  │
+│  │  │   Port 8080/8443     │     │     Port 9090        │        │  │
+│  │  └──────────┬───────────┘     └──────────────────────┘        │  │
+│  │             │                                                 │  │
+│  │             ▼                                                 │  │
+│  │  ┌──────────────────────────────────────────────────────┐     │  │
+│  │  │                  Middleware Chain                    │     │  │
+│  │  │  Rate Limit → Access Log → ... → Error Pages → Brotli│     │  │
+│  │  └──────────────────────────┬───────────────────────────┘     │  │
+│  │                             │                                 │  │
+│  │                             ▼                                 │  │
+│  │  ┌──────────────────────────────────────────────────────┐     │  │
+│  │  │              Request Queue (sync_channel)            │     │  │
+│  │  │           Capacity: workers × 100 (default)          │     │  │
+│  │  └──────────────────────────┬───────────────────────────┘     │  │
+│  └─────────────────────────────│─────────────────────────────────┘  │
+│                                │                                    │
+│            ┌───────────────────┼───────────────────┐                │
+│            ▼                   ▼                   ▼                │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐     │
+│  │   PHP Worker 0   │ │   PHP Worker 1   │ │   PHP Worker N   │     │
+│  │     (thread)     │ │     (thread)     │ │     (thread)     │     │
+│  │                  │ │                  │ │                  │     │
+│  │  ┌────────────┐  │ │  ┌────────────┐  │ │  ┌────────────┐  │     │
+│  │  │ PHP ZTS    │  │ │  │ PHP ZTS    │  │ │  │ PHP ZTS    │  │     │
+│  │  │ Runtime    │  │ │  │ Runtime    │  │ │  │ Runtime    │  │     │
+│  │  └────────────┘  │ │  └────────────┘  │ │  └────────────┘  │     │
+│  └──────────────────┘ └──────────────────┘ └──────────────────┘     │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    Shared OPcache + JIT                       │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Source Structure
+
+```
+src/
+├── main.rs              # Entry point, runtime initialization
+├── types.rs             # ScriptRequest/ScriptResponse
+├── profiler.rs          # Request timing profiler
+├── trace_context.rs     # W3C Trace Context (distributed tracing)
+├── logging.rs           # JSON logging setup
+│
+├── server/              # HTTP server
+│   ├── mod.rs           # Server struct, main loop
+│   ├── builder.rs       # ServerBuilder pattern
+│   ├── config.rs        # ServerConfig
+│   ├── connection.rs    # Connection handling, request processing
+│   ├── routing.rs       # URL routing, static files
+│   ├── internal.rs      # Internal server (/health, /metrics)
+│   ├── rate_limit.rs    # Per-IP rate limiting
+│   ├── access_log.rs    # Structured access logging
+│   ├── error_pages.rs   # Custom error pages cache
+│   ├── request/         # Request parsing
+│   │   ├── mod.rs       # Request module
+│   │   ├── parser.rs    # HTTP request parser
+│   │   └── multipart.rs # multipart/form-data
+│   └── response/        # Response building
+│       ├── mod.rs       # Response builder
+│       ├── compression.rs # Brotli compression
+│       └── static_file.rs # Static file serving
+│
+├── middleware/          # Middleware system
+│   ├── mod.rs           # Middleware trait
+│   ├── chain.rs         # MiddlewareChain
+│   ├── rate_limit.rs    # Rate limiting middleware
+│   ├── compression.rs   # Brotli compression middleware
+│   ├── access_log.rs    # Access logging middleware
+│   ├── error_pages.rs   # Custom error pages middleware
+│   └── static_cache.rs  # Static file caching middleware
+│
+├── executor/            # PHP execution backends
+│   ├── mod.rs           # ScriptExecutor trait
+│   ├── common.rs        # WorkerPool, HeartbeatContext
+│   ├── ext.rs           # ExtExecutor (FFI, recommended)
+│   ├── php.rs           # PhpExecutor (eval-based)
+│   ├── stub.rs          # StubExecutor (benchmarking)
+│   ├── sapi.rs          # PHP SAPI initialization
+│   └── pool/            # Worker pool internals
+│       ├── mod.rs
+│       ├── thread.rs
+│       └── error.rs
+│
+├── core/                # Core types
+│   ├── mod.rs
+│   ├── context.rs       # Request context
+│   ├── request.rs       # Core request type
+│   ├── response.rs      # Core response type
+│   └── error.rs         # Error types
+│
+├── config/              # Configuration
+│   ├── mod.rs           # Config aggregation
+│   ├── server.rs        # Server config
+│   ├── executor.rs      # Executor config
+│   ├── middleware.rs    # Middleware config
+│   ├── logging.rs       # Logging config
+│   ├── parse.rs         # Env var parsing
+│   └── error.rs         # Config errors
+│
+└── listener/            # Network listeners
+    ├── mod.rs           # Listener trait
+    ├── tcp.rs           # TCP listener
+    └── tls.rs           # TLS listener
 ```
 
 ## Core Components
@@ -44,11 +125,12 @@ tokio_php is a high-performance async web server that executes PHP scripts using
 ### Main Thread (Tokio Runtime)
 
 Single-threaded async runtime that handles:
-- TCP connection acceptance
-- HTTP request parsing (Hyper)
-- Response building and sending
-- TLS termination (rustls)
+- TCP/TLS connection acceptance
+- HTTP/1.1 and HTTP/2 request parsing (Hyper)
+- Middleware chain execution
+- Response building and compression
 - Work distribution to PHP workers
+- Graceful shutdown coordination
 
 Using single-threaded runtime avoids context switching overhead while PHP workers handle the blocking work.
 
@@ -58,6 +140,23 @@ Built on `hyper` with `hyper_util::server::conn::auto::Builder`:
 - Automatic HTTP/1.1 and HTTP/2 protocol detection
 - HTTP/2 h2c (cleartext) support via `--http2-prior-knowledge`
 - HTTPS with ALPN for automatic HTTP/2 negotiation
+- TLS 1.3 via rustls
+
+### Middleware Chain
+
+Priority-based middleware execution:
+- **Request flow**: Lower priority executes first
+- **Response flow**: Higher priority executes first (reverse order)
+
+Built-in middleware:
+
+| Middleware | Priority | Function |
+|------------|----------|----------|
+| Rate Limit | -100 | Per-IP request throttling |
+| Access Log | -90 | Structured JSON logging |
+| Static Cache | 50 | Cache-Control headers |
+| Error Pages | 90 | Custom HTML error pages |
+| Compression | 100 | Brotli compression |
 
 ### Request Queue
 
@@ -68,19 +167,20 @@ Bounded `sync_channel` connecting async server to blocking PHP workers:
 
 ### PHP Worker Pool
 
-Multi-threaded worker pool using PHP 8.4 ZTS (Thread Safe):
+Multi-threaded worker pool using PHP 8.4/8.5 ZTS (Thread Safe):
 - Each worker runs in a dedicated OS thread
 - Workers share OPcache via shared memory
-- Round-robin work distribution
+- Work-stealing load balancing
 
 Worker lifecycle per request:
 1. Receive `ScriptRequest` from queue
 2. `php_request_startup()` - initialize request state
-3. Inject superglobals via `zend_eval_string` or FFI
-4. Execute PHP script
+3. Set superglobals via FFI or `zend_eval_string`
+4. Execute PHP script via `php_execute_script()` or `zend_eval_string`
 5. Capture output via memfd redirect
-6. `php_request_shutdown()` - cleanup
-7. Send `ScriptResponse` back
+6. Capture headers via SAPI `header_handler`
+7. `php_request_shutdown()` - cleanup
+8. Send `ScriptResponse` back
 
 ## Request Flow
 
@@ -93,54 +193,76 @@ Client Request
 └──────┬──────┘
        │
        ▼
-┌─────────────┐    TLS?     ┌─────────────┐
-│  TLS Check  │────────────▶│TLS Handshake│
-└──────┬──────┘     yes     └──────┬──────┘
-       │ no                        │
-       ▼                           ▼
-┌─────────────────────────────────────────┐
-│           HTTP Request Parse            │
-│  - Method, URI, Headers                 │
-│  - Query string → $_GET                 │
-│  - Cookies → $_COOKIE                   │
-│  - Body → $_POST / $_FILES              │
-└──────────────────┬──────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────┐
-│              Routing                    │
-│  - Static file? → serve directly        │
-│  - PHP script? → queue to worker        │
-│  - Not found? → 404                     │
-└──────────────────┬──────────────────────┘
-                   │ PHP
-                   ▼
-┌─────────────────────────────────────────┐
-│           Worker Queue                  │
-│ - try_send() to bounded channel         │
-│ - Queue full? → 503 Service Unavailable │
-└──────────────────┬──────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────┐
-│           PHP Worker                    │
-│  1. php_request_startup()               │
-│  2. Set superglobals                    │
-│  3. Execute script                      │
-│  4. Capture output + headers            │
-│  5. php_request_shutdown()              │
-└──────────────────┬──────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────┐
-│         Response Building               │
-│ - Parse PHP headers (Status, Location)  │
-│ - Apply Brotli compression              │
-│ - Set Content-Type, Content-Length      │
-└──────────────────┬──────────────────────┘
-                   │
-                   ▼
-              Client Response
+┌─────────────┐    TLS?     ┌──────────────────┐
+│  TLS Check  │────────────▶│  TLS Handshake   │
+└──────┬──────┘     yes     │  (rustls 1.3)    │
+       │ no                 └────────┬─────────┘
+       ▼                             │
+┌────────────────────────────────────┴────────────────┐
+│                 HTTP Request Parse                  │
+│  - Method, URI, Headers, HTTP version               │
+│  - Query string → $_GET                             │
+│  - Cookies → $_COOKIE                               │
+│  - Body → $_POST / $_FILES                          │
+│  - W3C Trace Context (traceparent header)           │
+└──────────────────────────┬──────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│              Middleware Chain (Request)             │
+│  - Rate limiting (429 if exceeded)                  │
+│  - Access log start                                 │
+│  - Request context setup                            │
+└──────────────────────────┬──────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│                     Routing                         │
+│  - Static file? → serve directly (with caching)    │
+│  - PHP script? → queue to worker                   │
+│  - INDEX_FILE mode? → route all to index.php       │
+│  - Not found? → 404                                │
+└──────────────────────────┬──────────────────────────┘
+                           │ PHP
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│                   Worker Queue                      │
+│  - try_send() to bounded channel                   │
+│  - Queue full? → 503 Service Unavailable           │
+│  - HeartbeatContext for timeout extension          │
+└──────────────────────────┬──────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│                    PHP Worker                       │
+│  1. php_request_startup()                          │
+│  2. Set superglobals (FFI or eval)                 │
+│  3. Set $_SERVER[TRACE_ID], $_SERVER[SPAN_ID]      │
+│  4. Execute script                                 │
+│  5. Capture output + headers                       │
+│  6. php_request_shutdown()                         │
+└──────────────────────────┬──────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│             Middleware Chain (Response)             │
+│  - Custom error pages (4xx/5xx)                    │
+│  - Static file caching headers                     │
+│  - Brotli compression                              │
+│  - Access log complete                             │
+└──────────────────────────┬──────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│                 Response Building                   │
+│  - Parse PHP headers (Status, Location)            │
+│  - Add X-Request-ID, traceparent                   │
+│  - Add profiling headers (if enabled)              │
+│  - Set Content-Type, Content-Length                │
+└──────────────────────────┬──────────────────────────┘
+                           │
+                           ▼
+               Client Response
 ```
 
 ## Executor System
@@ -148,8 +270,19 @@ Client Request
 The `ScriptExecutor` trait defines the interface for script execution:
 
 ```rust
+#[async_trait]
 pub trait ScriptExecutor: Send + Sync {
-    fn execute(&self, request: ScriptRequest) -> impl Future<Output = Result<ScriptResponse>>;
+    /// Executes a script with the given request data.
+    async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, ExecutorError>;
+
+    /// Returns the name of this executor for logging purposes.
+    fn name(&self) -> &'static str;
+
+    /// Shuts down the executor, releasing any resources.
+    fn shutdown(&self) {}
+
+    /// Returns true if this executor should skip file existence checks.
+    fn skip_file_check(&self) -> bool { false }
 }
 ```
 
@@ -157,7 +290,7 @@ pub trait ScriptExecutor: Send + Sync {
 
 | Executor | Selection | Method | Performance |
 |----------|-----------|--------|-------------|
-| `ExtExecutor` | `USE_EXT=1` | `php_execute_script()` + FFI | **~34K RPS** (recommended) |
+| `ExtExecutor` | `USE_EXT=1` | `php_execute_script()` + FFI | **~36K RPS** (recommended) |
 | `PhpExecutor` | Default | `zend_eval_string()` | ~16K RPS |
 | `StubExecutor` | `USE_STUB=1` | No PHP | ~100K RPS (benchmarking) |
 
@@ -171,14 +304,99 @@ Selection priority in `main.rs`:
 2. `USE_EXT=1` → ExtExecutor **← recommended for production**
 3. Default → PhpExecutor
 
+## Request Heartbeat
+
+Long-running PHP scripts can extend their timeout deadline:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                     HeartbeatContext                          │
+├───────────────────────────────────────────────────────────────┤
+│  start: Instant         │ Reused from queued_at               │
+│  deadline_ms: AtomicU64 │ Milliseconds from start             │
+│  max_extension_secs: u64│ = REQUEST_TIMEOUT                   │
+└───────────────────────────────────────────────────────────────┘
+         │
+         │ Shared between async runtime and PHP worker
+         │
+         ▼
+┌─────────────────┐     tokio_request_heartbeat(30)     ┌─────────────────┐
+│  Async Runtime  │ ◄───────────────────────────────────│   PHP Worker    │
+│                 │     Atomically extends deadline     │                 │
+│  Sleeps until   │                                     │  Long-running   │
+│  deadline or    │                                     │  script calls   │
+│  response ready │                                     │  heartbeat()    │
+└─────────────────┘                                     └─────────────────┘
+```
+
+Uses `Instant`-based timing (not SystemTime) for minimal syscall overhead.
+
+## Distributed Tracing
+
+W3C Trace Context support for request correlation:
+
+```
+Incoming Request                          Outgoing Response
+       │                                         │
+       ▼                                         ▼
+traceparent: 00-{trace_id}-{parent_span}-01     traceparent: 00-{trace_id}-{new_span}-01
+                    │                                              │
+                    ▼                                              │
+           ┌───────────────┐                                       │
+           │ TraceContext  │───────────────────────────────────────┘
+           │               │
+           │ trace_id      │──► $_SERVER['TRACE_ID']
+           │ span_id       │──► $_SERVER['SPAN_ID']
+           │ parent_span_id│──► $_SERVER['PARENT_SPAN_ID']
+           └───────────────┘
+```
+
+- Incoming `traceparent` header is parsed and propagated
+- New `span_id` generated for this request
+- `X-Request-ID` derived from trace: `{trace_id[0:12]}-{span_id[0:4]}`
+
+## Memory Model
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Shared Memory                          │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │                     OPcache                           │  │
+│  │  - Compiled PHP scripts (bytecode)                    │  │
+│  │  - JIT compiled native code                           │  │
+│  │  - Interned strings                                   │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+              │              │              │
+              ▼              ▼              ▼
+       ┌───────────┐  ┌───────────┐  ┌───────────┐
+       │ Worker 0  │  │ Worker 1  │  │ Worker N  │
+       │           │  │           │  │           │
+       │  Thread   │  │  Thread   │  │  Thread   │
+       │  Local    │  │  Local    │  │  Local    │
+       │  Storage  │  │  Storage  │  │  Storage  │
+       │  (TSRM)   │  │  (TSRM)   │  │  (TSRM)   │
+       │           │  │           │  │           │
+       │ $_GET     │  │ $_GET     │  │ $_GET     │
+       │ $_POST    │  │ $_POST    │  │ $_POST    │
+       │ $_SERVER  │  │ $_SERVER  │  │ $_SERVER  │
+       │ ...       │  │ ...       │  │ ...       │
+       └───────────┘  └───────────┘  └───────────┘
+```
+
+- **Shared**: OPcache bytecode, JIT compiled code, interned strings
+- **Per-thread (TSRM)**: Request state, superglobals, Zend execution state
+
 ## Key Technical Decisions
 
 ### SAPI Name Override
 
-OPcache disables itself for "embed" SAPI. Solution: change SAPI name to "cli-server" before `php_embed_init`:
+OPcache disables itself for "embed" SAPI. Solution: change SAPI name to "cli-server":
 
 ```rust
-php_embed_module.name = "cli-server\0".as_ptr();
+// In sapi.rs
+static SAPI_NAME: &[u8] = b"cli-server\0";
+php_embed_module.name = SAPI_NAME.as_ptr() as *mut c_char;
 php_embed_init(...);
 ```
 
@@ -187,11 +405,12 @@ This enables OPcache and JIT, providing ~84% performance improvement.
 ### Output Capture
 
 PHP output is captured via stdout redirect to memfd:
-1. Create memfd (in-memory file)
-2. `dup2(memfd_fd, STDOUT_FILENO)`
+1. Create memfd (in-memory file) via `memfd_create`
+2. `dup2(memfd_fd, STDOUT_FILENO)` - redirect stdout
 3. Execute PHP script
-4. Restore stdout
-5. Read memfd contents
+4. `php_request_shutdown()` while stdout still redirected (captures shutdown handler output)
+5. Restore stdout via `dup2`
+6. Read memfd contents
 
 Using memfd instead of pipes avoids deadlock with large outputs (like phpinfo()).
 
@@ -200,222 +419,20 @@ Using memfd instead of pipes avoids deadlock with large outputs (like phpinfo())
 PHP headers are captured via custom SAPI `header_handler` callback:
 - Intercepts all `header()` calls
 - Captures `http_response_code()`
+- Thread-local storage for captured headers
 - Works even after `exit()` calls
 
-This solves the issue where `header('Location: ...'); exit();` wouldn't work with stdout capture alone.
+### Instant-based Timing
 
-## Memory Model
+HeartbeatContext uses `Instant` instead of `SystemTime`:
+- Reuses `queued_at` Instant (zero extra syscalls)
+- `deadline_ms` stored as milliseconds from start
+- `elapsed()` called only when checking deadline
 
-```
-┌─────────────────────────────────────────────┐
-│            Shared Memory                    │
-│  ┌───────────────────────────────────────┐  │
-│  │           OPcache                     │  │
-│  │  - Compiled scripts                   │  │
-│  │  - JIT compiled code                  │  │
-│  └───────────────────────────────────────┘  │
-└─────────────────────────────────────────────┘
-         │             │             │
-         ▼             ▼             ▼
-    ┌──────────┐  ┌──────────┐  ┌──────────┐
-    │ Worker 0 │  │ Worker 1 │  │ Worker N │
-    │          │  │          │  │          │
-    │ Thread   │  │ Thread   │  │ Thread   │
-    │ Local    │  │ Local    │  │ Local    │
-    │ Storage  │  │ Storage  │  │ Storage  │
-    │ (TSRM)   │  │ (TSRM)   │  │ (TSRM)   │
-    └──────────┘  └──────────┘  └──────────┘
-```
+## See Also
 
-- **Shared**: OPcache, JIT compiled code
-- **Per-thread**: Request state, superglobals (TSRM - Thread Safe Resource Manager)
-
-## Comparison with PHP-FPM
-
-### Benchmark Results
-
-| Server | RPS (bench.php) | RPS (index.php) | Latency |
-|--------|-----------------|-----------------|---------|
-| **tokio_php** | **35,350** | **32,913** | 2.8ms |
-| nginx + PHP-FPM | 13,890 | 12,471 | 7.2ms |
-
-**tokio_php is 2.5x faster than PHP-FPM** (same hardware, 14 workers each, OPcache+JIT enabled).
-
-### Architecture Comparison
-
-| Aspect | tokio_php | PHP-FPM |
-|--------|-----------|---------|
-| Architecture | Single process, multi-threaded | Multi-process |
-| Memory | Shared via TSRM | Copy-on-write per process |
-| OPcache | Shared memory (direct) | Shared memory (IPC) |
-| Communication | In-process channels | Unix socket/TCP |
-| HTTP Server | Built-in (Hyper) | Requires nginx/Apache |
-
-### Request Flow Comparison
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     nginx + PHP-FPM                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Client ──► nginx ──► FastCGI socket ──► php-fpm (process)      │
-│         HTTP    parse    encode/decode      execute             │
-│                                                                 │
-│  Overhead:                                                      │
-│  • nginx HTTP parsing + routing (~1ms)                          │
-│  • FastCGI protocol encode/decode (~0.5ms)                      │
-│  • Unix socket communication (~0.5ms)                           │
-│  • Process context switches                                     │
-│  • Response: php-fpm → nginx → client (reverse path)            │
-│                                                                 │
-│  Total overhead: ~4ms                                           │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                        tokio_php                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Client ──► tokio_php (HTTP + PHP in single process)            │
-│         HTTP    Hyper parses, worker thread executes PHP        │
-│                                                                 │
-│  Advantages:                                                    │
-│  • No network hop between web server and PHP                    │
-│  • Threads instead of processes (no context switch)             │
-│  • Direct shared memory via TSRM                                │
-│  • Single binary deployment                                     │
-│                                                                 │
-│  Total overhead: ~0.1ms                                         │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Why tokio_php is Faster
-
-1. **No network hop** — PHP-FPM requires nginx → socket → FPM → socket → nginx. tokio_php handles everything in one process.
-
-2. **Threads vs Processes** — Thread context switches are cheaper than process context switches. No fork() overhead.
-
-3. **No FastCGI protocol** — FastCGI encode/decode adds ~1ms per request.
-
-4. **Direct OPcache access** — Threads share OPcache directly via TSRM, without shared memory IPC.
-
-5. **No reverse proxy** — Response goes directly to client, not through nginx.
-
-### SAPI Differences
-
-| Feature | PHP-FPM SAPI | tokio_php (embed) |
-|---------|--------------|-------------------|
-| Superglobals | `fcgi_getenv()` from FastCGI env | FFI calls or `zend_eval_string()` |
-| Output | Write to FastCGI stream | memfd + stdout redirect |
-| Headers | `send_headers` → FastCGI | `header_handler` capture |
-| Cookies | FastCGI `HTTP_COOKIE` | Parsed from HTTP request |
-
-### tokio_php Overhead (negligible)
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| memfd_create | ~10μs | In-memory file for output capture |
-| stdout redirect | ~8μs | dup2() syscalls |
-| FFI superglobals | ~40μs | Direct C calls to set $_GET, $_POST, etc. |
-| Header capture | ~5μs | Thread-local storage |
-| **Total** | **~65μs** | vs ~4ms for nginx+FastCGI |
-
-## Comparison with FrankenPHP
-
-FrankenPHP is a modern PHP application server written in Go, built on Caddy. It embeds PHP directly into the web server using CGO, similar to tokio_php's approach.
-
-### Benchmark Results
-
-| Server | RPS (bench.php) | RPS (index.php) | Latency |
-|--------|-----------------|-----------------|---------|
-| **tokio_php** | **32,600** | **30,250** | 3.1ms |
-| FrankenPHP | 18,350 | 17,530 | 5.5ms |
-
-**tokio_php is 1.8x faster than FrankenPHP** (same hardware, tokio_php 14 workers, FrankenPHP 29 threads).
-
-### Architecture Comparison
-
-| Aspect | tokio_php | FrankenPHP |
-|--------|-----------|------------|
-| Language | Rust + Tokio | Go + Caddy |
-| PHP Integration | php-embed SAPI | CGO bindings |
-| Threading Model | Multi-threaded pool | Goroutines |
-| HTTP Server | Hyper | Caddy |
-| Protocol Support | HTTP/1.1, HTTP/2, HTTPS | HTTP/1-3, HTTPS, QUIC |
-| Worker Mode | Always persistent | Optional (worker mode) |
-
-### Request Flow Comparison
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        FrankenPHP                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Client ──► Caddy (Go) ──► CGO bridge ──► PHP (Zend Engine)     │
-│                                                                 │
-│  Overhead:                                                      │
-│  • CGO call overhead (~1-2ms per request)                       │
-│  • Go ↔ C memory copying                                        │
-│  • Goroutine scheduling                                         │
-│  • Caddy middleware processing                                  │
-│                                                                 │
-│  Total overhead: ~2.5ms                                         │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                        tokio_php                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Client ──► Hyper (Rust) ──► direct FFI ──► PHP (Zend Engine)   │
-│                                                                 │
-│  Advantages:                                                    │
-│  • No CGO overhead (Rust has zero-cost FFI)                     │
-│  • Direct memory access, no copying                             │
-│  • Predictable thread scheduling                                │
-│  • Minimal HTTP processing                                      │
-│                                                                 │
-│  Total overhead: ~0.1ms                                         │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Why tokio_php is Faster
-
-1. **No CGO overhead** — Go's CGO has significant call overhead (~100-200ns per call). Rust's FFI is zero-cost.
-
-2. **No memory copying** — CGO requires copying data between Go and C heaps. Rust can share memory directly.
-
-3. **Thread-based vs Goroutines** — Goroutines add scheduler overhead. OS threads are more predictable for CPU-bound PHP work.
-
-4. **Minimal HTTP layer** — Hyper is a minimal HTTP implementation. Caddy includes many middleware by default.
-
-5. **Native async** — Tokio's async model maps directly to epoll/kqueue. Go's runtime adds abstraction.
-
-### Feature Comparison
-
-| Feature | tokio_php | FrankenPHP |
-|---------|-----------|------------|
-| OPcache + JIT | ✓ | ✓ |
-| HTTP/2 | ✓ | ✓ |
-| HTTP/3 (QUIC) | ✗ | ✓ |
-| Worker Mode | Built-in | Optional |
-| Early Hints | ✗ | ✓ |
-| Automatic HTTPS | ✗ | ✓ (ACME) |
-| Mercure Support | ✗ | ✓ |
-| Binary Size | ~15MB | ~100MB |
-
-### When to Choose
-
-**Choose tokio_php when:**
-- Maximum performance is critical
-- You need minimal resource usage
-- Deploying behind a reverse proxy (nginx/Traefik)
-- Custom integration with Rust ecosystem
-
-**Choose FrankenPHP when:**
-- You need HTTP/3 or Early Hints
-- Automatic HTTPS with Let's Encrypt is important
-- Real-time features with Mercure are needed
-- Single binary with batteries included
+- [Middleware](middleware.md) - Middleware system details
+- [Internal Server](internal-server.md) - Health checks and metrics
+- [Worker Pool](worker-pool.md) - PHP worker pool configuration
+- [Distributed Tracing](distributed-tracing.md) - W3C Trace Context
+- [Request Heartbeat](request-heartbeat.md) - Timeout extension mechanism

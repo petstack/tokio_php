@@ -14,15 +14,16 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 |---------|------------------------------------------------------------|
 | [Architecture](architecture.md) | System design, components, request flow                    |
 | [HTTP/2 & TLS](http2-tls.md) | HTTP/1.1, HTTP/2, HTTPS with TLS 1.3                       |
+| [Middleware](middleware.md) | Rate limiting, compression, logging, error pages           |
+| [Internal Server](internal-server.md) | Health checks, Prometheus metrics, monitoring              |
 | [Superglobals](superglobals.md) | `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST` |
 | [OPcache & JIT](opcache-jit.md) | Bytecode caching and JIT compilation                       |
 | [OPcache Internals](opcache-internals.md) | Deep dive into OPcache architecture                        |
 | [Worker Pool](worker-pool.md) | Multi-threaded PHP execution, scaling                      |
-| [Profiler](profiler.md) | Request timing and performance analysis                    |
+| [Profiling](profiling.md) | Request timing and performance analysis                    |
 | [Compression](compression.md) | Brotli compression for responses                           |
 | [Static Caching](static-caching.md) | Cache-Control, ETag, Last-Modified for static files        |
 | [Single Entry Point](single-entry-point.md) | Laravel/Symfony routing mode                               |
-| [Metrics](metrics.md) | Prometheus metrics for monitoring                          |
 | [Health Checks](health-checks.md) | Docker and Kubernetes probes                               |
 | [Rate Limiting](rate-limiting.md) | Per-IP request throttling                                  |
 | [Request Heartbeat](request-heartbeat.md) | Extend timeout for long-running scripts                    |
@@ -113,32 +114,49 @@ Use `USE_EXT=1` for production (2x faster).
 ```
 tokio_php/
 ├── src/
-│   ├── main.rs           # Entry point
-│   ├── server/           # HTTP server (Hyper)
-│   │   ├── mod.rs        # Server initialization
-│   │   ├── connection.rs # Connection handling
-│   │   ├── internal.rs   # Health/metrics server
-│   │   ├── request/      # Request parsing
-│   │   ├── response/     # Response building
-│   │   └── routing.rs    # URL routing
-│   ├── executor/         # PHP execution backends
-│   │   ├── mod.rs        # ScriptExecutor trait
-│   │   ├── php.rs        # Main PHP executor
-│   │   ├── ext.rs        # FFI-based executor
-│   │   ├── stub.rs       # Benchmark stub
-│   │   ├── common.rs     # Worker pool
-│   │   └── sapi.rs       # SAPI initialization
-│   ├── types.rs          # Request/Response types
-│   └── profiler.rs       # Timing profiler
-├── ext/                  # tokio_sapi PHP extension
-├── docs/                 # Documentation
-├── www/                  # Document root
-│   └── errors/           # Custom error pages
-├── certs/                # TLS certificates
-├── Dockerfile            # Multi-stage build (PHP 8.4/8.5)
-├── docker-compose.yml    # Service definitions
-├── LICENSE               # AGPL-3.0
-└── README.md             # Project overview
+│   ├── main.rs              # Entry point, runtime init
+│   ├── server/              # HTTP server (Hyper)
+│   │   ├── mod.rs           # Server core
+│   │   ├── builder.rs       # Server builder pattern
+│   │   ├── config.rs        # Server configuration
+│   │   ├── connection.rs    # Connection handling
+│   │   ├── internal.rs      # Health/metrics server
+│   │   ├── routing.rs       # URL routing
+│   │   ├── request/         # Request parsing
+│   │   └── response/        # Response building, compression
+│   ├── listener/            # Connection listeners
+│   │   ├── tcp.rs           # TCP listener
+│   │   └── tls.rs           # TLS listener (rustls)
+│   ├── middleware/          # Middleware system
+│   │   ├── mod.rs           # Middleware trait
+│   │   ├── chain.rs         # Middleware chain
+│   │   ├── rate_limit.rs    # Rate limiting
+│   │   ├── compression.rs   # Brotli compression
+│   │   ├── access_log.rs    # Access logging
+│   │   ├── error_pages.rs   # Custom error pages
+│   │   └── static_cache.rs  # Static file caching
+│   ├── executor/            # PHP execution backends
+│   │   ├── mod.rs           # ScriptExecutor trait
+│   │   ├── php.rs           # PhpExecutor (zend_eval_string)
+│   │   ├── ext.rs           # ExtExecutor (php_execute_script)
+│   │   ├── stub.rs          # StubExecutor (benchmarks)
+│   │   ├── common.rs        # Shared worker pool
+│   │   ├── sapi.rs          # SAPI initialization
+│   │   └── pool/            # Generic thread pool
+│   ├── core/                # Core types and context
+│   ├── config/              # Configuration parsing
+│   ├── logging.rs           # Structured JSON logging
+│   ├── trace_context.rs     # W3C Trace Context
+│   ├── profiler.rs          # Request timing
+│   └── types.rs             # Request/Response types
+├── ext/                     # tokio_sapi PHP extension
+├── docs/                    # Documentation
+├── www/                     # Document root
+│   └── errors/              # Custom error pages
+├── certs/                   # TLS certificates
+├── Dockerfile               # Multi-stage build
+├── docker-compose.yml       # Service definitions
+└── LICENSE                  # AGPL-3.0
 ```
 
 ## Links

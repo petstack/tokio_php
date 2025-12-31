@@ -1,6 +1,6 @@
 # HTTP/2 & TLS Support
 
-tokio_php supports HTTP/1.1, HTTP/2, and HTTPS with TLS 1.3.
+tokio_php supports HTTP/1.1, HTTP/2, and HTTPS with TLS 1.2/1.3.
 
 ## Protocol Support
 
@@ -8,7 +8,7 @@ tokio_php supports HTTP/1.1, HTTP/2, and HTTPS with TLS 1.3.
 |----------|------|-------------|
 | HTTP/1.1 | 8080 | Default protocol |
 | HTTP/2 h2c | 8080 | Cleartext HTTP/2 (prior knowledge) |
-| HTTPS + HTTP/2 | 8443 | TLS 1.3 with ALPN negotiation |
+| HTTPS + HTTP/2 | 8443 | TLS with ALPN negotiation (profile: tls) |
 
 ## Usage
 
@@ -69,24 +69,32 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
 TLS_CERT=/path/to/cert.pem TLS_KEY=/path/to/key.pem docker compose up -d
 ```
 
-### Default Development Certificates
+### Development Certificates Setup
 
-The `certs/` directory contains self-signed certificates for development:
+Create the `certs/` directory with self-signed certificates:
 
+```bash
+# Create certs directory
+mkdir -p certs
+
+# Generate self-signed certificate for development
+openssl req -x509 -newkey rsa:4096 -keyout certs/key.pem -out certs/cert.pem \
+  -days 365 -nodes -subj "/CN=localhost"
+```
+
+Expected structure:
 ```
 certs/
 ├── cert.pem    # Self-signed certificate
 └── key.pem     # Private key
 ```
 
-These are automatically used by the TLS services in docker-compose.yml.
-
 ## Docker Services
 
-| Service | Port | Protocol |
-|---------|------|----------|
-| `tokio_php` | 8080 | HTTP/1.1, HTTP/2 h2c |
-| `tokio_php_tls` | 8443 | HTTPS + HTTP/2 |
+| Service | Port | Protocol | Profile |
+|---------|------|----------|---------|
+| `tokio_php` | 8080 | HTTP/1.1, HTTP/2 h2c | default |
+| `tokio_php_tls` | 8443 | HTTPS + HTTP/2 | tls |
 
 ## Implementation Details
 
@@ -116,11 +124,7 @@ config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
 ### TLS Version
 
-Only TLS 1.3 is enabled for maximum security:
-
-```rust
-config.versions(&[&rustls::version::TLS13]);
-```
+rustls defaults are used, supporting TLS 1.2 and TLS 1.3. The server negotiates the highest version supported by the client.
 
 ## PHP Integration
 
@@ -131,7 +135,7 @@ The HTTP protocol version is available in PHP via `$_SERVER['SERVER_PROTOCOL']`:
 
 echo $_SERVER['SERVER_PROTOCOL']; // HTTP/1.1, HTTP/2.0
 echo $_SERVER['HTTPS'];           // "on" for HTTPS, not set for HTTP
-echo $_SERVER['SSL_PROTOCOL'];    // TLSv1_3 for HTTPS
+echo $_SERVER['SSL_PROTOCOL'];    // TLSv1.2 or TLSv1.3 for HTTPS
 ```
 
 ## Performance Notes
@@ -141,17 +145,23 @@ HTTP/2 provides:
 - **Header compression**: HPACK reduces header overhead
 - **Server push**: (not implemented yet)
 
-Benchmark comparison:
+### Protocol Comparison
 
-| Protocol | Latency | Notes |
-|----------|---------|-------|
-| HTTP/1.1 | ~1.7ms | Simple, well-supported |
-| HTTP/2 h2c | ~0.6ms | Lower latency, multiplexing |
-| HTTPS + HTTP/2 | ~0.2ms + 11ms TLS | Initial TLS handshake overhead |
+| Protocol | Characteristics |
+|----------|-----------------|
+| HTTP/1.1 | Simple, widely supported, one request per connection (without pipelining) |
+| HTTP/2 h2c | Lower latency with multiplexing, requires `--http2-prior-knowledge` |
+| HTTPS + HTTP/2 | TLS handshake adds initial latency, but keep-alive amortizes cost |
 
-Note: TLS handshake (~11ms) is a one-time cost per connection. With keep-alive connections, subsequent requests have similar latency to h2c.
+TLS handshake is a one-time cost per connection. With keep-alive connections, subsequent requests have similar latency to h2c.
 
 ## Limitations
 
 - HTTP/3 (QUIC) is not yet implemented ([h3 crate is experimental](https://github.com/hyperium/h3))
 - HTTP 103 Early Hints is not yet implemented ([next version of hyper](https://github.com/hyperium/h2/pull/865))
+
+## See Also
+
+- [Configuration](configuration.md) - TLS_CERT and TLS_KEY environment variables
+- [Profiling](profiling.md) - TLS handshake timing metrics
+- [Architecture](architecture.md) - Protocol detection implementation

@@ -141,45 +141,57 @@ $controller = $routes[$path] ?? 'NotFoundController';
 
 The server validates the index file at startup:
 
-```bash
-# If file exists
-[INFO] Single entry point mode: all requests -> index.php
+```json
+// If file exists
+{"ts":"...","level":"info","msg":"Single entry point mode: all requests -> index.php",...}
 
-# If file doesn't exist
-[ERROR] Index file not found: /var/www/html/public/index.php
+// If file doesn't exist - server exits with error
+Error: Index file not found: /var/www/html/public/index.php (INDEX_FILE=index.php)
 ```
 
 The server exits with an error if the index file is missing, preventing silent failures.
 
 ## Performance Optimization
 
-Single entry point mode skips per-request file existence checks:
+Single entry point mode uses `try_files` with optimized file checks:
 
 ```
 Normal mode:
 1. Parse URL → /users.php
 2. Check file exists → stat("/var/www/html/users.php")
-3. Execute PHP
+3. Execute PHP or return 404
 
 Single entry point mode:
 1. Parse URL → /users
-2. Route to index.php (no stat() call)
-3. Execute PHP
+2. Check if static file exists → stat() (fast, single syscall)
+3. If exists: serve static file directly
+4. If not: route to pre-validated index.php (no second stat())
 ```
 
-This saves ~30µs per request on filesystem stat() calls.
+For route requests (most traffic), index.php is pre-validated at startup — no additional file check needed.
 
 ## Static Files
 
-Static files (CSS, JS, images) are NOT routed through the index file:
+tokio_php uses `try_files` behavior — static files are served directly, other requests go to index.php:
 
 ```bash
-curl http://localhost:8080/style.css    # → Served directly
-curl http://localhost:8080/app.js       # → Served directly
-curl http://localhost:8080/logo.png     # → Served directly
+curl http://localhost:8080/style.css    # → Served directly (file exists)
+curl http://localhost:8080/app.js       # → Served directly (file exists)
+curl http://localhost:8080/missing.css  # → index.php (file not found)
+curl http://localhost:8080/api/users    # → index.php (not a file)
 ```
 
-The server checks if the path matches an existing file first, then falls back to the index file.
+### How It Works
+
+```
+Request → Check if file exists in document root
+              │
+              ├── File exists & not .php → Serve static file directly
+              │
+              └── File missing or .php → Route to index.php
+```
+
+This matches nginx `try_files $uri $uri/ /index.php` behavior.
 
 ## Configuration Reference
 
@@ -219,9 +231,10 @@ var_dump($_SERVER['SCRIPT_NAME']);
 
 ## Comparison with nginx
 
-tokio_php single entry point is equivalent to this nginx configuration:
+tokio_php single entry point mode is equivalent to nginx `try_files`:
 
 ```nginx
+# nginx equivalent
 location / {
     try_files $uri $uri/ /index.php$is_args$args;
 }
@@ -236,6 +249,12 @@ location ~ \.php$ {
 ```
 
 Both:
-- Route all requests to index.php
+- Serve static files directly if they exist
+- Route other requests to index.php
 - Block direct access to index.php
-- Serve static files directly
+
+## See Also
+
+- [Configuration](configuration.md) - Environment variables reference
+- [Architecture](architecture.md) - System design overview
+- [Static Caching](static-caching.md) - Cache headers for static files (normal mode)

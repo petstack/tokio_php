@@ -139,42 +139,57 @@ Server and request information:
 ```php
 <?php
 
+// Request info
 echo $_SERVER['REQUEST_METHOD'];    // GET, POST, etc.
 echo $_SERVER['REQUEST_URI'];       // /path?query=value
 echo $_SERVER['QUERY_STRING'];      // query=value
+echo $_SERVER['CONTENT_TYPE'];      // application/json
 echo $_SERVER['REMOTE_ADDR'];       // Client IP address
+echo $_SERVER['REMOTE_PORT'];       // Client port
+
+// Server info
 echo $_SERVER['SERVER_SOFTWARE'];   // tokio_php/0.1.0
 echo $_SERVER['SERVER_PROTOCOL'];   // HTTP/1.1, HTTP/2.0
+echo $_SERVER['SERVER_NAME'];       // localhost
+echo $_SERVER['SERVER_PORT'];       // 8080
+echo $_SERVER['SERVER_ADDR'];       // 0.0.0.0
+echo $_SERVER['GATEWAY_INTERFACE']; // CGI/1.1
 
 // From headers
 echo $_SERVER['HTTP_HOST'];         // localhost:8080
 echo $_SERVER['HTTP_USER_AGENT'];   // curl/7.88.1
 echo $_SERVER['HTTP_ACCEPT'];       // */*
 echo $_SERVER['HTTP_COOKIE'];       // session=abc123
+echo $_SERVER['HTTP_REFERER'];      // Previous page URL
+echo $_SERVER['HTTP_ACCEPT_LANGUAGE']; // en-US,en
 
 // Script paths
 echo $_SERVER['DOCUMENT_ROOT'];     // /var/www/html
 echo $_SERVER['SCRIPT_FILENAME'];   // /var/www/html/index.php
 echo $_SERVER['SCRIPT_NAME'];       // /index.php
 echo $_SERVER['PHP_SELF'];          // /index.php
+echo $_SERVER['PATH_INFO'];         // Extra path info (if present)
 
 // Timestamps
 echo $_SERVER['REQUEST_TIME'];       // Unix timestamp
 echo $_SERVER['REQUEST_TIME_FLOAT']; // With microseconds
 
-// Server info
-echo $_SERVER['SERVER_NAME'];       // localhost
-echo $_SERVER['SERVER_PORT'];       // 8080
-echo $_SERVER['SERVER_ADDR'];       // 0.0.0.0
-
 // HTTPS (only set for TLS connections)
 echo $_SERVER['HTTPS'];             // on
-echo $_SERVER['SSL_PROTOCOL'];      // TLSv1_3
+echo $_SERVER['SSL_PROTOCOL'];      // TLSv1.3
 
-// tokio_php specific
+// Distributed tracing (W3C Trace Context)
+echo $_SERVER['HTTP_TRACEPARENT'];  // 00-{trace_id}-{span_id}-01
+echo $_SERVER['TRACE_ID'];          // 32-char trace identifier
+echo $_SERVER['SPAN_ID'];           // 16-char span identifier
+echo $_SERVER['PARENT_SPAN_ID'];    // Parent span (if propagated)
+
+// tokio_php specific (USE_EXT=1 only)
 echo $_SERVER['TOKIO_REQUEST_ID'];  // Unique request ID
 echo $_SERVER['TOKIO_WORKER_ID'];   // Worker thread ID
 ```
+
+See [Distributed Tracing](distributed-tracing.md) for trace context details.
 
 ## $_REQUEST
 
@@ -287,3 +302,11 @@ echo "Not Found";
 ```
 
 All HTTP status codes (200, 301, 302, 404, 500, etc.) are supported.
+
+## See Also
+
+- [Configuration](configuration.md) - Environment variables reference
+- [Distributed Tracing](distributed-tracing.md) - W3C Trace Context support
+- [Request Heartbeat](request-heartbeat.md) - TOKIO_HEARTBEAT_* variables
+- [tokio_sapi Extension](tokio-sapi-extension.md) - PHP extension functions
+- [Architecture](architecture.md) - Request processing overview

@@ -45,38 +45,44 @@ RATE_WINDOW=3600
 
 ## Response Headers
 
-Every response includes rate limit information when rate limiting is enabled.
+Rate limit headers are included on all responses when rate limiting is enabled.
 
 ### Successful Request (within limit)
 
 ```
 HTTP/1.1 200 OK
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 95
+X-RateLimit-Reset: 45
 X-Request-ID: 65bdbab40000
+Content-Type: text/html
 ...
 ```
+
+Rate limit headers are included on all responses when rate limiting is enabled.
 
 ### Rate Limited Request
 
 ```
 HTTP/1.1 429 Too Many Requests
-Content-Type: text/plain
 Retry-After: 45
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 0
 X-RateLimit-Reset: 45
 X-Request-ID: 65bdbab40001
+Content-Type: text/plain
 
-429 Too Many Requests
+Too Many Requests
 ```
 
 ### Header Reference
 
-| Header | Description |
-|--------|-------------|
-| `Retry-After` | Seconds until client should retry (RFC 7231) |
-| `X-RateLimit-Limit` | Maximum requests allowed per window |
-| `X-RateLimit-Remaining` | Requests remaining in current window |
-| `X-RateLimit-Reset` | Seconds until current window resets |
+| Header | Description | When |
+|--------|-------------|------|
+| `X-RateLimit-Limit` | Maximum requests allowed per window | All responses |
+| `X-RateLimit-Remaining` | Requests remaining in current window | All responses |
+| `X-RateLimit-Reset` | Seconds until current window resets | All responses |
+| `Retry-After` | Seconds until client should retry (RFC 7231) | 429 only |
 
 ## Algorithm
 
@@ -380,3 +386,12 @@ docker compose restart
 # Or reduce window to expire entries faster
 RATE_WINDOW=30 docker compose up -d
 ```
+
+## See Also
+
+- [Configuration](configuration.md) - RATE_LIMIT and RATE_WINDOW environment variables
+- [Middleware](middleware.md) - Middleware system overview
+- [Internal Server](internal-server.md) - Prometheus metrics for monitoring 429 responses
+- [Health Checks](health-checks.md) - Server health monitoring
+- [Worker Pool](worker-pool.md) - Queue capacity and worker configuration
+- [Architecture](architecture.md) - System design overview

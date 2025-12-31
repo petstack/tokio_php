@@ -22,8 +22,8 @@ STATIC_CACHE_TTL=1d docker compose up -d
 # 1 week (recommended for production)
 STATIC_CACHE_TTL=1w docker compose up -d
 
-# 1 month
-STATIC_CACHE_TTL=1m docker compose up -d
+# ~1 month (30 days)
+STATIC_CACHE_TTL=30d docker compose up -d
 
 # 1 year (for versioned assets)
 STATIC_CACHE_TTL=1y docker compose up -d
@@ -37,14 +37,16 @@ STATIC_CACHE_TTL=off docker compose up -d
 | Format | Duration | Seconds |
 |--------|----------|---------|
 | `1s` | 1 second | 1 |
+| `1m` | 1 minute | 60 |
 | `1h` | 1 hour | 3,600 |
 | `1d` | 1 day | 86,400 |
 | `1w` | 1 week | 604,800 |
-| `1m` | ~1 month | 2,592,000 |
 | `1y` | ~1 year | 31,536,000 |
 | `off` | disabled | - |
 
-Numbers can be any positive integer: `7d`, `2w`, `6m`, etc.
+Numbers can be any positive integer: `7d`, `2w`, `30d`, etc.
+
+**Note:** There is no month unit. Use `30d` for approximately one month.
 
 ## Response Headers
 
@@ -67,6 +69,19 @@ Last-Modified: Sun, 29 Dec 2024 12:00:00 GMT
 | `Expires` | Absolute expiration date (HTTP-date format) |
 | `ETag` | `"size-mtime"` in hex format |
 | `Last-Modified` | File modification time (HTTP-date format) |
+
+## Cacheable File Extensions
+
+Caching headers are applied to files with these extensions:
+
+| Category | Extensions |
+|----------|------------|
+| Images | `png`, `jpg`, `jpeg`, `gif`, `ico`, `webp`, `svg`, `avif` |
+| Fonts | `woff`, `woff2`, `ttf`, `otf`, `eot` |
+| Styles/Scripts | `css`, `js`, `mjs` |
+| Other | `json`, `xml`, `txt`, `pdf`, `map` |
+
+PHP files and other dynamic content are **not** cached by this mechanism.
 
 ## Best Practices
 
@@ -144,3 +159,11 @@ The `Vary` header ensures proper cache key separation for compressed vs uncompre
 | `MAX_COMPRESSION_SIZE` | 3 MB | Files larger than this are not compressed |
 
 Files outside this range are served without compression to avoid overhead (small files) or blocking (large files).
+
+## See Also
+
+- [Configuration](configuration.md) - `STATIC_CACHE_TTL` environment variable
+- [Middleware](middleware.md) - Middleware system overview
+- [Compression](compression.md) - Brotli compression details
+- [Single Entry Point](single-entry-point.md) - Static file handling with `INDEX_FILE`
+- [Architecture](architecture.md) - System design overview

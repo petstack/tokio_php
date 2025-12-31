@@ -1,16 +1,16 @@
 # OPcache Internals: Direct Opcode Access
 
-Исследование возможности получения бинарных opcodes из OPcache для прямого выполнения в Rust.
+Research on obtaining binary opcodes from OPcache for direct execution in Rust. For practical OPcache configuration, see [Configuration](configuration.md).
 
-## Структуры данных OPcache
+## OPcache Data Structures
 
 ### zend_persistent_script
 
-Главная структура кэшированного скрипта:
+Main structure for cached scripts:
 
 ```c
 typedef struct _zend_persistent_script {
-    zend_script    script;              // Скомпилированный скрипт
+    zend_script    script;              // Compiled script
     zend_long      compiler_halt_offset;
     int            ping_auto_globals_mask;
     accel_time_t   timestamp;
@@ -22,12 +22,12 @@ typedef struct _zend_persistent_script {
     zend_error_info **warnings;
     zend_early_binding *early_bindings;
 
-    void          *mem;                 // Указатель на память
-    size_t         size;                // Размер в shared memory
+    void          *mem;                 // Memory pointer
+    size_t         size;                // Size in shared memory
 
     struct {
         time_t       last_used;
-        zend_ulong   hits;              // Количество попаданий
+        zend_ulong   hits;              // Cache hits
         unsigned int memory_consumption;
         time_t       revalidate;
     } dynamic_members;
@@ -36,7 +36,7 @@ typedef struct _zend_persistent_script {
 
 ### zend_op_array
 
-Массив опкодов для выполнения:
+Opcode array for execution:
 
 ```c
 struct _zend_op_array {
@@ -45,11 +45,11 @@ struct _zend_op_array {
     zend_class_entry *scope;
     uint32_t num_args;
 
-    uint32_t last;              // Количество opcodes
-    zend_op *opcodes;           // Массив опкодов
+    uint32_t last;              // Number of opcodes
+    zend_op *opcodes;           // Opcode array
 
-    zend_string **vars;         // Локальные переменные
-    zval *literals;             // Литералы (строки, числа)
+    zend_string **vars;         // Local variables
+    zval *literals;             // Literals (strings, numbers)
 
     zend_string *filename;
     uint32_t line_start;
@@ -60,40 +60,40 @@ struct _zend_op_array {
 };
 ```
 
-### zend_op (один опкод)
+### zend_op (single opcode)
 
 ```c
 struct _zend_op {
-    const void *handler;        // Указатель на обработчик
-    znode_op op1;               // Первый операнд
-    znode_op op2;               // Второй операнд
-    znode_op result;            // Результат
+    const void *handler;        // Handler pointer
+    znode_op op1;               // First operand
+    znode_op op2;               // Second operand
+    znode_op result;            // Result
     uint32_t extended_value;
     uint32_t lineno;
-    uint8_t opcode;             // Тип операции (ZEND_ADD, ZEND_ECHO, etc.)
+    uint8_t opcode;             // Operation type (ZEND_ADD, ZEND_ECHO, etc.)
     uint8_t op1_type;
     uint8_t op2_type;
     uint8_t result_type;
 };
 ```
 
-## API для выполнения opcodes
+## Opcode Execution API
 
-### Стандартный путь
+### Standard Path
 
 ```c
-// Компиляция файла
+// Compile file
 zend_op_array *op_array = zend_compile_file(&file_handle, ZEND_INCLUDE);
 
-// Выполнение
+// Execute
 zval return_value;
 zend_execute(op_array, &return_value);
 ```
 
-### Прямое выполнение через execute_ex
+### Direct Execution via execute_ex
 
 ```c
-// Низкоуровневое выполнение
+// Low-level execution
 zend_execute_data *execute_data = zend_vm_stack_push_call_frame(
     ZEND_CALL_TOP_CODE, op_array, 0, NULL
 );
@@ -101,63 +101,64 @@ zend_init_code_execute_data(execute_data, op_array, &return_value);
 execute_ex(execute_data);
 ```
 
-## Проблемы прямого доступа
+## Problems with Direct Access
 
-### 1. Нет публичного C API
+### 1. No Public C API
 
-OPcache не экспортирует функции для доступа к кэшированным скриптам:
+OPcache does not export functions for accessing cached scripts:
 
 ```c
-// Внутренняя функция (не экспортируется)
+// Internal function (not exported)
 zend_persistent_script *zend_accel_find_script(
     zend_string *filename,
     int check_timestamp
 );
 ```
 
-### 2. Указатели привязаны к процессу
+### 2. Pointers are Process-Bound
 
 ```
 Shared Memory (OPcache)
 ┌─────────────────────────────────────┐
 │ zend_persistent_script              │
-│   ├── opcodes: 0x7f1234560000 ───┐  │  ← Абсолютный адрес
+│   ├── opcodes: 0x7f1234560000 ───┐  │  ← Absolute address
 │   ├── literals: 0x7f1234561000   │  │
 │   └── vars: 0x7f1234562000       │  │
 └─────────────────────────────────────┘
                                    │
                                    ▼
-                    Process A видит по этому адресу
-                    Process B может mmap в другое место!
+                    Process A sees this address
+                    Process B may mmap elsewhere!
 ```
 
-### 3. Runtime cache
+### 3. Runtime Cache
 
 ```c
-// Каждый запрос требует свой runtime cache
-ZEND_MAP_PTR_DEF(void **, run_time_cache);  // Per-request данные
+// Each request requires its own runtime cache
+ZEND_MAP_PTR_DEF(void **, run_time_cache);  // Per-request data
 ```
 
-### 4. Зависимость от PHP версии
+### 4. PHP Version Dependency
 
-Opcodes несовместимы между:
-- Разными версиями PHP (8.3 vs 8.4)
-- Разными конфигурациями (ZTS vs NTS)
-- Разными архитектурами (x86 vs ARM)
+Opcodes are incompatible between:
+- Different PHP versions (8.3 vs 8.4)
+- Different configurations (ZTS vs NTS)
+- Different architectures (x86 vs ARM)
 
-## Возможные подходы
+## Possible Approaches
 
-### Подход 1: PHP Preloading
+### Approach 1: PHP Preloading
 
-Предзагрузка скриптов при старте сервера:
+Preload scripts at server startup:
 
 ```php
 // preload.php
 <?php
-// Загружаем фреймворк один раз
+
+// Load framework once
 require '/var/www/vendor/autoload.php';
 
-// Предзагружаем классы
+// Preload classes
 opcache_compile_file('/var/www/app/Kernel.php');
 opcache_compile_file('/var/www/app/Controller.php');
 ```
@@ -168,18 +169,18 @@ opcache.preload=/var/www/preload.php
 opcache.preload_user=www-data
 ```
 
-**Преимущества:**
-- +30-60% производительности для фреймворков
-- Официально поддерживается
-- Классы/функции загружаются один раз
+**Advantages:**
+- +30-60% performance for frameworks
+- Officially supported
+- Classes/functions loaded once
 
-**Ограничения:**
-- Требует перезапуска PHP для обновления
-- Не работает в Docker без специальной настройки
+**Limitations:**
+- Requires PHP restart for updates
+- Does not work in Docker without special configuration
 
-### Подход 2: Расширение для экспорта API
+### Approach 2: Extension for API Export
 
-Создать PHP расширение которое экспортирует внутренние функции OPcache:
+Create a PHP extension that exports internal OPcache functions:
 
 ```c
 // ext/tokio_opcache_bridge.c
@@ -193,7 +194,7 @@ PHP_FUNCTION(tokio_get_cached_script)
         Z_PARAM_STRING(filename, filename_len)
     ZEND_PARSE_PARAMETERS_END();
 
-    // Получаем кэшированный скрипт
+    // Get cached script
     zend_string *zfilename = zend_string_init(filename, filename_len, 0);
     zend_persistent_script *script = zend_accel_find_script(zfilename, 0);
 
@@ -201,65 +202,67 @@ PHP_FUNCTION(tokio_get_cached_script)
         RETURN_NULL();
     }
 
-    // Возвращаем информацию о скрипте
+    // Return script information
     array_init(return_value);
     add_assoc_long(return_value, "size", script->size);
     add_assoc_long(return_value, "hits", script->dynamic_members.hits);
     add_assoc_long(return_value, "opcodes_count", script->script.main_op_array.last);
 
-    // Указатель на память (для FFI)
+    // Memory pointer (for FFI)
     add_assoc_long(return_value, "mem_ptr", (zend_long)script->mem);
 }
 ```
 
-**Проблема:** `zend_accel_find_script` - internal linkage, не экспортируется.
+**Problem:** `zend_accel_find_script` has internal linkage, not exported.
 
-### Подход 3: Прямой доступ к shared memory
+### Approach 3: Direct Shared Memory Access
 
 ```rust
-// Теоретический код - не работает напрямую
+// Theoretical code - does not work directly
 
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use nix::sys::mman::{mmap, MapFlags, ProtFlags};
 
 fn access_opcache_shm() -> Result<(), Error> {
-    // OPcache использует mmap с фиксированным ключом
-    // Найти через /proc/<pid>/maps
+    // OPcache uses mmap with a fixed key
+    // Find via /proc/<pid>/maps
 
-    // Проблема: структуры содержат указатели,
-    // которые валидны только в контексте PHP процесса
+    // Problem: structures contain pointers
+    // that are only valid in PHP process context
 }
 ```
 
-**Проблема:** Указатели в структурах невалидны вне PHP.
+**Problem:** Pointers in structures are invalid outside PHP.
 
-### Подход 4: Кэширование op_array в расширении
+### Approach 4: op_array Caching in Extension
 
 ```c
-// В tokio_sapi расширении
+// In tokio_sapi extension
 
-static HashTable cached_scripts;  // Thread-local кэш
+static HashTable cached_scripts;  // Thread-local cache
 
 void tokio_cache_script(const char *filename, zend_op_array *op_array) {
-    // Копируем op_array в thread-local storage
-    // При следующем запросе используем копию
+    // Copy op_array to thread-local storage
+    // Use copy on next request
 }
 
 zend_op_array* tokio_get_cached_op_array(const char *filename) {
-    // Возвращаем кэшированный op_array
-    // Но нужно обновлять runtime cache каждый запрос!
+    // Return cached op_array
+    // But runtime cache must be updated per-request!
 }
 ```
 
-**Это работает для immutable частей**, но:
-- Runtime cache всё равно создаётся per-request
-- Статические переменные per-request
-- Сложная синхронизация
+**This works for immutable parts**, but:
+- Runtime cache still created per-request
+- Static variables per-request
+- Complex synchronization
 
-## Рекомендуемый подход для tokio_php
+## Recommended Approach for tokio_php
 
-### Текущая архитектура (оптимальная)
+See [Architecture](architecture.md) for full description.
+
+### Current Architecture (Optimal)
 
 ```
 Request → Worker Thread → php_request_startup() → execute → php_request_shutdown()
@@ -271,40 +274,47 @@ Request → Worker Thread → php_request_startup() → execute → php_request_
                     └── JIT compiled code
 ```
 
-OPcache уже делает тяжёлую работу:
-1. Кэширует скомпилированные скрипты
-2. Разделяет память между потоками
-3. JIT компилирует горячие пути
+OPcache already does the heavy lifting:
+1. Caches compiled scripts
+2. Shares memory between threads
+3. JIT compiles hot paths
 
-### Оптимизации без изменения архитектуры
+### Optimizations Without Architecture Changes
+
+Current OPcache settings in tokio_php (see Dockerfile):
 
 ```ini
-; php.ini - Production settings
-
-; Увеличить память для большего кэша
-opcache.memory_consumption=256
-
-; Отключить проверку timestamps (быстрее)
+; Current tokio_php configuration
+opcache.enable=1
+opcache.enable_cli=1
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=16
+opcache.max_accelerated_files=10000
 opcache.validate_timestamps=0
-
-; Увеличить количество файлов
-opcache.max_accelerated_files=20000
-
-; JIT в режиме tracing
+opcache.revalidate_freq=0
 opcache.jit=tracing
-opcache.jit_buffer_size=128M
-
-; Preloading для фреймворков
-opcache.preload=/var/www/preload.php
+opcache.jit_buffer_size=64M
+opcache.preload=/var/www/html/preload.php
+opcache.preload_user=www-data
 ```
 
-### Метрики для анализа
+For larger projects, increase values:
+
+```ini
+; Production settings for large projects
+opcache.memory_consumption=256
+opcache.max_accelerated_files=20000
+opcache.jit_buffer_size=128M
+```
+
+### Metrics for Analysis
 
 ```php
 <?php
+
 $status = opcache_get_status(true);
 
-// Эффективность кэша
+// Cache efficiency
 $hit_rate = $status['opcache_statistics']['hits'] /
             ($status['opcache_statistics']['hits'] +
              $status['opcache_statistics']['misses']) * 100;
@@ -313,28 +323,35 @@ echo "Hit rate: {$hit_rate}%\n";
 echo "Cached scripts: {$status['opcache_statistics']['num_cached_scripts']}\n";
 echo "Memory used: " . round($status['memory_usage']['used_memory'] / 1024 / 1024, 2) . " MB\n";
 
-// JIT статистика
+// JIT statistics
 if (isset($status['jit'])) {
     echo "JIT enabled: " . ($status['jit']['enabled'] ? 'Yes' : 'No') . "\n";
     echo "JIT buffer used: " . round($status['jit']['buffer_used'] / 1024 / 1024, 2) . " MB\n";
 }
 ```
 
-## Выводы
+## Conclusions
 
-| Подход | Реализуемость | Выигрыш | Рекомендация |
-|--------|---------------|---------|--------------|
-| PHP Preloading | Высокая | +30-60% | Рекомендуется |
-| Расширение-мост | Средняя | +5-10% | Сложно, риски |
-| Прямой SHM доступ | Низкая | - | Не работает |
-| Кэш в расширении | Средняя | +5% | Сложно |
+| Approach | Feasibility | Gain | Recommendation |
+|----------|-------------|------|----------------|
+| PHP Preloading | High | +30-60% | Recommended |
+| Bridge extension | Medium | +5-10% | Complex, risky |
+| Direct SHM access | Low | - | Does not work |
+| Cache in extension | Medium | +5% | Complex |
 
-**Рекомендация:** Использовать стандартные механизмы OPcache (preloading, правильная конфигурация, JIT) вместо попыток обойти его API.
+**Recommendation:** Use standard OPcache mechanisms (preloading, proper configuration, JIT) instead of trying to bypass its API.
 
-## Источники
+## See Also
+
+- [Architecture](architecture.md) - tokio_php architecture overview
+- [Worker Pool](worker-pool.md) - PHP worker management
+- [Configuration](configuration.md) - All environment variables
+- [Profiling](profiling.md) - Performance measurement
+
+## Sources
 
 - [PHP OPcache Manual](https://www.php.net/manual/en/book.opcache.php)
 - [How OPcache Works (Nikita Popov)](https://www.npopov.com/2021/10/13/How-opcache-works.html)
-- [PHP RFC: Direct Execution Opcode](https://wiki.php.net/rfc/direct-execution-opcode) - отклонён
+- [PHP RFC: Direct Execution Opcode](https://wiki.php.net/rfc/direct-execution-opcode) - rejected
 - [PHP Preloading](https://www.php.net/manual/en/opcache.preloading.php)
 - [php-src/ext/opcache](https://github.com/php/php-src/tree/master/ext/opcache)

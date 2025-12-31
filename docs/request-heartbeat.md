@@ -6,6 +6,7 @@ The `tokio_request_heartbeat()` function allows PHP scripts to extend their exec
 
 ```php
 <?php
+
 // Process large dataset without timeout
 foreach ($large_dataset as $item) {
     process_item($item);
@@ -45,11 +46,11 @@ tokio_request_heartbeat(int $time = 10): bool
 
 ```
 Initial Request (REQUEST_TIMEOUT=30s)
-├─────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────┤
 │                    30 seconds                    │
-└─────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────┘
                                                    ▲
-                                                 Timeout (504)
+                                              Timeout (504)
 
 With Heartbeat:
 ├──────────────┤
@@ -76,6 +77,7 @@ tokio_php has two independent timeout mechanisms:
 
 ```php
 <?php
+
 // Correct: extend both timeouts
 set_time_limit(30);
 tokio_request_heartbeat(30);
@@ -90,6 +92,7 @@ tokio_request_heartbeat(30);
 
 ```php
 <?php
+
 $batch_size = 100;
 $total = count($records);
 
@@ -115,6 +118,7 @@ echo json_encode(['status' => 'complete', 'processed' => $total]);
 
 ```php
 <?php
+
 $endpoints = [
     'https://api.service1.com/data',
     'https://api.service2.com/data',
@@ -143,6 +147,7 @@ echo json_encode($results);
 
 ```php
 <?php
+
 $file = fopen('large_file.csv', 'r');
 $line_count = 0;
 
@@ -165,6 +170,7 @@ echo "Processed $line_count lines";
 
 ```php
 <?php
+
 class ReportGenerator
 {
     private int $heartbeat_interval;
@@ -239,6 +245,7 @@ REQUEST_TIMEOUT=off docker compose up -d
 
 ```php
 <?php
+
 function heartbeat(int $seconds = 30): bool
 {
     set_time_limit($seconds);
@@ -253,6 +260,7 @@ heartbeat(60);
 
 ```php
 <?php
+
 // Good: heartbeat every 30 seconds during long operation
 foreach ($items as $item) {
     process($item);
@@ -280,6 +288,7 @@ foreach ($items as $item) {
 
 ```php
 <?php
+
 if (!tokio_request_heartbeat(60)) {
     // Heartbeat failed - either:
     // - REQUEST_TIMEOUT=off (no timeout configured)
@@ -294,6 +303,7 @@ if (!tokio_request_heartbeat(60)) {
 
 ```php
 <?php
+
 // Each chunk takes ~20 seconds
 $chunk_duration = 20;
 $safety_margin = 10;
@@ -313,6 +323,7 @@ foreach ($chunks as $chunk) {
 
 ```php
 <?php
+
 $info = [
     'function_exists' => function_exists('tokio_request_heartbeat'),
     'timeout_configured' => !empty($_SERVER['TOKIO_HEARTBEAT_CTX']),
@@ -327,6 +338,7 @@ echo json_encode($info);
 
 ```php
 <?php
+
 function heartbeat_with_logging(int $seconds, string $context = ''): bool
 {
     $result = tokio_request_heartbeat($seconds);
@@ -371,6 +383,7 @@ heartbeat_with_logging(60, 'batch processing');
 
 ```php
 <?php
+
 // Heartbeat: user waits for result
 function generate_report_sync(): array
 {
@@ -396,6 +409,7 @@ function generate_report_async(): string
 
 ```php
 <?php
+
 // Debug heartbeat issues
 $debug = [
     'heartbeat_ctx' => $_SERVER['TOKIO_HEARTBEAT_CTX'] ?? null,
@@ -467,22 +481,36 @@ The heartbeat mechanism uses three `$_SERVER` variables set by Rust:
 | `TOKIO_HEARTBEAT_MAX_SECS` | Maximum allowed extension (= REQUEST_TIMEOUT) |
 | `TOKIO_HEARTBEAT_CALLBACK` | Hex pointer to Rust callback function |
 
-The PHP function reads these values and calls the Rust callback via FFI, which atomically updates the deadline in the async polling loop.
+The PHP function reads these values and calls the Rust callback via FFI, which atomically updates the deadline in the async loop.
+
+### HeartbeatContext Internals
+
+```rust
+pub struct HeartbeatContext {
+    start: Instant,           // Reused from request queued_at (no extra syscall)
+    deadline_ms: AtomicU64,   // Milliseconds from start
+    max_extension_secs: u64,  // Maximum allowed extension
+}
+```
+
+Uses `Instant`-based timing instead of `SystemTime` to avoid syscall overhead. The `start` field is reused from `queued_at`, meaning no additional `Instant::now()` call is needed when creating the context.
 
 ### Thread Safety
 
-- `HeartbeatContext` uses `AtomicU64` for the deadline
+- `HeartbeatContext` uses `AtomicU64` for atomic deadline updates
 - Safe to call from any PHP code (extensions, frameworks, etc.)
 - Each request has its own isolated context
 
 ### Performance
 
 - Heartbeat call overhead: < 1 microsecond
-- No network I/O or system calls
-- Memory: ~24 bytes per request for HeartbeatContext
+- Uses `Instant::elapsed()` (single syscall per check)
+- Memory: ~32 bytes per request for HeartbeatContext (Instant + AtomicU64 + u64)
 
 ## See Also
 
 - [Configuration](configuration.md) - `REQUEST_TIMEOUT` setting
 - [tokio_sapi Extension](tokio-sapi-extension.md) - Other PHP functions
 - [Worker Pool](worker-pool.md) - Request execution model
+- [Architecture](architecture.md) - System design overview
+- [Profiling](profiling.md) - Request timing analysis

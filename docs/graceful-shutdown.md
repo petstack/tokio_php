@@ -65,30 +65,35 @@ DRAIN_TIMEOUT_SECS=30 docker compose up -d
 During graceful shutdown, you'll see logs like:
 
 ```json
-{"level":"info","msg":"Received shutdown signal, initiating graceful shutdown..."}
-{"level":"info","msg":"Waiting up to 30s for 5 active connections to complete (HTTP/2 GOAWAY sent)"}
-{"level":"debug","msg":"Waiting for 3 connections to drain..."}
-{"level":"debug","msg":"Waiting for 1 connections to drain..."}
-{"level":"info","msg":"All connections drained successfully"}
-{"level":"info","msg":"Shutdown complete"}
+{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"app","msg":"Received shutdown signal, initiating graceful shutdown...","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.124Z","level":"info","type":"app","msg":"Waiting up to 30s for 5 active connections to complete (HTTP/2 GOAWAY sent)","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.224Z","level":"debug","type":"app","msg":"Waiting for 3 connections to drain...","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.324Z","level":"debug","type":"app","msg":"Waiting for 1 connections to drain...","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.424Z","level":"info","type":"app","msg":"All connections drained successfully","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.425Z","level":"info","type":"app","msg":"Shutdown complete","ctx":{"service":"tokio_php"},"data":{}}
 ```
 
 If timeout is reached:
 
 ```json
-{"level":"info","msg":"Received shutdown signal, initiating graceful shutdown..."}
-{"level":"info","msg":"Waiting up to 30s for 10 active connections to complete (HTTP/2 GOAWAY sent)"}
-{"level":"warn","msg":"Drain timeout reached with 2 active connections"}
-{"level":"info","msg":"Drain timeout reached, forcing shutdown"}
-{"level":"info","msg":"Shutdown complete"}
+{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"app","msg":"Received shutdown signal, initiating graceful shutdown...","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.124Z","level":"info","type":"app","msg":"Waiting up to 30s for 10 active connections to complete (HTTP/2 GOAWAY sent)","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:30.124Z","level":"info","type":"app","msg":"Drain timeout reached, forcing shutdown","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:30.125Z","level":"info","type":"app","msg":"Shutdown complete","ctx":{"service":"tokio_php"},"data":{}}
 ```
 
 If no active connections:
 
 ```json
-{"level":"info","msg":"Received shutdown signal, initiating graceful shutdown..."}
-{"level":"info","msg":"No active connections, shutting down immediately"}
-{"level":"info","msg":"Shutdown complete"}
+{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"app","msg":"Received shutdown signal, initiating graceful shutdown...","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.124Z","level":"info","type":"app","msg":"No active connections, shutting down immediately","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.125Z","level":"info","type":"app","msg":"Shutdown complete","ctx":{"service":"tokio_php"},"data":{}}
+```
+
+Filter shutdown logs with jq:
+
+```bash
+docker compose logs | jq -r 'select(.msg | contains("shutdown") or contains("drain")) | .msg'
 ```
 
 ## Kubernetes Integration
@@ -182,6 +187,7 @@ services:
 
 ```php
 <?php
+
 // www/slow.php
 $sleep = $_GET['sleep'] ?? 5;
 sleep((int)$sleep);
@@ -207,19 +213,9 @@ docker compose stop -t 15
 ### Verify with Logs
 
 ```bash
-# Watch logs during shutdown
-docker compose logs -f | grep -E "(shutdown|drain|connections)"
+# Watch logs during shutdown (filter by message content)
+docker compose logs -f | jq -r 'select(.msg | contains("shutdown") or contains("drain") or contains("connections")) | "\(.ts) \(.msg)"'
 ```
-
-## Comparison with Other Servers
-
-| Server | Graceful Shutdown | Drain Timeout | Config |
-|--------|------------------|---------------|--------|
-| **tokio_php** | Yes | Configurable | `DRAIN_TIMEOUT_SECS` |
-| Nginx | Yes | Fixed 30s | `worker_shutdown_timeout` |
-| Apache | Limited | None | `GracefulShutdownTimeout` |
-| PHP-FPM | Yes | Fixed | `process_control_timeout` |
-| Caddy | Yes | Configurable | `grace_period` |
 
 ## Best Practices
 
@@ -243,6 +239,7 @@ curl http://localhost:9090/metrics | grep active_connections
 
 ```php
 <?php
+
 // Ensure PHP scripts don't run longer than drain timeout
 set_time_limit(25);  // Match DRAIN_TIMEOUT_SECS
 ```
@@ -266,6 +263,7 @@ Monitor requests that might exceed drain timeout:
 
 ```php
 <?php
+
 $start = microtime(true);
 register_shutdown_function(function() use ($start) {
     $duration = microtime(true) - $start;
@@ -322,5 +320,5 @@ register_shutdown_function(function() use ($start) {
 ## See Also
 
 - [Configuration](configuration.md) - Environment variables reference
-- [Metrics](metrics.md) - Monitoring active connections
+- [Internal Server](internal-server.md) - Monitoring active connections
 - [Kubernetes Graceful Shutdown](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination)
