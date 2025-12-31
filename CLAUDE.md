@@ -380,6 +380,9 @@ Retry-After: 45
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 0
 X-RateLimit-Reset: 45
+Content-Type: text/plain
+
+429 Too Many Requests
 ```
 
 ### Rate Limit vs Queue Capacity
@@ -537,11 +540,11 @@ For Laravel/Symfony-style routing, set `INDEX_FILE` to route all requests throug
 INDEX_FILE=index.php docker compose up -d
 ```
 
-Behavior:
-- All requests route to the specified file (e.g., `/api/users` -> `index.php`)
+Behavior (nginx `try_files` equivalent):
+- Static files served directly if they exist (e.g., `/style.css` -> served)
+- Other requests route to index file (e.g., `/api/users` -> `index.php`)
 - Direct access to the index file returns 404 (e.g., `/index.php` -> 404)
-- File existence validated at startup (server exits if missing)
-- Skips per-request file existence checks (performance optimization)
+- Index file existence validated at startup (server exits if missing)
 
 ## Internal Server
 
