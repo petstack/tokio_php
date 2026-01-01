@@ -118,6 +118,8 @@
             <li><a href="/headers.php">headers.php</a><span class="desc">Headers &amp; redirects</span></li>
             <li><a href="/opcache_status.php">opcache_status.php</a><span class="desc">OPcache stats</span></li>
             <li><a href="/ext_test.php">ext_test.php</a><span class="desc">Extension test</span></li>
+            <li><a href="/method.php">method.php</a><span class="desc">HTTP methods tester</span></li>
+            <li><a href="/api.php">api.php</a><span class="desc">REST API example</span></li>
         </ul>
     </div>
 
@@ -181,5 +183,6 @@
         });
         document.querySelector('.tab-content').classList.add('active');
     </script>
+<?= microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'] ?>
 </body>
 </html>
