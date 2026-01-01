@@ -2,13 +2,25 @@
 #
 # Build args:
 #   PHP_VERSION: 8.4 or 8.5
-#   ALPINE_VERSION: 3.20, 3.21, 3.22, or 3.23
+#   ALPINE_VERSION: 3.23
+#
+# Targets:
+#   (default) - Full runtime image with PHP, OPcache, JIT
+#   dist      - Binary distribution (tokio_php + tokio_sapi.so)
 #
 # Usage:
+#   # Build runtime image
 #   docker build -f Dockerfile.release \
 #     --build-arg PHP_VERSION=8.4 \
 #     --build-arg ALPINE_VERSION=3.23 \
 #     -t tokio_php:php8.4-alpine3.23 .
+#
+#   # Extract binaries to ./dist/
+#   docker build -f Dockerfile.release \
+#     --build-arg PHP_VERSION=8.4 \
+#     --build-arg ALPINE_VERSION=3.23 \
+#     --target dist \
+#     --output type=local,dest=./dist .
 
 ARG PHP_VERSION=8.4
 ARG ALPINE_VERSION=3.23
@@ -71,7 +83,21 @@ COPY build.rs ./
 RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
 
 # =============================================================================
-# Minimal runtime stage
+# Distribution stage - extract binaries and config
+# =============================================================================
+FROM scratch AS dist
+
+# Binary
+COPY --from=builder /app/target/release/tokio_php /tokio_php
+
+# PHP extension
+COPY --from=builder /app/ext/modules/tokio_sapi.so /tokio_sapi.so
+
+# PHP configuration
+COPY php.ini /php.ini
+
+# =============================================================================
+# Minimal runtime stage (default)
 # =============================================================================
 ARG PHP_VERSION
 ARG ALPINE_VERSION
@@ -84,18 +110,10 @@ RUN apk add --no-cache libgcc
 COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
 RUN EXT_DIR=$(php-config --extension-dir) && \
     cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
-    rm /tmp/tokio_sapi.so && \
-    echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
+    rm /tmp/tokio_sapi.so
 
-# Configure OPcache + JIT
-RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.interned_strings_buffer=16" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.max_accelerated_files=10000" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.jit_buffer_size=64M" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini
+# Copy PHP configuration (OPcache, JIT, tokio_sapi)
+COPY php.ini /usr/local/etc/php/conf.d/tokio_php.ini
 
 # Copy binary
 COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php

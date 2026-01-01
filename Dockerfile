@@ -89,23 +89,12 @@ RUN EXT_DIR=$(php-config --extension-dir) && \
     cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
     rm /tmp/tokio_sapi.so /tmp/php_ext_dir
 
-# Configure tokio_sapi extension (dynamic .so for PHP functions)
-RUN echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
+# Copy PHP configuration (OPcache, JIT, tokio_sapi)
+COPY php.ini /usr/local/etc/php/conf.d/tokio_php.ini
 
-# Configure OPcache + JIT + Preloading
-# Works by overriding SAPI name to "cli-server" before init
-RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.interned_strings_buffer=16" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.max_accelerated_files=10000" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.revalidate_freq=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.jit_buffer_size=64M" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    # Preloading - runs preload.php at startup to cache framework classes
-    echo "opcache.preload=/var/www/html/preload.php" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.preload_user=www-data" >> /usr/local/etc/php/conf.d/opcache.ini
+# Enable preloading for dev image
+RUN echo "opcache.preload=/var/www/html/preload.php" >> /usr/local/etc/php/conf.d/tokio_php.ini && \
+    echo "opcache.preload_user=www-data" >> /usr/local/etc/php/conf.d/tokio_php.ini
 
 # Create app directory
 WORKDIR /app
