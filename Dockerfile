@@ -87,14 +87,8 @@ RUN EXT_DIR=$(php-config --extension-dir) && \
 COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
 RUN EXT_DIR=$(php-config --extension-dir) && \
     cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
-    rm /tmp/tokio_sapi.so /tmp/php_ext_dir
-
-# Copy PHP configuration (OPcache, JIT, tokio_sapi)
-COPY php.ini /usr/local/etc/php/conf.d/tokio_php.ini
-
-# Enable preloading for dev image
-RUN echo "opcache.preload=/var/www/html/preload.php" >> /usr/local/etc/php/conf.d/tokio_php.ini && \
-    echo "opcache.preload_user=www-data" >> /usr/local/etc/php/conf.d/tokio_php.ini
+    rm /tmp/tokio_sapi.so /tmp/php_ext_dir && \
+    echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
 
 # Create app directory
 WORKDIR /app

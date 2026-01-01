@@ -42,6 +42,8 @@ services:
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
     volumes:
       - ./www:/var/www/html:ro
+      # PHP configuration (OPcache, JIT, etc.)
+      - ./php.ini:/usr/local/etc/php/conf.d/tokio_php.ini:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
@@ -82,6 +84,7 @@ services:
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
     volumes:
       - ./www:/var/www/html:ro
+      - ./php.ini:/usr/local/etc/php/conf.d/tokio_php.ini:ro
       - ./certs:/certs:ro
     restart: unless-stopped
     healthcheck:

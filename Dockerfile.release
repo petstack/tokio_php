@@ -83,7 +83,7 @@ COPY build.rs ./
 RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
 
 # =============================================================================
-# Distribution stage - extract binaries and config
+# Distribution stage - extract binaries only
 # =============================================================================
 FROM scratch AS dist
 
@@ -92,9 +92,6 @@ COPY --from=builder /app/target/release/tokio_php /tokio_php
 
 # PHP extension
 COPY --from=builder /app/ext/modules/tokio_sapi.so /tokio_sapi.so
-
-# PHP configuration
-COPY php.ini /php.ini
 
 # =============================================================================
 # Minimal runtime stage (default)
@@ -110,10 +107,8 @@ RUN apk add --no-cache libgcc
 COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
 RUN EXT_DIR=$(php-config --extension-dir) && \
     cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
-    rm /tmp/tokio_sapi.so
-
-# Copy PHP configuration (OPcache, JIT, tokio_sapi)
-COPY php.ini /usr/local/etc/php/conf.d/tokio_php.ini
+    rm /tmp/tokio_sapi.so && \
+    echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
 
 # Copy binary
 COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
