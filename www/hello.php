@@ -87,5 +87,6 @@ $name = htmlspecialchars($_GET['name'] ?? 'World', ENT_QUOTES, 'UTF-8');
         });
         document.querySelector('.tab.active').click();
     </script>
+<div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #eee; font-size: 12px; color: #999;"><?= number_format((microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000, 2) ?> ms</div>
 </body>
 </html>

@@ -183,6 +183,6 @@
         });
         document.querySelector('.tab-content').classList.add('active');
     </script>
-<?= microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'] ?>
+<div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #eee; font-size: 12px; color: #999;"><?= number_format((microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000, 2) ?> ms</div>
 </body>
 </html>
