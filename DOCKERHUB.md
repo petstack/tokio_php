@@ -16,6 +16,7 @@ High-performance async PHP server written in Rust. Uses Tokio for async I/O and 
 - **OPcache & JIT** - PHP 8.4/8.5 with tracing JIT enabled
 - **Brotli Compression** - Automatic response compression
 - **Rate Limiting** - Per-IP request throttling
+- **Distributed Tracing** - W3C Trace Context support
 - **Graceful Shutdown** - Connection draining for zero-downtime deployments
 - **Custom Error Pages** - HTML error pages for 4xx/5xx responses
 - **Prometheus Metrics** - Built-in `/health` and `/metrics` endpoints
@@ -24,17 +25,17 @@ High-performance async PHP server written in Rust. Uses Tokio for async I/O and 
 
 ```bash
 # Pull the image
-docker pull diolektor/tokio_php:8.4-alpine3.23
+docker pull diolektor/tokio_php:php8.4-alpine3.23
 
 # Run with default settings
-docker run -d -p 8080:8080 -v $(pwd)/www:/var/www/html diolektor/tokio_php:8.4-alpine3.23
+docker run -d -p 8080:8080 -v $(pwd)/www:/var/www/html diolektor/tokio_php:php8.4-alpine3.23
 
 # Run with custom configuration
 docker run -d -p 8080:8080 \
   -e PHP_WORKERS=8 \
   -e INDEX_FILE=index.php \
   -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:8.4-alpine3.23
+  diolektor/tokio_php:php8.4-alpine3.23
 ```
 
 ## Available Tags
@@ -43,14 +44,11 @@ All tags are multi-arch (`amd64` + `arm64`).
 
 | Tag | PHP | Alpine |
 |-----|-----|--------|
-| `latest`, `php8.5` | 8.5 | 3.23 |
+| `latest` | 8.5 | 3.23 |
+| `php8.5` | 8.5 | 3.23 |
 | `php8.4` | 8.4 | 3.23 |
 | `php8.5-alpine3.23` | 8.5 | 3.23 |
-| `php8.5-alpine3.22` | 8.5 | 3.22 |
-| `php8.5-alpine3.21` | 8.5 | 3.21 |
 | `php8.4-alpine3.23` | 8.4 | 3.23 |
-| `php8.4-alpine3.22` | 8.4 | 3.22 |
-| `php8.4-alpine3.21` | 8.4 | 3.21 |
 
 ## Environment Variables
 
@@ -82,7 +80,7 @@ All tags are multi-arch (`amd64` + `arm64`).
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., `404.html`, `500.html`) |
-| `STATIC_CACHE_TTL` | `1d` | Cache-Control max-age for static files. Values: `off`, `1h`, `1d`, `1w` |
+| `STATIC_CACHE_TTL` | `1d` | Cache-Control max-age for static files. Values: `off`, `30s`, `2m`, `1h`, `1d`, `1w`, `1y` |
 | `REQUEST_TIMEOUT` | `2m` | Request timeout. Values: `30s`, `2m`, `5m`, `off`. Returns 504 on timeout |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout in seconds |
 
@@ -106,7 +104,7 @@ All tags are multi-arch (`amd64` + `arm64`).
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `USE_STUB` | `0` | Stub mode (no PHP execution, for benchmarks). `1` = enabled |
-| `USE_EXT` | `0` | Use FFI extension for superglobals. `1` = enabled |
+| `USE_EXT` | `1` | Use FFI extension for superglobals (recommended, 2x faster). `0` = legacy mode |
 
 ## Usage Examples
 
@@ -117,7 +115,7 @@ docker run -d -p 8080:8080 \
   -e INDEX_FILE=index.php \
   -e DOCUMENT_ROOT=/var/www/html/public \
   -v $(pwd):/var/www/html \
-  diolektor/tokio_php:8.4-alpine3.23
+  diolektor/tokio_php:php8.4-alpine3.23
 ```
 
 ### Production with Metrics
@@ -129,7 +127,7 @@ docker run -d -p 8080:8080 -p 9090:9090 \
   -e INTERNAL_ADDR=0.0.0.0:9090 \
   -e DRAIN_TIMEOUT_SECS=60 \
   -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:8.4-alpine3.23
+  diolektor/tokio_php:php8.4-alpine3.23
 ```
 
 ### With HTTPS
@@ -141,7 +139,7 @@ docker run -d -p 8443:8443 \
   -e TLS_KEY=/certs/key.pem \
   -v $(pwd)/www:/var/www/html \
   -v $(pwd)/certs:/certs:ro \
-  diolektor/tokio_php:8.4-alpine3.23
+  diolektor/tokio_php:php8.4-alpine3.23
 ```
 
 ### With Rate Limiting
@@ -151,7 +149,7 @@ docker run -d -p 8080:8080 \
   -e RATE_LIMIT=100 \
   -e RATE_WINDOW=60 \
   -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:8.4-alpine3.23
+  diolektor/tokio_php:php8.4-alpine3.23
 ```
 
 ### Custom Error Pages
@@ -160,7 +158,7 @@ docker run -d -p 8080:8080 \
 docker run -d -p 8080:8080 \
   -e ERROR_PAGES_DIR=/var/www/html/errors \
   -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:8.4-alpine3.23
+  diolektor/tokio_php:php8.4-alpine3.23
 ```
 
 Create error pages: `errors/404.html`, `errors/500.html`, `errors/503.html`
@@ -215,7 +213,7 @@ spec:
   terminationGracePeriodSeconds: 35
   containers:
     - name: tokio-php
-      image: diolektor/tokio_php:8.4-alpine3.23
+      image: diolektor/tokio_php:php8.4-alpine3.23
       ports:
         - containerPort: 8080
         - containerPort: 9090
@@ -245,7 +243,7 @@ spec:
 ```yaml
 services:
   app:
-    image: diolektor/tokio_php:8.4-alpine3.23
+    image: diolektor/tokio_php:php8.4-alpine3.23
     ports:
       - "8080:8080"
       - "9090:9090"

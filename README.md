@@ -40,20 +40,20 @@ curl http://localhost:8080/
 git clone https://github.com/petstack/tokio_php.git
 cd tokio_php
 
-# Build and run (PHP 8.4)
+# Build and run (PHP 8.5 default)
 docker compose build
 docker compose up -d
 
-# Build with PHP 8.5
-PHP_VERSION=8.5 docker compose build
-PHP_VERSION=8.5 docker compose up -d
+# Build with PHP 8.4
+PHP_VERSION=8.4 docker compose build
+PHP_VERSION=8.4 docker compose up -d
 ```
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PHP_VERSION` | `8.4` | PHP version (8.4 or 8.5) |
+| `PHP_VERSION` | `8.5` | PHP version (8.4 or 8.5) |
 | `PHP_WORKERS` | `0` | Worker count (0 = auto-detect CPU cores) |
 | `QUEUE_CAPACITY` | `0` | Max pending requests (0 = workers × 100) |
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
