@@ -305,6 +305,7 @@ All HTTP status codes (200, 301, 302, 404, 500, etc.) are supported.
 
 ## See Also
 
+- [HTTP Methods](http-methods.md) - GET, POST, PUT, PATCH, DELETE, OPTIONS, QUERY
 - [Configuration](configuration.md) - Environment variables reference
 - [Distributed Tracing](distributed-tracing.md) - W3C Trace Context support
 - [Request Heartbeat](request-heartbeat.md) - TOKIO_HEARTBEAT_* variables
