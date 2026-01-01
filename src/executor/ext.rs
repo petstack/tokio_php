@@ -49,6 +49,9 @@ extern "C" {
         size: usize
     );
 
+    // Set raw POST body for php://input
+    fn tokio_sapi_set_post_data(data: *const c_char, len: usize);
+
     // Batch API - set multiple variables in one FFI call
     fn tokio_sapi_set_server_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
     fn tokio_sapi_set_get_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
@@ -242,6 +245,13 @@ fn execute_script_with_ffi(
     if profiling {
         timing.ffi_post_us = phase_start.elapsed().as_micros() as u64;
         timing.ffi_post_count = count as u64;
+    }
+
+    // 4b. Set raw request body for php://input
+    if let Some(ref body) = request.raw_body {
+        unsafe {
+            tokio_sapi_set_post_data(body.as_ptr() as *const c_char, body.len());
+        }
     }
 
     // 5. Set $_COOKIE variables (batch)

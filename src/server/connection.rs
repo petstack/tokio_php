@@ -376,7 +376,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .unwrap_or(false);
 
         let mut response = match req.method().as_str() {
-            "GET" | "POST" | "HEAD" | "QUERY" => {
+            "GET" | "POST" | "HEAD" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "QUERY" => {
                 let mut resp = self.process_request(req, remote_addr, tls_info, &trace_ctx).await;
 
                 // HEAD: return headers only, no body
@@ -619,9 +619,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             query_parse_us = query_start.elapsed().as_micros() as u64;
         }
 
-        // Handle POST/QUERY body
+        // Handle request body (POST, PUT, PATCH, DELETE, OPTIONS, QUERY - not GET/HEAD)
         let method_str = method.as_str();
-        let (post_params, files, raw_body) = if method_str == "POST" || method_str == "QUERY" {
+        let has_body = matches!(method_str, "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "QUERY");
+        let (post_params, files, raw_body) = if has_body {
             let body_read_start = Instant::now();
             let body_bytes = match req.collect().await {
                 Ok(collected) => collected.to_bytes(),
@@ -807,16 +808,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             server_vars.push(("PARENT_SPAN_ID".into(), parent.clone()));
         }
 
-        // Raw request body for POST/QUERY (accessible in PHP as $_SERVER['REQUEST_BODY'])
-        // Useful for JSON/XML queries where body isn't parsed into $_POST
+        // Set CONTENT_LENGTH for requests with body
         if let Some(ref body) = raw_body {
-            if let Ok(body_str) = std::str::from_utf8(body) {
-                server_vars.push(("REQUEST_BODY".into(), body_str.to_string()));
-                server_vars.push((
-                    "CONTENT_LENGTH".into(),
-                    body.len().to_string(),
-                ));
-            }
+            server_vars.push(("CONTENT_LENGTH".into(), body.len().to_string()));
         }
 
         if profiling_enabled {

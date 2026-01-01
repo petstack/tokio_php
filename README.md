@@ -11,7 +11,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 - **High Performance** — Async I/O via Tokio runtime, zero-copy architecture
 - **HTTP/1.1 & HTTP/2** — Full protocol support with automatic negotiation
 - **HTTPS/TLS 1.3** — Secure connections with ALPN for HTTP/2
-- **HTTP QUERY Method** — Safe requests with body ([RFC draft](https://httpwg.org/http-extensions/draft-ietf-httpbis-safe-method-w-body.html))
+- **All HTTP Methods** — GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD, QUERY
 - **Worker Pool** — Multi-threaded PHP execution with configurable workers
 - **OPcache + JIT** — Bytecode caching and tracing JIT compilation
 - **Brotli Compression** — Automatic compression for text responses

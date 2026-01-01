@@ -14,6 +14,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 |---------|------------------------------------------------------------|
 | [Architecture](architecture.md) | System design, components, request flow                    |
 | [HTTP/2 & TLS](http2-tls.md) | HTTP/1.1, HTTP/2, HTTPS with TLS 1.3                       |
+| [HTTP Methods](http-methods.md) | GET, POST, PUT, PATCH, DELETE, OPTIONS, QUERY              |
 | [Middleware](middleware.md) | Rate limiting, compression, logging, error pages           |
 | [Internal Server](internal-server.md) | Health checks, Prometheus metrics, monitoring              |
 | [Superglobals](superglobals.md) | `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST` |
@@ -50,13 +51,13 @@ curl http://localhost:8080/
 ### Build from Source
 
 ```bash
-# Build and run (PHP 8.4)
+# Build and run (PHP 8.5 default)
 docker compose build
 docker compose up -d
 
-# Build with PHP 8.5
-PHP_VERSION=8.5 docker compose build
-PHP_VERSION=8.5 docker compose up -d
+# Build with PHP 8.4
+PHP_VERSION=8.4 docker compose build
+PHP_VERSION=8.4 docker compose up -d
 
 # With TLS/HTTPS
 docker compose --profile tls up -d

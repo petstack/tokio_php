@@ -453,48 +453,48 @@ curl -k https://localhost:8443/index.php  # $_SERVER['SERVER_PROTOCOL'] = HTTP/2
 
 Full superglobals: `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST`
 
-## HTTP QUERY Method
+## HTTP Methods
 
-Support for the [HTTP QUERY method](https://httpwg.org/http-extensions/draft-ietf-httpbis-safe-method-w-body.html) - a safe, idempotent method that allows request bodies (like POST, but cacheable like GET).
+All standard HTTP methods are supported:
 
-### Usage
+| Method | Body | `php://input` | `$_POST` parsing |
+|--------|------|---------------|------------------|
+| GET | No | — | — |
+| HEAD | No | — | — |
+| POST | Yes | ✓ | ✓ (urlencoded/multipart) |
+| PUT | Yes | ✓ | — |
+| PATCH | Yes | ✓ | — |
+| DELETE | May | ✓ | — |
+| OPTIONS | Yes | ✓ | — |
+| QUERY | Yes | ✓ | ✓ (urlencoded/multipart) |
 
-```bash
-# QUERY with JSON body
-curl -X QUERY -H "Content-Type: application/json" \
-  -d '{"search":"test","limit":10}' \
-  http://localhost:8080/api.php
-
-# QUERY with URL-encoded body (parsed into $_POST)
-curl -X QUERY -H "Content-Type: application/x-www-form-urlencoded" \
-  -d 'search=test&limit=10' \
-  http://localhost:8080/api.php
-```
-
-### PHP Access
+### Request Body Access
 
 ```php
 <?php
-// Request method
-$_SERVER['REQUEST_METHOD'];  // "QUERY"
+// Method name
+$_SERVER['REQUEST_METHOD'];  // "PUT", "PATCH", "QUERY", etc.
 
-// Raw body (for JSON, XML, etc.)
-$_SERVER['REQUEST_BODY'];    // '{"search":"test","limit":10}'
+// Raw body via php://input (standard PHP way)
+$body = file_get_contents('php://input');
+$data = json_decode($body, true);
+
+// Content info
+$_SERVER['CONTENT_TYPE'];    // "application/json"
 $_SERVER['CONTENT_LENGTH'];  // Body size in bytes
 
-// For URL-encoded bodies, parsed into $_POST
-$_POST['search'];            // "test"
-
-// Query string still works
-$_GET['page'];               // from ?page=1
+// For urlencoded POST, data is also in $_POST
+$_POST['field'];
 ```
 
-### Key Properties
+### QUERY Method
 
-- **Safe** - Does not modify server state (like GET)
-- **Idempotent** - Can be retried without side effects
-- **Cacheable** - Responses can be cached (unlike POST)
-- **Body support** - Can send query data in request body
+The [HTTP QUERY method](https://httpwg.org/http-extensions/draft-ietf-httpbis-safe-method-w-body.html) is a safe, idempotent method with body support (like POST, but cacheable like GET).
+
+```bash
+curl -X QUERY -H "Content-Type: application/json" \
+  -d '{"search":"test"}' http://localhost:8080/api.php
+```
 
 ## Distributed Tracing
 
@@ -516,7 +516,6 @@ W3C Trace Context support for request correlation across microservices.
 | `SPAN_ID` | 16-char span identifier | `b7ad6b7169203331` |
 | `PARENT_SPAN_ID` | Parent span (if propagated) | `a1b2c3d4e5f67890` |
 | `HTTP_TRACEPARENT` | Full W3C traceparent header | `00-0af7...-b7ad...-01` |
-| `REQUEST_BODY` | Raw request body (POST/QUERY) | `{"search":"test"}` |
 
 ### Usage in PHP
 

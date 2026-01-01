@@ -464,20 +464,43 @@ void tokio_sapi_set_post_data(const char *data, size_t len)
     tokio_request_context *ctx = get_request_context();
     if (ctx == NULL) return;
 
+    /* Free previous POST data */
     if (ctx->post_data) {
         free(ctx->post_data);
+        ctx->post_data = NULL;
+        ctx->post_data_len = 0;
+    }
+
+    /* Close previous request body stream if any */
+    if (SG(request_info).request_body) {
+        php_stream_close(SG(request_info).request_body);
+        SG(request_info).request_body = NULL;
     }
 
     if (data && len > 0) {
+        /* Store copy for our context */
         ctx->post_data = (char*)malloc(len + 1);
         if (ctx->post_data) {
             memcpy(ctx->post_data, data, len);
             ctx->post_data[len] = '\0';
             ctx->post_data_len = len;
         }
+
+        /* Create temp stream for php://input
+         * TEMP_STREAM_DEFAULT allows both read and write */
+        php_stream *stream = php_stream_temp_create(TEMP_STREAM_DEFAULT, len);
+        if (stream) {
+            php_stream_write(stream, data, len);
+            php_stream_rewind(stream);
+            SG(request_info).request_body = stream;
+        }
+
+        /* Set content length */
+        SG(request_info).content_length = len;
     } else {
         ctx->post_data = NULL;
         ctx->post_data_len = 0;
+        SG(request_info).content_length = 0;
     }
     ctx->post_data_read = 0;
 }
@@ -617,6 +640,13 @@ int tokio_sapi_request_init(uint64_t request_id)
 
 void tokio_sapi_request_shutdown(void)
 {
+    /* Close request body stream if any */
+    if (SG(request_info).request_body) {
+        php_stream_close(SG(request_info).request_body);
+        SG(request_info).request_body = NULL;
+    }
+    SG(request_info).content_length = 0;
+
     free_request_context();
     tls_request_id = 0;
     tls_heartbeat_ctx = NULL;
