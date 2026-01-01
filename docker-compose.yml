@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
       args:
         # PHP version: 8.4 or 8.5
-        PHP_VERSION: ${PHP_VERSION:-8.4}
+        PHP_VERSION: ${PHP_VERSION:-8.5}
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -60,7 +60,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PHP_VERSION: ${PHP_VERSION:-8.4}
+        PHP_VERSION: ${PHP_VERSION:-8.5}
     ports:
       - "8443:8443"
       - "9090:9090"

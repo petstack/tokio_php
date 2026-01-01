@@ -69,7 +69,7 @@ $enabled = $status && $status['opcache_enabled'];
         $memUsed = round($memory['used_memory'] / 1024 / 1024, 1);
         $memFree = round($memory['free_memory'] / 1024 / 1024, 1);
         $memTotal = $memUsed + $memFree;
-        $memPct = round($memUsed / $memTotal * 100);
+        $memPct = $memTotal > 0 ? round($memUsed / $memTotal * 100) : 0;
     ?>
 
     <div class="section">
@@ -114,7 +114,7 @@ $enabled = $status && $status['opcache_enabled'];
 
     <?php if (isset($status['jit']) && $status['jit']['enabled']):
         $jit = $status['jit'];
-        $jitUsed = round($jit['buffer_used'] / 1024 / 1024, 1);
+        $jitUsed = round(($jit['buffer_size'] - $jit['buffer_free']) / 1024 / 1024, 1);
         $jitTotal = round($jit['buffer_size'] / 1024 / 1024, 1);
         $jitPct = round($jitUsed / $jitTotal * 100);
     ?>
