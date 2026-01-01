@@ -202,20 +202,27 @@ int tokio_sapi_execute_script(const char *path);
 
 ## Performance Comparison
 
-ExtExecutor is **2x faster** than PhpExecutor due to different script execution methods:
+Performance depends on script complexity:
 
-| Executor | Method | RPS (index.php) | RPS (bench.php) |
-|----------|--------|-----------------|-----------------|
-| **ExtExecutor** (USE_EXT=1) | `php_execute_script()` | **33,677** | **37,911** |
-| PhpExecutor (default) | `zend_eval_string()` | 16,208 | 19,555 |
+| Script | PhpExecutor | ExtExecutor | Difference |
+|--------|-------------|-------------|------------|
+| bench.php (minimal) | **22,821** RPS | 20,420 RPS | PhpExecutor +12% |
+| index.php (superglobals) | 17,119 RPS | **25,307** RPS | **ExtExecutor +48%** |
 
-**Why ExtExecutor is faster:**
+*Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s*
 
-1. **`php_execute_script()`** - Native PHP file execution, fully optimized for OPcache/JIT
-2. **FFI superglobals** - Direct C calls to set `$_GET`, `$_POST`, `$_SERVER`, etc.
-3. **No parsing overhead** - PhpExecutor re-parses wrapper code on every request
+**ExtExecutor is faster for real apps** because:
 
-**Production recommendation:**
+1. **FFI batch API** - Sets all `$_SERVER` vars in one C call
+2. **`php_execute_script()`** - Native PHP execution, fully OPcache/JIT optimized
+3. **No string parsing** - PhpExecutor builds and parses PHP code every request
+
+**PhpExecutor is faster for minimal scripts** because:
+
+1. **No extension overhead** - tokio_sapi adds ~100µs per request init/shutdown
+2. **Simple eval** - For tiny scripts, `zend_eval_string()` is very fast
+
+**Production recommendation:** Most apps use superglobals, so ExtExecutor is recommended.
 ```bash
 USE_EXT=1 docker compose up -d
 ```

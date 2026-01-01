@@ -68,18 +68,33 @@ Selection order in main.rs:
 
 ### Executor Performance Comparison
 
-ExtExecutor is **2x faster** than PhpExecutor due to different script execution methods:
+Performance depends on script complexity:
 
-| Executor | Method | RPS (index.php) | RPS (bench.php) |
-|----------|--------|-----------------|-----------------|
-| **ExtExecutor** | `php_execute_script()` | **33,677** | **37,911** |
-| PhpExecutor | `zend_eval_string()` | 16,208 | 19,555 |
+| Script | PhpExecutor | ExtExecutor | Winner |
+|--------|-------------|-------------|--------|
+| bench.php (minimal) | **22,821** RPS | 20,420 RPS | PhpExecutor +12% |
+| index.php (superglobals) | 17,119 RPS | **25,307** RPS | **ExtExecutor +48%** |
 
-**Why ExtExecutor is faster:**
+*Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s, Apple M3 Pro*
 
-1. **`php_execute_script()`** - Native PHP file execution, fully optimized for OPcache/JIT
-2. **FFI superglobals** - Direct C calls to set `$_GET`, `$_POST`, `$_SERVER`, etc.
-3. **No parsing overhead** - PhpExecutor re-parses wrapper code on every request
+**When to use which:**
+
+| Use Case | Recommendation |
+|----------|----------------|
+| Real apps (Laravel, Symfony, WordPress) | **USE_EXT=1** — 48% faster with superglobals |
+| Minimal scripts (health checks, APIs) | USE_EXT=0 — less extension overhead |
+| Production | **USE_EXT=1** — most apps use superglobals |
+
+**Why ExtExecutor is faster for real apps:**
+
+1. **FFI batch API** — sets all `$_SERVER` vars in one C call vs building PHP string
+2. **`php_execute_script()`** — native PHP execution, fully OPcache/JIT optimized
+3. **No string parsing** — PhpExecutor builds and parses PHP code every request
+
+**Why PhpExecutor is faster for minimal scripts:**
+
+1. **No extension overhead** — tokio_sapi adds ~100µs per request init/shutdown
+2. **Simple eval** — for tiny scripts, `zend_eval_string()` is very fast
 
 **Production recommendation:**
 ```bash

@@ -288,16 +288,29 @@ pub trait ScriptExecutor: Send + Sync {
 
 ### Available Executors
 
-| Executor | Selection | Method | Performance |
-|----------|-----------|--------|-------------|
-| `ExtExecutor` | `USE_EXT=1` | `php_execute_script()` + FFI | **~36K RPS** (recommended) |
-| `PhpExecutor` | Default | `zend_eval_string()` | ~16K RPS |
-| `StubExecutor` | `USE_STUB=1` | No PHP | ~100K RPS (benchmarking) |
+| Executor | Selection | Method | Best For |
+|----------|-----------|--------|----------|
+| `ExtExecutor` | `USE_EXT=1` | `php_execute_script()` + FFI | **Real apps (48% faster)** |
+| `PhpExecutor` | Default | `zend_eval_string()` | Minimal scripts |
+| `StubExecutor` | `USE_STUB=1` | No PHP | Benchmarking only |
 
-**ExtExecutor is 2x faster** because:
-- Uses native `php_execute_script()` - fully optimized for OPcache/JIT
-- Sets superglobals via direct FFI calls (no eval parsing)
-- PhpExecutor re-parses wrapper code on every request
+### Performance Comparison
+
+| Script | PhpExecutor | ExtExecutor | Difference |
+|--------|-------------|-------------|------------|
+| bench.php (minimal) | **22,821** RPS | 20,420 RPS | PhpExecutor +12% |
+| index.php (superglobals) | 17,119 RPS | **25,307** RPS | **ExtExecutor +48%** |
+
+*Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s*
+
+**ExtExecutor is faster for real apps** because:
+- FFI batch API sets all `$_SERVER` vars in one C call
+- Uses native `php_execute_script()` - fully OPcache/JIT optimized
+- No PHP string parsing overhead
+
+**PhpExecutor is faster for minimal scripts** because:
+- No tokio_sapi extension overhead (~100µs per request)
+- Simple `zend_eval_string()` is very fast for tiny scripts
 
 Selection priority in `main.rs`:
 1. `USE_STUB=1` → StubExecutor

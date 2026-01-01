@@ -68,32 +68,26 @@ docker compose logs -f
 
 ## Performance
 
-### tokio_php vs nginx + PHP-FPM
-
-| Server | RPS (bench.php) | RPS (index.php) | Latency |
-|--------|-----------------|-----------------|---------|
-| **tokio_php (ExtExecutor)** | **35,350** | **32,913** | 2.8ms |
-| nginx + PHP-FPM | 13,890 | 12,471 | 7.2ms |
-
-**tokio_php is 2.5x faster** — no FastCGI overhead, threads instead of processes.
-
 ### Executor Comparison
 
-| Executor | Method | RPS (bench.php) |
-|----------|--------|-----------------|
-| **ExtExecutor** | `php_execute_script()` | **37,911** |
-| PhpExecutor | `zend_eval_string()` | 19,555 |
+Performance depends on script complexity:
 
-Use `USE_EXT=1` for production (2x faster).
+| Script | PhpExecutor | ExtExecutor | Difference |
+|--------|-------------|-------------|------------|
+| bench.php (minimal) | **22,821** RPS | 20,420 RPS | PhpExecutor +12% |
+| index.php (real app) | 17,119 RPS | **25,307** RPS | **ExtExecutor +48%** |
 
-### tokio_php vs FrankenPHP
+*Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s, Apple M3 Pro*
 
-| Server | RPS (bench.php) | RPS (index.php) | Latency |
-|--------|-----------------|-----------------|---------|
-| **tokio_php** | **32,600** | **30,250** | 3.1ms |
-| FrankenPHP | 18,350 | 17,530 | 5.5ms |
+**Recommendation:** Use `USE_EXT=1` for production — real apps use superglobals.
 
-**tokio_php is 1.8x faster** — zero-cost Rust FFI vs Go CGO overhead.
+### When to use which executor
+
+| Use Case | Recommendation |
+|----------|----------------|
+| Laravel, Symfony, WordPress | **USE_EXT=1** — 48% faster |
+| Minimal APIs, health checks | USE_EXT=0 — less overhead |
+| Production (default) | **USE_EXT=1** |
 
 ### OPcache Impact
 
@@ -102,7 +96,6 @@ Use `USE_EXT=1` for production (2x faster).
 | No OPcache | ~12,400 | 8.27ms |
 | OPcache | ~22,760 | 5.40ms |
 | OPcache + JIT | ~23,650 | 4.46ms |
-| ExtExecutor + JIT | ~35,000+ | ~2.8ms |
 
 ## Requirements
 
