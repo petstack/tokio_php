@@ -28,7 +28,7 @@ USE_STUB=1 docker compose up -d          # Stub mode (no PHP, for benchmarks)
 USE_EXT=1 docker compose up -d           # ExtExecutor with tokio_sapi extension
 PROFILE=1 docker compose up -d           # Enable profiling
 
-# Run with TLS/HTTPS (ports 8443, 8444)
+# Run with TLS/HTTPS (port 8443)
 docker compose --profile tls up -d
 
 # Benchmark
@@ -40,7 +40,7 @@ wrk -t4 -c100 -d10s http://localhost:8080/index.php
 ### Core Components
 
 - `src/main.rs` - Entry point, runtime initialization, executor selection, TLS config
-- `src/server.rs` - Hyper-based HTTP/1.1 + HTTP/2 server, TLS support, request parsing
+- `src/server/` - Hyper-based HTTP/1.1 + HTTP/2 server, TLS support, request parsing
 - `src/executor/` - Script execution backends (trait-based, pluggable)
 - `src/types.rs` - ScriptRequest/ScriptResponse data structures
 - `src/profiler.rs` - Request timing profiler with TLS metrics
@@ -195,7 +195,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
-| `USE_EXT` | `0` | **Recommended.** Use ExtExecutor with tokio_sapi extension (2x faster) |
+| `USE_EXT` | `1` | **Recommended.** Use ExtExecutor with tokio_sapi extension (2x faster) |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
@@ -209,11 +209,11 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 ### Configuration Examples
 
 ```bash
-# Minimal (all defaults, uses PhpExecutor)
+# Minimal (all defaults, uses ExtExecutor)
 docker compose up -d
 
-# Production (recommended - 2x faster with ExtExecutor)
-USE_EXT=1 PHP_WORKERS=8 INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
+# Production with tuning
+PHP_WORKERS=8 docker compose up -d
 
 # Benchmark mode (no PHP execution)
 USE_STUB=1 docker compose up -d
@@ -430,10 +430,8 @@ docker compose exec tokio_php ps aux
 
 | Service | Port | Description |
 |---------|------|-------------|
-| `tokio_php_embed` | 8080 | HTTP, PhpExecutor |
-| `tokio_php_sapi` | 8081 | HTTP, PhpSapiExecutor |
-| `tokio_php_embed_tls` | 8443 | HTTPS, PhpExecutor (profile: tls) |
-| `tokio_php_sapi_tls` | 8444 | HTTPS, PhpSapiExecutor (profile: tls) |
+| `tokio_php` | 8080, 9090 | HTTP + internal server |
+| `tokio_php_tls` | 8443, 9090 | HTTPS + internal server (profile: tls) |
 
 ## Testing Protocols
 
