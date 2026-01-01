@@ -54,51 +54,51 @@ impl Config {
         use tracing::info;
 
         info!("Configuration loaded:");
-        info!("  Listen: {}", self.server.listen_addr);
-        info!("  Document root: {:?}", self.server.document_root);
-        info!("  Workers: {}", self.executor.worker_count());
-        info!("  Queue capacity: {}", self.executor.actual_queue_capacity());
-        info!("  Executor: {:?}", self.executor.executor_type);
+        info!("Listen: {}", self.server.listen_addr);
+        info!("Document root: {:?}", self.server.document_root);
+        info!("Workers: {}", self.executor.worker_count());
+        info!("Queue capacity: {}", self.executor.actual_queue_capacity());
+        info!("Executor: {:?}", self.executor.executor_type);
 
         if let Some(ref index) = self.server.index_file {
-            info!("  Index file: {}", index);
+            info!("Index file: {}", index);
         }
 
         if let Some(ref internal) = self.server.internal_addr {
-            info!("  Internal server: {}", internal);
+            info!("Internal server: {}", internal);
         }
 
         if self.server.tls.is_enabled() {
-            info!("  TLS: enabled");
+            info!("TLS: enabled");
         }
 
         if self.server.static_cache_ttl.is_enabled() {
             info!(
-                "  Static cache TTL: {}s",
+                "Static cache TTL: {}s",
                 self.server.static_cache_ttl.as_secs()
             );
         } else {
-            info!("  Static cache: disabled");
+            info!("Static cache: disabled");
         }
 
         if self.server.request_timeout.is_enabled() {
             info!(
-                "  Request timeout: {}s",
+                "Request timeout: {}s",
                 self.server.request_timeout.as_secs()
             );
         } else {
-            info!("  Request timeout: disabled");
+            info!("Request timeout: disabled");
         }
 
         if let Some(limit) = self.middleware.rate_limit {
             info!(
-                "  Rate limit: {} req/{}s per IP",
+                "Rate limit: {} req/{}s per IP",
                 limit, self.middleware.rate_window
             );
         }
 
         if self.middleware.access_log {
-            info!("  Access log: enabled");
+            info!("Access log: enabled");
         }
     }
 }
