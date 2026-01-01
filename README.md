@@ -15,6 +15,8 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 - **OPcache + JIT** — Bytecode caching and tracing JIT compilation
 - **Brotli Compression** — Automatic compression for text responses
 - **Static File Serving** — Efficient caching with configurable TTL
+- **Rate Limiting** — Per-IP request throttling with fixed window
+- **Distributed Tracing** — W3C Trace Context propagation
 - **Graceful Shutdown** — Connection draining for zero-downtime deployments
 - **PHP 8.4 & 8.5** — Support for latest PHP versions (ZTS)
 
@@ -53,6 +55,7 @@ PHP_VERSION=8.5 docker compose up -d
 |----------|---------|-------------|
 | `PHP_VERSION` | `8.4` | PHP version (8.4 or 8.5) |
 | `PHP_WORKERS` | `0` | Worker count (0 = auto-detect CPU cores) |
+| `QUEUE_CAPACITY` | `0` | Max pending requests (0 = workers × 100) |
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
 | `INDEX_FILE` | — | Single entry point (e.g., `index.php`) |
@@ -64,7 +67,9 @@ PHP_VERSION=8.5 docker compose up -d
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration |
 | `ERROR_PAGES_DIR` | — | Custom HTML error pages directory |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout |
+| `REQUEST_TIMEOUT` | `2m` | Request timeout (30s, 2m, 5m, off) |
 | `INTERNAL_ADDR` | — | Internal server for /health, /metrics |
+| `ACCESS_LOG` | `0` | Enable access logs (0 = disabled) |
 | `RATE_LIMIT` | `0` | Max requests per IP (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window (seconds) |
 
@@ -119,9 +124,10 @@ Full PHP superglobals support:
 When using `USE_EXT=1`, additional PHP functions are available:
 
 ```php
-tokio_request_id();   // int - unique request ID
-tokio_worker_id();    // int - worker thread ID (0..N-1)
-tokio_server_info();  // array - server information
+tokio_request_id();            // int - unique request ID
+tokio_worker_id();             // int - worker thread ID (0..N-1)
+tokio_server_info();           // array - server information
+tokio_request_heartbeat(30);   // bool - extend request timeout by N seconds
 ```
 
 ## Profiling
@@ -130,7 +136,7 @@ Enable profiling to measure request timing:
 
 ```bash
 PROFILE=1 docker compose up -d
-curl -sI -H "X-Profile: 1" http://localhost:8081/index.php | grep X-Profile
+curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep X-Profile
 ```
 
 Response headers include:
@@ -154,8 +160,8 @@ Health checks and metrics endpoint:
 ```bash
 INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 
-curl http://localhost:9091/health
-curl http://localhost:9091/metrics
+curl http://localhost:9090/health
+curl http://localhost:9090/metrics
 ```
 
 ## Benchmark
@@ -165,7 +171,7 @@ curl http://localhost:9091/metrics
 brew install wrk  # macOS
 
 # Run benchmark
-wrk -t4 -c100 -d10s http://localhost:8081/index.php
+wrk -t4 -c100 -d10s http://localhost:8080/index.php
 ```
 
 ## Requirements
