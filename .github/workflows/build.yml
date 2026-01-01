@@ -43,7 +43,7 @@ jobs:
             ALPINE_VERSION=3.23
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:php${{ matrix.php_version }}-alpine3.23
+            diolektor/tokio_php:php${{ matrix.php_version }}-alpine3.23
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -61,16 +61,16 @@ jobs:
 
       - name: Create multi-arch manifests
         run: |
-          docker manifest create ${{ env.IMAGE_NAME }}:latest \
-            ${{ env.IMAGE_NAME }}:php8.5-alpine3.23
-          docker manifest push ${{ env.IMAGE_NAME }}:latest
+          docker manifest create diolektor/tokio_php:latest \
+            diolektor/tokio_php:php8.5-alpine3.23
+          docker manifest push diolektor/tokio_php:latest
 
           # PHP 8.5
-          docker manifest create ${{ env.IMAGE_NAME }}:php8.5 \
-            ${{ env.IMAGE_NAME }}:php8.5-alpine3.23
-          docker manifest push ${{ env.IMAGE_NAME }}:php8.5
+          docker manifest create diolektor/tokio_php:php8.5 \
+            diolektor/tokio_php:php8.5-alpine3.23
+          docker manifest push diolektor/tokio_php:php8.5
 
           # PHP 8.4
-          docker manifest create ${{ env.IMAGE_NAME }}:php8.4 \
-            ${{ env.IMAGE_NAME }}:php8.4-alpine3.23
-          docker manifest push ${{ env.IMAGE_NAME }}:php8.4
+          docker manifest create diolektor/tokio_php:php8.4 \
+            diolektor/tokio_php:php8.4-alpine3.23
+          docker manifest push diolektor/tokio_php:php8.4
