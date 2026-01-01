@@ -453,6 +453,49 @@ curl -k https://localhost:8443/index.php  # $_SERVER['SERVER_PROTOCOL'] = HTTP/2
 
 Full superglobals: `$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_REQUEST`
 
+## HTTP QUERY Method
+
+Support for the [HTTP QUERY method](https://httpwg.org/http-extensions/draft-ietf-httpbis-safe-method-w-body.html) - a safe, idempotent method that allows request bodies (like POST, but cacheable like GET).
+
+### Usage
+
+```bash
+# QUERY with JSON body
+curl -X QUERY -H "Content-Type: application/json" \
+  -d '{"search":"test","limit":10}' \
+  http://localhost:8080/api.php
+
+# QUERY with URL-encoded body (parsed into $_POST)
+curl -X QUERY -H "Content-Type: application/x-www-form-urlencoded" \
+  -d 'search=test&limit=10' \
+  http://localhost:8080/api.php
+```
+
+### PHP Access
+
+```php
+<?php
+// Request method
+$_SERVER['REQUEST_METHOD'];  // "QUERY"
+
+// Raw body (for JSON, XML, etc.)
+$_SERVER['REQUEST_BODY'];    // '{"search":"test","limit":10}'
+$_SERVER['CONTENT_LENGTH'];  // Body size in bytes
+
+// For URL-encoded bodies, parsed into $_POST
+$_POST['search'];            // "test"
+
+// Query string still works
+$_GET['page'];               // from ?page=1
+```
+
+### Key Properties
+
+- **Safe** - Does not modify server state (like GET)
+- **Idempotent** - Can be retried without side effects
+- **Cacheable** - Responses can be cached (unlike POST)
+- **Body support** - Can send query data in request body
+
 ## Distributed Tracing
 
 W3C Trace Context support for request correlation across microservices.
@@ -473,6 +516,7 @@ W3C Trace Context support for request correlation across microservices.
 | `SPAN_ID` | 16-char span identifier | `b7ad6b7169203331` |
 | `PARENT_SPAN_ID` | Parent span (if propagated) | `a1b2c3d4e5f67890` |
 | `HTTP_TRACEPARENT` | Full W3C traceparent header | `00-0af7...-b7ad...-01` |
+| `REQUEST_BODY` | Raw request body (POST/QUERY) | `{"search":"test"}` |
 
 ### Usage in PHP
 

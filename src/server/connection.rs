@@ -375,8 +375,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .map(accepts_html)
             .unwrap_or(false);
 
-        let mut response = match *req.method() {
-            Method::GET | Method::POST | Method::HEAD => {
+        let mut response = match req.method().as_str() {
+            "GET" | "POST" | "HEAD" | "QUERY" => {
                 let mut resp = self.process_request(req, remote_addr, tls_info, &trace_ctx).await;
 
                 // HEAD: return headers only, no body
@@ -619,8 +619,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             query_parse_us = query_start.elapsed().as_micros() as u64;
         }
 
-        // Handle POST body
-        let (post_params, files) = if method == Method::POST {
+        // Handle POST/QUERY body
+        let method_str = method.as_str();
+        let (post_params, files, raw_body) = if method_str == "POST" || method_str == "QUERY" {
             let body_read_start = Instant::now();
             let body_bytes = match req.collect().await {
                 Ok(collected) => collected.to_bytes(),
@@ -635,6 +636,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             if profiling_enabled {
                 body_read_us = body_read_start.elapsed().as_micros() as u64;
             }
+
+            // Store raw body for php://input (QUERY method especially needs this)
+            let raw_body_bytes = body_bytes.clone();
 
             let body_parse_start = Instant::now();
             let result = if content_type_str.starts_with("application/x-www-form-urlencoded") {
@@ -655,14 +659,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     }
                 }
             } else {
+                // For JSON, XML, etc. - body available via raw_body
                 (Vec::new(), Vec::new())
             };
             if profiling_enabled {
                 body_parse_us = body_parse_start.elapsed().as_micros() as u64;
             }
-            result
+            (result.0, result.1, Some(raw_body_bytes))
         } else {
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), None)
         };
 
         // Resolve file path
@@ -802,6 +807,18 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             server_vars.push(("PARENT_SPAN_ID".into(), parent.clone()));
         }
 
+        // Raw request body for POST/QUERY (accessible in PHP as $_SERVER['REQUEST_BODY'])
+        // Useful for JSON/XML queries where body isn't parsed into $_POST
+        if let Some(ref body) = raw_body {
+            if let Ok(body_str) = std::str::from_utf8(body) {
+                server_vars.push(("REQUEST_BODY".into(), body_str.to_string()));
+                server_vars.push((
+                    "CONTENT_LENGTH".into(),
+                    body.len().to_string(),
+                ));
+            }
+        }
+
         if profiling_enabled {
             server_vars_us = server_vars_start.elapsed().as_micros() as u64;
         }
@@ -826,6 +843,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 cookies,
                 server_vars,
                 files,
+                raw_body: raw_body.map(|b| b.to_vec()),
                 profile: profiling_enabled,
                 timeout: self.request_timeout.as_duration(),
             };

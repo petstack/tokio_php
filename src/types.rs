@@ -48,6 +48,8 @@ pub struct ScriptRequest {
     pub server_vars: ParamList,
     /// Uploaded files ($_FILES)
     pub files: Vec<(String, Vec<UploadedFile>)>,
+    /// Raw request body for php://input (POST/QUERY methods)
+    pub raw_body: Option<Vec<u8>>,
     /// Enable profiling for this request
     pub profile: bool,
     /// Request timeout (None = no timeout)

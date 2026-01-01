@@ -12,6 +12,7 @@ High-performance async PHP server written in Rust. Uses Tokio for async I/O and 
 
 - **HTTP/1.1 & HTTP/2** - Full protocol support with automatic detection
 - **HTTPS/TLS 1.3** - Secure connections with ALPN negotiation
+- **HTTP QUERY Method** - Safe requests with body (RFC draft)
 - **Worker Pool** - Multi-threaded PHP execution with configurable workers
 - **OPcache & JIT** - PHP 8.4/8.5 with tracing JIT enabled
 - **Brotli Compression** - Automatic response compression
