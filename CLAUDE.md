@@ -281,59 +281,39 @@ curl -sIk -H "X-Profile: 1" https://localhost:8443/index.php | grep X-Profile
 
 All logs use unified JSON format. Enable access logs with `ACCESS_LOG=1`.
 
-### Log Format
-
 ```json
-{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"app","msg":"Server listening on http://0.0.0.0:8080","ctx":{"service":"tokio_php"},"data":{}}
+{"ts":"2025-01-15T10:30:00.123Z","level":"info","type":"app","msg":"Server started","ctx":{"service":"tokio_php"},"data":{}}
 ```
+
+### Quick Reference
 
 | Field | Description |
 |-------|-------------|
-| `ts` | ISO 8601 timestamp with milliseconds, UTC |
+| `ts` | ISO 8601 timestamp (UTC) |
 | `level` | `debug`, `info`, `warn`, `error` |
-| `type` | `app`, `access`, `error` — log type |
-| `msg` | Short human-readable message |
-| `ctx` | Context: service, request_id, etc. |
-| `data` | Type-specific data |
+| `type` | `app`, `access`, `error` |
+| `msg` | Human-readable message |
+| `ctx` | Context: service, request_id, trace_id |
+| `data` | Structured data |
 
-### Access Log Example
-
-```json
-{"ts":"2025-01-15T10:30:00.456Z","level":"info","type":"access","msg":"GET /api/users 200","ctx":{"service":"tokio_php","request_id":"65bdbab40000"},"data":{"method":"GET","path":"/api/users","status":200,"bytes":1234,"duration_ms":5.25,"ip":"10.0.0.1","ua":"curl/8.0"}}
-```
-
-### Access Log Data Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `method` | string | HTTP method |
-| `path` | string | Request path |
-| `query` | string? | Query string |
-| `http` | string | HTTP version |
-| `status` | number | Response status code |
-| `bytes` | number | Response body size |
-| `duration_ms` | number | Request duration (ms) |
-| `ip` | string | Client IP |
-| `ua` | string? | User-Agent |
-| `referer` | string? | Referer |
-| `xff` | string? | X-Forwarded-For |
-| `tls` | string? | TLS protocol |
-
-### Filtering
+### Filtering with jq
 
 ```bash
-# All logs
-RUST_LOG=tokio_php=info
-
-# Debug mode
-RUST_LOG=tokio_php=debug
-
-# Filter by type with jq
 docker compose logs | jq -c 'select(.type == "access")'
-docker compose logs | jq -c 'select(.type == "app")'
+docker compose logs | jq -c 'select(.level == "error")'
+docker compose logs | jq -c 'select(.data.status >= 500)'
 ```
 
-Compatible with: Fluentd, Fluent Bit, Logstash, CloudWatch, Loki, Vector.
+### Monolog Integration
+
+Use `TokioPhpFormatter` for consistent log format in PHP apps:
+
+```php
+$handler = new StreamHandler('php://stderr');
+$handler->setFormatter(new TokioPhpFormatter('myapp'));
+```
+
+See [docs/logging.md](docs/logging.md) for full documentation, Laravel/Symfony integration, and log aggregation setup.
 
 ## Request ID
 
