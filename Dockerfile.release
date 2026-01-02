@@ -116,6 +116,8 @@ COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
 # Create document root directory
 RUN mkdir -p /var/www/html
 
+COPY www/welcome.php /var/www/html/index.php
+
 WORKDIR /var/www/html
 
 EXPOSE 8080
