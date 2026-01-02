@@ -96,7 +96,7 @@ use tracing::{debug, error, warn};
 
 use super::access_log;
 use super::config::TlsInfo;
-use super::error_pages::{accepts_html, ErrorPages};
+use super::error_pages::{accepts_html, status_reason_phrase, ErrorPages};
 use super::rate_limit::RateLimiter;
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
@@ -393,17 +393,13 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 .unwrap(),
         };
 
-        // Apply custom error page if:
-        // 1. Error pages are configured
-        // 2. Status is 4xx or 5xx
-        // 3. Body is empty
-        // 4. Client accepts HTML
-        if client_accepts_html && !self.error_pages.is_empty() {
-            let status = response.status().as_u16();
-            if (400..600).contains(&status) {
-                // Check if body is empty
-                let body_is_empty = response.body().size_hint().exact() == Some(0);
-                if body_is_empty {
+        // Apply custom error page or default reason phrase for 4xx/5xx responses
+        let status = response.status().as_u16();
+        if (400..600).contains(&status) {
+            let body_is_empty = response.body().size_hint().exact() == Some(0);
+            if body_is_empty {
+                // Try custom error page first (if client accepts HTML)
+                if client_accepts_html {
                     if let Some(error_html) = self.error_pages.get(status) {
                         let (mut parts, _) = response.into_parts();
                         parts.headers.insert(
@@ -415,7 +411,33 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             error_html.len().to_string().parse().unwrap(),
                         );
                         response = Response::from_parts(parts, Full::new(error_html.clone()));
+                    } else {
+                        // No custom page, use default reason phrase
+                        let reason = status_reason_phrase(status);
+                        let (mut parts, _) = response.into_parts();
+                        parts.headers.insert(
+                            hyper::header::CONTENT_TYPE,
+                            "text/plain; charset=utf-8".parse().unwrap(),
+                        );
+                        parts.headers.insert(
+                            hyper::header::CONTENT_LENGTH,
+                            reason.len().to_string().parse().unwrap(),
+                        );
+                        response = Response::from_parts(parts, Full::new(Bytes::from(reason)));
                     }
+                } else {
+                    // Non-HTML client, use default reason phrase
+                    let reason = status_reason_phrase(status);
+                    let (mut parts, _) = response.into_parts();
+                    parts.headers.insert(
+                        hyper::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8".parse().unwrap(),
+                    );
+                    parts.headers.insert(
+                        hyper::header::CONTENT_LENGTH,
+                        reason.len().to_string().parse().unwrap(),
+                    );
+                    response = Response::from_parts(parts, Full::new(Bytes::from(reason)));
                 }
             }
         }

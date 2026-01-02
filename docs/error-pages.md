@@ -4,7 +4,39 @@ tokio_php supports custom HTML error pages for 4xx and 5xx HTTP responses, simil
 
 ## Overview
 
-When a PHP script returns an error response (4xx/5xx) with an empty body, tokio_php can automatically serve a custom HTML page instead of a plain text message. This provides a better user experience with branded, styled error pages.
+When a PHP script returns an error response (4xx/5xx) with an empty body, tokio_php automatically provides a response body:
+
+1. **HTML clients** (`Accept: text/html`) — custom HTML page if configured, otherwise plain text
+2. **API clients** (`Accept: application/json`, etc.) — plain text reason phrase
+
+### Default Behavior (No Custom Pages)
+
+Without `ERROR_PAGES_DIR`, the server returns standard HTTP reason phrases:
+
+```bash
+$ curl http://localhost:8080/nonexistent.php
+Not Found
+
+$ curl http://localhost:8080/timeout.php
+Gateway Timeout
+```
+
+| Status | Response Body |
+|--------|---------------|
+| 400 | Bad Request |
+| 401 | Unauthorized |
+| 403 | Forbidden |
+| 404 | Not Found |
+| 405 | Method Not Allowed |
+| 429 | Too Many Requests |
+| 500 | Internal Server Error |
+| 502 | Bad Gateway |
+| 503 | Service Unavailable |
+| 504 | Gateway Timeout |
+
+### With Custom Pages
+
+Set `ERROR_PAGES_DIR` to serve branded HTML error pages for browser clients:
 
 ## Configuration
 
@@ -57,19 +89,40 @@ www/
 3. **Response**: PHP returns 4xx/5xx status with empty body
 4. **Injection**: Server replaces empty body with cached HTML content
 
-### Activation Conditions
+### Response Selection Logic
 
-Error pages are served only when ALL conditions are met:
+```
+Response with empty body (4xx/5xx)
+         │
+         ▼
+   ┌─────────────────┐
+   │ Accept: text/html? │
+   └────────┬────────┘
+            │
+    ┌───────┴───────┐
+    │ Yes           │ No
+    ▼               ▼
+┌─────────┐    ┌─────────────┐
+│ Custom  │    │ Plain text  │
+│ page    │    │ "Not Found" │
+│ exists? │    └─────────────┘
+└────┬────┘
+     │
+ ┌───┴───┐
+ │ Yes   │ No
+ ▼       ▼
+┌────┐ ┌─────────────┐
+│HTML│ │ Plain text  │
+│page│ │ "Not Found" │
+└────┘ └─────────────┘
+```
 
-| Condition | Description |
-|-----------|-------------|
-| `ERROR_PAGES_DIR` is set | Directory path configured |
-| Status code 4xx or 5xx | Error response from PHP |
-| Empty response body | PHP returned no content |
-| `Accept: text/html` | Client accepts HTML |
-| File exists | `{status}.html` found in cache |
-
-If any condition is not met, the default behavior applies (plain text or PHP output).
+| Client | Custom Page Exists | Response |
+|--------|-------------------|----------|
+| Browser (`Accept: text/html`) | Yes | Custom HTML page |
+| Browser (`Accept: text/html`) | No | Plain text (e.g., "Not Found") |
+| API (`Accept: application/json`) | — | Plain text (e.g., "Not Found") |
+| curl (no Accept) | — | Plain text (e.g., "Not Found") |
 
 ## Performance
 
@@ -215,20 +268,34 @@ try {
 ## Testing
 
 ```bash
-# Test 404 page (browser request)
-curl -H "Accept: text/html" http://localhost:8080/nonexistent
+# API client - always gets plain text
+$ curl http://localhost:8080/nonexistent
+Not Found
 
-# Test with API client (no Accept header - plain text)
-curl http://localhost:8080/nonexistent
+# Browser client with custom error pages
+$ curl -H "Accept: text/html" http://localhost:8080/nonexistent
+<!DOCTYPE html>
+<html>... custom 404 page ...
 
-# Test 503 (queue full scenario)
-wrk -t10 -c1000 -d5s http://localhost:8080/slow.php
-curl -H "Accept: text/html" http://localhost:8080/index.php
+# Browser client without custom pages (ERROR_PAGES_DIR not set)
+$ curl -H "Accept: text/html" http://localhost:8080/nonexistent
+Not Found
+
+# Check headers
+$ curl -sI http://localhost:8080/nonexistent
+HTTP/1.1 404 Not Found
+content-type: text/plain; charset=utf-8
+content-length: 9
+
+$ curl -sI -H "Accept: text/html" http://localhost:8080/nonexistent
+HTTP/1.1 404 Not Found
+content-type: text/html; charset=utf-8
+content-length: 1234
 ```
 
 ## Troubleshooting
 
-### Error pages not showing
+### Custom HTML pages not showing
 
 1. **Check `ERROR_PAGES_DIR`**:
    ```bash
@@ -240,27 +307,36 @@ curl -H "Accept: text/html" http://localhost:8080/index.php
    docker compose exec tokio_php ls -la /var/www/html/errors/
    ```
 
-3. **Check Accept header**:
+3. **Check Accept header** — custom pages only served to HTML clients:
    ```bash
-   # This should show error page
+   # This shows custom HTML page (if configured)
    curl -H "Accept: text/html" http://localhost:8080/nonexistent
 
-   # This returns plain text
+   # This always returns plain text "Not Found"
    curl http://localhost:8080/nonexistent
    ```
 
-4. **Check response body is empty**:
+4. **Check response body is empty** — error pages only injected for empty bodies:
    ```php
    <?php
-   
-   // Wrong - body not empty, error page won't show
-   http_response_code(404);
-   echo "Not found";
 
-   // Correct - empty body
+   // Wrong - body not empty, custom page won't show
+   http_response_code(404);
+   echo "Not found";  // This will be the response
+
+   // Correct - empty body, allows error page injection
    http_response_code(404);
    exit;
    ```
+
+### Getting "Not Found" instead of custom page
+
+This is expected behavior when:
+- `ERROR_PAGES_DIR` is not set
+- File `{status}.html` doesn't exist in the directory
+- Client doesn't send `Accept: text/html` header
+
+The server always returns a human-readable reason phrase (e.g., "Not Found", "Bad Gateway") instead of an empty body.
 
 ### Startup logs
 
