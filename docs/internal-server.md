@@ -35,6 +35,63 @@ INTERNAL_ADDR=127.0.0.1:9090 docker compose up -d
 |----------|-------------|--------|
 | `/health` | Health check | JSON |
 | `/metrics` | Prometheus metrics | Plain text |
+| `/config` | Current server configuration | JSON |
+
+## GET /config
+
+Returns current server configuration as JSON. Useful for debugging and verifying deployment settings.
+
+```bash
+curl http://localhost:9090/config
+```
+
+**Response:**
+
+```json
+{
+  "listen_addr": "0.0.0.0:8080",
+  "document_root": "/var/www/html",
+  "workers": 14,
+  "queue_capacity": 1400,
+  "executor": "ext",
+  "index_file": null,
+  "internal_addr": "0.0.0.0:9090",
+  "tls_enabled": false,
+  "drain_timeout_secs": 30,
+  "static_cache_ttl": "1d",
+  "request_timeout": "2m",
+  "profile_enabled": false,
+  "access_log_enabled": false,
+  "rate_limit": null,
+  "rate_window_secs": 60,
+  "error_pages_enabled": true
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `listen_addr` | string | Server listen address |
+| `document_root` | string | Document root directory |
+| `workers` | number | Number of PHP workers |
+| `queue_capacity` | number | Request queue capacity |
+| `executor` | string | Executor type (`php`, `ext`, `stub`) |
+| `index_file` | string? | Single entry point file (if configured) |
+| `internal_addr` | string? | Internal server address |
+| `tls_enabled` | boolean | TLS/HTTPS enabled |
+| `drain_timeout_secs` | number | Graceful shutdown timeout |
+| `static_cache_ttl` | string | Static file cache TTL (`1d`, `1w`, `off`) |
+| `request_timeout` | string | Request timeout (`2m`, `5m`, `off`) |
+| `profile_enabled` | boolean | Profiling enabled (PROFILE=1) |
+| `access_log_enabled` | boolean | Access logging enabled (ACCESS_LOG=1) |
+| `rate_limit` | number? | Rate limit per IP (null = disabled) |
+| `rate_window_secs` | number | Rate limit window in seconds |
+| `error_pages_enabled` | boolean | Custom error pages configured |
+
+**Use Cases:**
+- Verify deployment configuration
+- Debug environment variable issues
+- Audit server settings
+- Automation and CI/CD checks
 
 ## GET /health
 

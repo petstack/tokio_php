@@ -33,7 +33,7 @@ pub use config::ServerConfig;
 pub use builder::{BuildError, ServerBuilder};
 use connection::ConnectionContext;
 use error_pages::ErrorPages;
-use internal::{run_internal_server, RequestMetrics};
+use internal::{run_internal_server, RequestMetrics, ServerConfigInfo};
 use rate_limit::RateLimiter;
 
 use crate::executor::ScriptExecutor;
@@ -254,9 +254,30 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             let active_connections = Arc::clone(&self.active_connections);
             let request_metrics = Arc::clone(&self.request_metrics);
             let mut shutdown_rx = self.shutdown_rx.clone();
+
+            // Build config info for /config endpoint
+            let config_info = Arc::new(ServerConfigInfo {
+                listen_addr: self.config.addr.to_string(),
+                document_root: self.config.document_root.to_string(),
+                workers: num_workers,
+                queue_capacity: num_workers * 100, // Default queue capacity formula
+                executor: self.executor.name().to_string(),
+                index_file: self.config.index_file.clone(),
+                internal_addr: Some(internal_addr.to_string()),
+                tls_enabled: self.tls_acceptor.is_some(),
+                drain_timeout_secs: self.config.drain_timeout.as_secs(),
+                static_cache_ttl: format_duration_ttl(&self.config.static_cache_ttl),
+                request_timeout: format_duration_timeout(&self.config.request_timeout),
+                profile_enabled: self.profile_enabled,
+                access_log_enabled: self.access_log_enabled,
+                rate_limit: self.rate_limiter.as_ref().map(|r| r.limit()),
+                rate_window_secs: self.rate_limiter.as_ref().map(|r| r.window_secs()).unwrap_or(60),
+                error_pages_enabled: self.config.error_pages_dir.is_some(),
+            });
+
             let handle = tokio::spawn(async move {
                 tokio::select! {
-                    result = run_internal_server(internal_addr, active_connections, request_metrics) => {
+                    result = run_internal_server(internal_addr, active_connections, request_metrics, config_info) => {
                         if let Err(e) = result {
                             error!("Internal server error: {}", e);
                         }
@@ -412,5 +433,45 @@ impl<E: ScriptExecutor + 'static> Server<E> {
     /// Shutdown the server.
     pub fn shutdown(&self) {
         self.executor.shutdown();
+    }
+}
+
+/// Format static cache TTL for config display.
+fn format_duration_ttl(ttl: &config::StaticCacheTtl) -> String {
+    match ttl.0 {
+        None => "off".to_string(),
+        Some(d) => {
+            let secs = d.as_secs();
+            if secs == 0 {
+                "off".to_string()
+            } else if secs % 86400 == 0 {
+                format!("{}d", secs / 86400)
+            } else if secs % 3600 == 0 {
+                format!("{}h", secs / 3600)
+            } else if secs % 60 == 0 {
+                format!("{}m", secs / 60)
+            } else {
+                format!("{}s", secs)
+            }
+        }
+    }
+}
+
+/// Format request timeout for config display.
+fn format_duration_timeout(timeout: &config::RequestTimeout) -> String {
+    match timeout.0 {
+        None => "off".to_string(),
+        Some(d) => {
+            let secs = d.as_secs();
+            if secs == 0 {
+                "off".to_string()
+            } else if secs % 3600 == 0 {
+                format!("{}h", secs / 3600)
+            } else if secs % 60 == 0 {
+                format!("{}m", secs / 60)
+            } else {
+                format!("{}s", secs)
+            }
+        }
     }
 }

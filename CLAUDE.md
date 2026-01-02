@@ -596,6 +596,7 @@ INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 |----------|-------------|
 | `/health` | Health check with timestamp and active connections (JSON) |
 | `/metrics` | Prometheus-compatible metrics |
+| `/config` | Current server configuration (JSON) |
 
 ### Available Metrics
 
@@ -623,6 +624,10 @@ INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 # Health check
 curl http://localhost:9090/health
 {"status":"ok","timestamp":1703361234,"active_connections":5,"total_requests":1000}
+
+# Configuration
+curl http://localhost:9090/config
+{"listen_addr":"0.0.0.0:8080","document_root":"/var/www/html","workers":14,"queue_capacity":1400,"executor":"ext","index_file":null,"internal_addr":"0.0.0.0:9090","tls_enabled":false,"drain_timeout_secs":30,"static_cache_ttl":"1d","request_timeout":"2m","profile_enabled":false,"access_log_enabled":false,"rate_limit":null,"rate_window_secs":60,"error_pages_enabled":true}
 
 # Metrics
 curl http://localhost:9090/metrics

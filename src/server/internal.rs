@@ -14,7 +14,50 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use serde::Serialize;
 use tokio::net::TcpListener;
+
+// =============================================================================
+// Server Configuration Info (for /config endpoint)
+// =============================================================================
+
+/// Server configuration info for the /config endpoint.
+/// Contains runtime configuration values (no sensitive data like TLS key paths).
+#[derive(Clone, Serialize)]
+pub struct ServerConfigInfo {
+    /// Server listen address
+    pub listen_addr: String,
+    /// Document root directory
+    pub document_root: String,
+    /// Number of PHP workers
+    pub workers: usize,
+    /// Queue capacity
+    pub queue_capacity: usize,
+    /// Executor type (Php, Ext, Stub)
+    pub executor: String,
+    /// Index file for single entry point mode
+    pub index_file: Option<String>,
+    /// Internal server address
+    pub internal_addr: Option<String>,
+    /// TLS enabled
+    pub tls_enabled: bool,
+    /// Graceful shutdown drain timeout (seconds)
+    pub drain_timeout_secs: u64,
+    /// Static file cache TTL
+    pub static_cache_ttl: String,
+    /// Request timeout
+    pub request_timeout: String,
+    /// Profiling enabled (PROFILE=1)
+    pub profile_enabled: bool,
+    /// Access logging enabled (ACCESS_LOG=1)
+    pub access_log_enabled: bool,
+    /// Rate limit (requests per window, None = disabled)
+    pub rate_limit: Option<u64>,
+    /// Rate limit window (seconds)
+    pub rate_window_secs: u64,
+    /// Error pages directory configured
+    pub error_pages_enabled: bool,
+}
 
 // =============================================================================
 // System Metrics (CPU, Memory)
@@ -243,11 +286,12 @@ impl Drop for PendingGuard {
     }
 }
 
-/// Run the internal HTTP server for /health and /metrics endpoints.
+/// Run the internal HTTP server for /health, /metrics, and /config endpoints.
 pub async fn run_internal_server(
     addr: SocketAddr,
     active_connections: Arc<AtomicUsize>,
     request_metrics: Arc<RequestMetrics>,
+    config_info: Arc<ServerConfigInfo>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(addr).await?;
 
@@ -256,12 +300,14 @@ pub async fn run_internal_server(
         let _ = stream.set_nodelay(true);
         let connections = Arc::clone(&active_connections);
         let metrics = Arc::clone(&request_metrics);
+        let config = Arc::clone(&config_info);
 
         tokio::spawn(async move {
             let service = service_fn(move |req| {
                 let conns = connections.load(Ordering::Relaxed);
                 let m = Arc::clone(&metrics);
-                async move { handle_internal_request(req, conns, m).await }
+                let c = Arc::clone(&config);
+                async move { handle_internal_request(req, conns, m, c).await }
             });
 
             let io = TokioIo::new(stream);
@@ -270,15 +316,24 @@ pub async fn run_internal_server(
     }
 }
 
-/// Handle internal server requests (/health, /metrics).
+/// Handle internal server requests (/health, /metrics, /config).
 async fn handle_internal_request(
     req: Request<IncomingBody>,
     active_connections: usize,
     metrics: Arc<RequestMetrics>,
+    config: Arc<ServerConfigInfo>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let path = req.uri().path();
 
     let response = match path {
+        "/config" => {
+            let body = serde_json::to_string_pretty(&*config).unwrap_or_else(|_| "{}".to_string());
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Full::new(Bytes::from(body)))
+                .unwrap()
+        }
         "/health" => {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
