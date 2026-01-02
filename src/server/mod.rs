@@ -84,6 +84,16 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             info!("Single entry point mode: all requests -> {}", index_file);
             Some(Arc::from(full_path.as_str()))
         } else {
+            // Warn if no index.php exists in document root (common misconfiguration)
+            if !executor.skip_file_check() {
+                let index_path = format!("{}/index.php", config.document_root);
+                if !Path::new(&index_path).exists() {
+                    warn!(
+                        "No index.php found in document root: {}. Server will return 404 for /",
+                        config.document_root
+                    );
+                }
+            }
             None
         };
 
