@@ -39,7 +39,7 @@ INTERNAL_ADDR=127.0.0.1:9090 docker compose up -d
 
 ## GET /config
 
-Returns current server configuration as JSON. Useful for debugging and verifying deployment settings.
+Returns current server configuration as JSON. Keys are environment variable names, values are their effective settings (configured or default).
 
 ```bash
 curl http://localhost:9090/config
@@ -49,49 +49,57 @@ curl http://localhost:9090/config
 
 ```json
 {
-  "listen_addr": "0.0.0.0:8080",
-  "document_root": "/var/www/html",
-  "workers": 14,
-  "queue_capacity": 1400,
-  "executor": "ext",
-  "index_file": null,
-  "internal_addr": "0.0.0.0:9090",
-  "tls_enabled": false,
-  "drain_timeout_secs": 30,
-  "static_cache_ttl": "1d",
-  "request_timeout": "2m",
-  "profile_enabled": false,
-  "access_log_enabled": false,
-  "rate_limit": null,
-  "rate_window_secs": 60,
-  "error_pages_enabled": true
+  "LISTEN_ADDR": "0.0.0.0:8080",
+  "DOCUMENT_ROOT": "/var/www/html",
+  "PHP_WORKERS": "14",
+  "QUEUE_CAPACITY": "1400",
+  "INDEX_FILE": "",
+  "INTERNAL_ADDR": "0.0.0.0:9090",
+  "ERROR_PAGES_DIR": "/var/www/html/errors",
+  "DRAIN_TIMEOUT_SECS": "30",
+  "STATIC_CACHE_TTL": "1d",
+  "REQUEST_TIMEOUT": "2m",
+  "ACCESS_LOG": "0",
+  "RATE_LIMIT": "0",
+  "RATE_WINDOW": "60",
+  "USE_STUB": "0",
+  "USE_EXT": "1",
+  "PROFILE": "0",
+  "TLS_CERT": "",
+  "TLS_KEY": "",
+  "RUST_LOG": "tokio_php=info",
+  "SERVICE_NAME": "tokio_php"
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `listen_addr` | string | Server listen address |
-| `document_root` | string | Document root directory |
-| `workers` | number | Number of PHP workers |
-| `queue_capacity` | number | Request queue capacity |
-| `executor` | string | Executor type (`php`, `ext`, `stub`) |
-| `index_file` | string? | Single entry point file (if configured) |
-| `internal_addr` | string? | Internal server address |
-| `tls_enabled` | boolean | TLS/HTTPS enabled |
-| `drain_timeout_secs` | number | Graceful shutdown timeout |
-| `static_cache_ttl` | string | Static file cache TTL (`1d`, `1w`, `off`) |
-| `request_timeout` | string | Request timeout (`2m`, `5m`, `off`) |
-| `profile_enabled` | boolean | Profiling enabled (PROFILE=1) |
-| `access_log_enabled` | boolean | Access logging enabled (ACCESS_LOG=1) |
-| `rate_limit` | number? | Rate limit per IP (null = disabled) |
-| `rate_window_secs` | number | Rate limit window in seconds |
-| `error_pages_enabled` | boolean | Custom error pages configured |
+| Key | Default | Description |
+|-----|---------|-------------|
+| `LISTEN_ADDR` | `0.0.0.0:8080` | Server listen address |
+| `DOCUMENT_ROOT` | `/var/www/html` | Document root directory |
+| `PHP_WORKERS` | `0` (auto) | Number of PHP workers |
+| `QUEUE_CAPACITY` | `0` (auto) | Request queue capacity |
+| `INDEX_FILE` | _(empty)_ | Single entry point file |
+| `INTERNAL_ADDR` | _(empty)_ | Internal server address |
+| `ERROR_PAGES_DIR` | _(empty)_ | Custom error pages directory |
+| `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout |
+| `STATIC_CACHE_TTL` | `1d` | Static file cache TTL |
+| `REQUEST_TIMEOUT` | `2m` | Request timeout |
+| `ACCESS_LOG` | `0` | Access logging (`0`/`1`) |
+| `RATE_LIMIT` | `0` | Rate limit per IP (`0` = disabled) |
+| `RATE_WINDOW` | `60` | Rate limit window (seconds) |
+| `USE_STUB` | `0` | Stub executor (`0`/`1`) |
+| `USE_EXT` | `1` | ExtExecutor (`0`/`1`) |
+| `PROFILE` | `0` | Profiling enabled (`0`/`1`) |
+| `TLS_CERT` | _(empty)_ | TLS certificate path |
+| `TLS_KEY` | _(empty)_ | TLS private key path |
+| `RUST_LOG` | `tokio_php=info` | Log level filter |
+| `SERVICE_NAME` | `tokio_php` | Service name for logs |
 
 **Use Cases:**
-- Verify deployment configuration
+- Verify deployment configuration matches expectations
 - Debug environment variable issues
-- Audit server settings
-- Automation and CI/CD checks
+- Audit server settings in production
+- CI/CD configuration validation
 
 ## GET /health
 

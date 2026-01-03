@@ -22,41 +22,30 @@ use tokio::net::TcpListener;
 // =============================================================================
 
 /// Server configuration info for the /config endpoint.
-/// Contains runtime configuration values (no sensitive data like TLS key paths).
+/// Uses environment variable names as keys with their effective values.
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub struct ServerConfigInfo {
-    /// Server listen address
     pub listen_addr: String,
-    /// Document root directory
     pub document_root: String,
-    /// Number of PHP workers
-    pub workers: usize,
-    /// Queue capacity
-    pub queue_capacity: usize,
-    /// Executor type (Php, Ext, Stub)
-    pub executor: String,
-    /// Index file for single entry point mode
-    pub index_file: Option<String>,
-    /// Internal server address
-    pub internal_addr: Option<String>,
-    /// TLS enabled
-    pub tls_enabled: bool,
-    /// Graceful shutdown drain timeout (seconds)
-    pub drain_timeout_secs: u64,
-    /// Static file cache TTL
+    pub php_workers: String,
+    pub queue_capacity: String,
+    pub index_file: String,
+    pub internal_addr: String,
+    pub error_pages_dir: String,
+    pub drain_timeout_secs: String,
     pub static_cache_ttl: String,
-    /// Request timeout
     pub request_timeout: String,
-    /// Profiling enabled (PROFILE=1)
-    pub profile_enabled: bool,
-    /// Access logging enabled (ACCESS_LOG=1)
-    pub access_log_enabled: bool,
-    /// Rate limit (requests per window, None = disabled)
-    pub rate_limit: Option<u64>,
-    /// Rate limit window (seconds)
-    pub rate_window_secs: u64,
-    /// Error pages directory configured
-    pub error_pages_enabled: bool,
+    pub access_log: String,
+    pub rate_limit: String,
+    pub rate_window: String,
+    pub use_stub: String,
+    pub use_ext: String,
+    pub profile: String,
+    pub tls_cert: String,
+    pub tls_key: String,
+    pub rust_log: String,
+    pub service_name: String,
 }
 
 // =============================================================================

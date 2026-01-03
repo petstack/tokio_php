@@ -265,24 +265,29 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             let request_metrics = Arc::clone(&self.request_metrics);
             let mut shutdown_rx = self.shutdown_rx.clone();
 
-            // Build config info for /config endpoint
+            // Build config info for /config endpoint (env var names as keys)
+            let executor_name = self.executor.name();
             let config_info = Arc::new(ServerConfigInfo {
                 listen_addr: self.config.addr.to_string(),
                 document_root: self.config.document_root.to_string(),
-                workers: num_workers,
-                queue_capacity: num_workers * 100, // Default queue capacity formula
-                executor: self.executor.name().to_string(),
-                index_file: self.config.index_file.clone(),
-                internal_addr: Some(internal_addr.to_string()),
-                tls_enabled: self.tls_acceptor.is_some(),
-                drain_timeout_secs: self.config.drain_timeout.as_secs(),
+                php_workers: num_workers.to_string(),
+                queue_capacity: (num_workers * 100).to_string(),
+                index_file: self.config.index_file.clone().unwrap_or_default(),
+                internal_addr: internal_addr.to_string(),
+                error_pages_dir: self.config.error_pages_dir.clone().unwrap_or_default(),
+                drain_timeout_secs: self.config.drain_timeout.as_secs().to_string(),
                 static_cache_ttl: format_duration_ttl(&self.config.static_cache_ttl),
                 request_timeout: format_duration_timeout(&self.config.request_timeout),
-                profile_enabled: self.profile_enabled,
-                access_log_enabled: self.access_log_enabled,
-                rate_limit: self.rate_limiter.as_ref().map(|r| r.limit()),
-                rate_window_secs: self.rate_limiter.as_ref().map(|r| r.window_secs()).unwrap_or(60),
-                error_pages_enabled: self.config.error_pages_dir.is_some(),
+                access_log: if self.access_log_enabled { "1".to_string() } else { "0".to_string() },
+                rate_limit: self.rate_limiter.as_ref().map(|r| r.limit().to_string()).unwrap_or_else(|| "0".to_string()),
+                rate_window: self.rate_limiter.as_ref().map(|r| r.window_secs().to_string()).unwrap_or_else(|| "60".to_string()),
+                use_stub: if executor_name == "stub" { "1".to_string() } else { "0".to_string() },
+                use_ext: if executor_name == "ext" { "1".to_string() } else { "0".to_string() },
+                profile: if self.profile_enabled { "1".to_string() } else { "0".to_string() },
+                tls_cert: self.config.tls_cert.clone().unwrap_or_default(),
+                tls_key: self.config.tls_key.clone().unwrap_or_default(),
+                rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "tokio_php=info".to_string()),
+                service_name: std::env::var("SERVICE_NAME").unwrap_or_else(|_| "tokio_php".to_string()),
             });
 
             let handle = tokio::spawn(async move {
