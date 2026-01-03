@@ -71,7 +71,7 @@ docker compose logs -f
 ## Requirements
 
 - Docker and Docker Compose
-- PHP 8.4 or 8.5 ZTS (Thread Safe) — included in Docker image
+- PHP 8.4 or 8.5 ZTS (Thread Safe) — [included in Docker image](php-support.md)
 - Rust 1.70+ (for development only)
 
 ## Project Structure
