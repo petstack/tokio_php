@@ -352,6 +352,81 @@ See [tokio_sapi Extension](tokio-sapi-extension.md) for details.
 4. **Errors** — Fatal errors return 500, notices/warnings go to stderr
 5. **Memory limit** — Per-request, reset on each request
 
+## Building Without PHP
+
+The project can be compiled without PHP for specific use cases using Cargo feature flags.
+
+### Feature Flags
+
+```toml
+# Cargo.toml
+[features]
+default = ["php"]
+php = []
+stub = []
+```
+
+### Build Variants
+
+| Command | PHP Required | Available Executors |
+|---------|--------------|---------------------|
+| `cargo build` | Yes | PhpExecutor, ExtExecutor, StubExecutor |
+| `cargo build --no-default-features --features stub` | No | StubExecutor only |
+| `cargo build --no-default-features` | No | None (won't start) |
+
+### Building Stub-Only Binary
+
+```bash
+# Build without PHP dependency
+cargo build --release --no-default-features --features stub
+
+# Run in stub mode
+USE_STUB=1 ./target/release/tokio_php
+```
+
+The stub-only build:
+- Does not link against `libphp.so`
+- Does not require PHP headers or `php-config`
+- Returns empty 200 OK for PHP requests (`.php` files)
+- **Full static file server** — serves HTML, CSS, JS, images normally
+- All middleware works: Brotli compression, caching, rate limiting, error pages
+
+### Use Cases
+
+| Use Case | Description |
+|----------|-------------|
+| HTTP benchmarks | Measure server overhead without PHP execution |
+| CI/CD testing | Test infrastructure without PHP installation |
+| Rust development | Develop HTTP/middleware code without PHP setup |
+| Load testing | Stress test connection handling and routing |
+
+### How It Works
+
+1. **build.rs** — conditionally links PHP:
+   ```rust
+   if env::var("CARGO_FEATURE_PHP").is_err() {
+       return;  // Skip PHP linking
+   }
+   ```
+
+2. **Conditional compilation** — PHP code behind feature gates:
+   ```rust
+   #[cfg(feature = "php")]
+   mod sapi;
+
+   #[cfg(feature = "php")]
+   pub use ext::ExtExecutor;
+   ```
+
+3. **Runtime selection** — executor chosen at startup:
+   ```rust
+   let executor: Box<dyn ScriptExecutor> = if use_stub {
+       Box::new(StubExecutor::new())
+   } else {
+       // PHP executors...
+   };
+   ```
+
 ## Troubleshooting
 
 ### "PHP not found" Error
