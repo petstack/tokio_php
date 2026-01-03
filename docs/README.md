@@ -68,37 +68,6 @@ docker compose --profile tls up -d
 docker compose logs -f
 ```
 
-## Performance
-
-### Executor Comparison
-
-Performance depends on script complexity:
-
-| Script | PhpExecutor | ExtExecutor | Difference |
-|--------|-------------|-------------|------------|
-| bench.php (minimal) | **22,821** RPS | 20,420 RPS | PhpExecutor +12% |
-| index.php (real app) | 17,119 RPS | **25,307** RPS | **ExtExecutor +48%** |
-
-*Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s, Apple M3 Pro*
-
-**Recommendation:** Use `USE_EXT=1` for production — real apps use superglobals.
-
-### When to use which executor
-
-| Use Case | Recommendation |
-|----------|----------------|
-| Laravel, Symfony, WordPress | **USE_EXT=1** — 48% faster |
-| Minimal APIs, health checks | USE_EXT=0 — less overhead |
-| Production (default) | **USE_EXT=1** |
-
-### OPcache Impact
-
-| Configuration | Requests/sec | Latency |
-|---------------|--------------|---------|
-| No OPcache | ~12,400 | 8.27ms |
-| OPcache | ~22,760 | 5.40ms |
-| OPcache + JIT | ~23,650 | 4.46ms |
-
 ## Requirements
 
 - Docker and Docker Compose
