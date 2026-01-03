@@ -676,19 +676,6 @@ pub fn execute_php_script_finish(
     Ok(ScriptResponse { body, headers, profile })
 }
 
-/// Legacy wrapper - executes PHP script with immediate finalization
-/// Note: This doesn't capture shutdown handler output correctly!
-#[allow(dead_code)]
-pub fn execute_php_script(
-    request: &ScriptRequest,
-    profiling: bool,
-    queue_wait_us: u64,
-    php_startup_us: u64,
-) -> Result<ScriptResponse, String> {
-    let (capture, timing) = execute_php_script_start(request, profiling)?;
-    execute_php_script_finish(capture, timing, profiling, queue_wait_us, php_startup_us)
-}
-
 /// Worker thread main loop - processes requests until channel closes
 pub fn worker_main_loop(
     id: usize,

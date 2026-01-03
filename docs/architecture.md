@@ -60,7 +60,6 @@ src/
 │
 ├── server/              # HTTP server
 │   ├── mod.rs           # Server struct, main loop
-│   ├── builder.rs       # ServerBuilder pattern
 │   ├── config.rs        # ServerConfig
 │   ├── connection.rs    # Connection handling, request processing
 │   ├── routing.rs       # URL routing, static files

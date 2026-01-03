@@ -82,7 +82,6 @@ tokio_php/
 │   ├── main.rs              # Entry point, runtime init
 │   ├── server/              # HTTP server (Hyper)
 │   │   ├── mod.rs           # Server core
-│   │   ├── builder.rs       # Server builder pattern
 │   │   ├── config.rs        # Server configuration
 │   │   ├── connection.rs    # Connection handling
 │   │   ├── internal.rs      # Health/metrics server

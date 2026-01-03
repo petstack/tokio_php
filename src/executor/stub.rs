@@ -13,6 +13,12 @@ impl StubExecutor {
     pub fn new() -> Self {
         Self
     }
+
+    /// Fast path for benchmarking - no request data needed.
+    #[cfg(test)]
+    pub async fn execute_empty(&self) -> Result<ScriptResponse, ExecutorError> {
+        Ok(ScriptResponse::default())
+    }
 }
 
 impl Default for StubExecutor {
@@ -36,11 +42,6 @@ impl ScriptExecutor for StubExecutor {
     #[inline]
     fn skip_file_check(&self) -> bool {
         true
-    }
-
-    #[inline]
-    async fn execute_empty(&self) -> Result<ScriptResponse, ExecutorError> {
-        Ok(ScriptResponse::default())
     }
 }
 

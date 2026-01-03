@@ -12,18 +12,22 @@ pub type ParamList = Vec<(String, String)>;
 // =============================================================================
 
 /// Represents an uploaded file from multipart form data.
+// Fields are only read by PHP executors (common.rs, ext.rs) which require the "php" feature.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct UploadedFile {
     /// Original filename
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub name: String,
     /// MIME type
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub mime_type: String,
     /// Temporary file path on disk
     pub tmp_name: String,
     /// File size in bytes
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub size: u64,
     /// PHP upload error code (0 = success)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub error: u8,
 }
 
@@ -33,36 +37,38 @@ pub struct UploadedFile {
 // =============================================================================
 
 /// Script execution request containing all HTTP request data.
+// Fields are only read by PHP executors (common.rs, ext.rs) which require the "php" feature.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
 pub struct ScriptRequest {
     /// Path to the script file
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub script_path: String,
     /// GET parameters ($_GET)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub get_params: ParamList,
     /// POST parameters ($_POST)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub post_params: ParamList,
     /// Cookies ($_COOKIE)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub cookies: ParamList,
     /// Server variables ($_SERVER)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub server_vars: ParamList,
     /// Uploaded files ($_FILES)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub files: Vec<(String, Vec<UploadedFile>)>,
     /// Raw request body for php://input (POST/QUERY methods)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub raw_body: Option<Vec<u8>>,
     /// Enable profiling for this request
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub profile: bool,
     /// Request timeout (None = no timeout)
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub timeout: Option<Duration>,
 }
 
-impl ScriptRequest {
-    /// Creates an empty request (for stub/fast path).
-    #[inline]
-    pub fn empty() -> Self {
-        Self::default()
-    }
-}
 
 // =============================================================================
 // Script Response

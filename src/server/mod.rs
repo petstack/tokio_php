@@ -1,7 +1,6 @@
 //! HTTP server with pluggable script executor.
 
 pub mod access_log;
-pub mod builder;
 pub mod config;
 pub mod connection;
 pub mod error_pages;
@@ -27,10 +26,6 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 pub use config::ServerConfig;
-
-// Re-export builder API (currently unused in main.rs but part of public API)
-#[allow(unused_imports)]
-pub use builder::{BuildError, ServerBuilder};
 use connection::ConnectionContext;
 use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics, ServerConfigInfo};

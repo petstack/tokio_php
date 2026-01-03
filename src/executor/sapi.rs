@@ -23,7 +23,7 @@ pub struct SapiHeader {
 /// sapi_header_op_enum - header operation type (FFI enum, variants from C side)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // FFI enum - variants received from C, not constructed in Rust
 pub enum SapiHeaderOp {
     Replace = 0,
     Add = 1,

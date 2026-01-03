@@ -1,4 +1,3 @@
-pub mod pool;
 mod stub;
 
 #[cfg(feature = "php")]
@@ -116,12 +115,5 @@ pub trait ScriptExecutor: Send + Sync {
     /// Stub executors return true for maximum performance.
     fn skip_file_check(&self) -> bool {
         false
-    }
-
-    /// Fast path for executors that don't need request data.
-    /// Default implementation calls execute with empty request.
-    #[allow(dead_code)]
-    async fn execute_empty(&self) -> Result<ScriptResponse, ExecutorError> {
-        self.execute(ScriptRequest::empty()).await
     }
 }

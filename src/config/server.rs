@@ -29,12 +29,6 @@ impl StaticCacheTtl {
     pub fn as_secs(&self) -> u64 {
         self.0.map(|d| d.as_secs()).unwrap_or(0)
     }
-
-    #[inline]
-    #[allow(dead_code)]
-    pub fn as_duration(&self) -> Option<Duration> {
-        self.0
-    }
 }
 
 impl Default for StaticCacheTtl {
@@ -64,12 +58,6 @@ impl RequestTimeout {
     #[inline]
     pub fn as_secs(&self) -> u64 {
         self.0.map(|d| d.as_secs()).unwrap_or(0)
-    }
-
-    #[inline]
-    #[allow(dead_code)]
-    pub fn as_duration(&self) -> Option<Duration> {
-        self.0
     }
 }
 
@@ -211,7 +199,6 @@ mod tests {
         let ttl = StaticCacheTtl::parse("off");
         assert!(!ttl.is_enabled());
         assert_eq!(ttl.as_secs(), 0);
-        assert!(ttl.as_duration().is_none());
     }
 
     #[test]
@@ -263,7 +250,6 @@ mod tests {
         let timeout = RequestTimeout::parse("off");
         assert!(!timeout.is_enabled());
         assert_eq!(timeout.as_secs(), 0);
-        assert!(timeout.as_duration().is_none());
     }
 
     #[test]

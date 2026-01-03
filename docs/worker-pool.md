@@ -96,18 +96,12 @@ loop {
             // Start PHP request
             php_request_startup();
 
-            // Set up stdout capture (memfd on Linux)
-            let capture = StdoutCapture::new()?;
-
-            // Set superglobals + execute script
-            execute_php_script(&request);
+            // Set up stdout capture + execute script
+            let (capture, timing) = execute_php_script_start(&request, profiling)?;
 
             // Call php_request_shutdown WHILE stdout captured
-            // (captures shutdown handler output)
-            php_request_shutdown();
-
-            // Restore stdout and read output
-            let output = capture.finalize();
+            // (captures shutdown handler output), then finalize
+            let response = execute_php_script_finish(capture, timing, profiling, queue_wait_us, php_startup_us)?;
 
             // Get headers via SAPI handler
             let headers = get_captured_headers();

@@ -7,22 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Generate a short unique request ID (12 chars).
-/// Format: timestamp_hex (8) + random (4) = 12 chars
-#[allow(dead_code)]
-fn generate_request_id() -> String {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u32;
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-
-    format!("{:08x}{:04x}", ts, count & 0xFFFF)
-}
-
 /// Format current time as ISO 8601 (lightweight, no chrono dependency).
 pub fn chrono_lite_iso8601() -> String {
     let now = SystemTime::now()
