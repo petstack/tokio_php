@@ -103,11 +103,6 @@ impl ErrorPages {
         self.pages.get(&status_code)
     }
 
-    /// Check if error pages are configured.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.pages.is_empty()
-    }
 }
 
 /// Get the default reason phrase for an HTTP status code.
