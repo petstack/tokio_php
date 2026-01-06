@@ -8,6 +8,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 
 ## Features
 
+- **PHP 8.5 & 8.4** — Support for latest PHP versions (ZTS)
 - **High Performance** — Async I/O via Tokio runtime, zero-copy architecture
 - **HTTP/1.1 & HTTP/2** — Full protocol support with automatic negotiation
 - **HTTPS/TLS 1.3** — Secure connections with ALPN for HTTP/2
@@ -19,7 +20,6 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 - **Rate Limiting** — Per-IP request throttling with fixed window
 - **Distributed Tracing** — W3C Trace Context propagation
 - **Graceful Shutdown** — Connection draining for zero-downtime deployments
-- **PHP 8.4 & 8.5** — Support for latest PHP versions (ZTS)
 
 ## Quick Start
 
@@ -27,8 +27,8 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 # Run from Docker Hub
 docker run -d -p 8080:8080 -v ./www:/var/www/html diolektor/tokio_php
 
-# Or with specific PHP/Alpine version
-docker run -d -p 8080:8080 -v ./www:/var/www/html diolektor/tokio_php:php8.5-alpine3.23
+# Or with specific PHP version
+docker run -d -p 8080:8080 -v ./www:/var/www/html diolektor/tokio_php:php8.5
 
 # Test
 curl http://localhost:8080/
@@ -178,17 +178,16 @@ wrk -t4 -c100 -d10s http://localhost:8080/index.php
 ## Requirements
 
 - Docker & Docker Compose
-- Or: Rust 1.70+, PHP 8.4/8.5 ZTS with php-embed
+- Or: Rust 1.70+, PHP 8.5/8.4 ZTS with php-embed
 
 ## Docker Tags
 
 | Tag | Description |
 |-----|-------------|
-| `latest` | PHP 8.5, Alpine 3.23 (multi-arch) |
-| `php8.5` | PHP 8.5, Alpine 3.23 (multi-arch) |
-| `php8.4` | PHP 8.4, Alpine 3.23 (multi-arch) |
-| `php8.5-alpine3.23` | PHP 8.5, Alpine 3.23 (multi-arch) |
-| `php8.4-alpine3.23` | PHP 8.4, Alpine 3.23 (multi-arch) |
+| `latest`, `php8.5` | PHP 8.5 (default, multi-arch) |
+| `php8.4` | PHP 8.4 (multi-arch) |
+| `php8.5-bin` | Binaries only for custom PHP builds |
+| `php8.4-bin` | Binaries only for custom PHP builds |
 
 ## Links
 
