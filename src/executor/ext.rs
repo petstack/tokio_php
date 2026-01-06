@@ -81,16 +81,25 @@ thread_local! {
 }
 
 /// Pack key-value pairs into a buffer. Returns (buffer_len, count)
+///
+/// Works with any type that implements AsRef<str> for both key and value,
+/// supporting String, &str, Cow<str>, etc.
 #[inline]
-fn pack_into_buffer<'a>(
+fn pack_into_buffer<'a, K, V>(
     buf: &mut Vec<u8>,
-    pairs: impl Iterator<Item = (&'a String, &'a String)>,
+    pairs: impl Iterator<Item = (&'a K, &'a V)>,
     extras: &[(&str, &str)],
-) -> (usize, usize) {
+) -> (usize, usize)
+where
+    K: AsRef<str> + 'a,
+    V: AsRef<str> + 'a,
+{
     buf.clear();
     let mut count = 0;
 
     for (key, value) in pairs {
+        let key = key.as_ref();
+        let value = value.as_ref();
         buf.extend_from_slice(&((key.len() + 1) as u32).to_le_bytes());
         buf.extend_from_slice(key.as_bytes());
         buf.push(0);

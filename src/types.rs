@@ -1,11 +1,33 @@
 //! Core types for script execution requests and responses.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use crate::profiler::ProfileData;
 
-/// Key-value pair type for parameters (faster than HashMap for small collections).
-pub type ParamList = Vec<(String, String)>;
+/// Key-value pair type for parameters.
+///
+/// Uses `Cow<'static, str>` to avoid heap allocation for static keys/values.
+/// Most $_SERVER keys are static strings like "REQUEST_METHOD", "SERVER_NAME".
+/// Static values include "on", "CGI/1.1", "HTTP/1.1", etc.
+///
+/// # Examples
+///
+/// ```ignore
+/// use std::borrow::Cow;
+///
+/// // Static key and value - zero allocation
+/// let static_pair: (Cow<'static, str>, Cow<'static, str>) =
+///     (Cow::Borrowed("SERVER_NAME"), Cow::Borrowed("localhost"));
+///
+/// // Static key, dynamic value - one allocation for value
+/// let dynamic_pair: (Cow<'static, str>, Cow<'static, str>) =
+///     (Cow::Borrowed("REQUEST_URI"), Cow::Owned("/api/users".to_string()));
+/// ```
+pub type ParamPair = (Cow<'static, str>, Cow<'static, str>);
+
+/// List of key-value pairs for parameters (faster than HashMap for small collections).
+pub type ParamList = Vec<ParamPair>;
 
 // =============================================================================
 // Uploaded File

@@ -1,5 +1,6 @@
 //! TCP/TLS connection handling.
 
+use std::borrow::Cow;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -236,6 +237,76 @@ pub fn chrono_lite_iso8601() -> String {
 }
 
 // ============================================================================
+// Server variable key constants (zero allocation)
+// ============================================================================
+
+mod server_var_keys {
+    use std::borrow::Cow;
+
+    // Request timing
+    pub const REQUEST_TIME: Cow<'static, str> = Cow::Borrowed("REQUEST_TIME");
+    pub const REQUEST_TIME_FLOAT: Cow<'static, str> = Cow::Borrowed("REQUEST_TIME_FLOAT");
+
+    // Request info
+    pub const REQUEST_METHOD: Cow<'static, str> = Cow::Borrowed("REQUEST_METHOD");
+    pub const REQUEST_URI: Cow<'static, str> = Cow::Borrowed("REQUEST_URI");
+    pub const QUERY_STRING: Cow<'static, str> = Cow::Borrowed("QUERY_STRING");
+
+    // Client info
+    pub const REMOTE_ADDR: Cow<'static, str> = Cow::Borrowed("REMOTE_ADDR");
+    pub const REMOTE_PORT: Cow<'static, str> = Cow::Borrowed("REMOTE_PORT");
+
+    // Server info
+    pub const SERVER_NAME: Cow<'static, str> = Cow::Borrowed("SERVER_NAME");
+    pub const SERVER_PORT: Cow<'static, str> = Cow::Borrowed("SERVER_PORT");
+    pub const SERVER_ADDR: Cow<'static, str> = Cow::Borrowed("SERVER_ADDR");
+    pub const SERVER_SOFTWARE: Cow<'static, str> = Cow::Borrowed("SERVER_SOFTWARE");
+    pub const SERVER_PROTOCOL: Cow<'static, str> = Cow::Borrowed("SERVER_PROTOCOL");
+    pub const DOCUMENT_ROOT: Cow<'static, str> = Cow::Borrowed("DOCUMENT_ROOT");
+    pub const GATEWAY_INTERFACE: Cow<'static, str> = Cow::Borrowed("GATEWAY_INTERFACE");
+
+    // Script paths
+    pub const SCRIPT_NAME: Cow<'static, str> = Cow::Borrowed("SCRIPT_NAME");
+    pub const SCRIPT_FILENAME: Cow<'static, str> = Cow::Borrowed("SCRIPT_FILENAME");
+    pub const PHP_SELF: Cow<'static, str> = Cow::Borrowed("PHP_SELF");
+
+    // Content info
+    pub const CONTENT_TYPE: Cow<'static, str> = Cow::Borrowed("CONTENT_TYPE");
+    pub const CONTENT_LENGTH: Cow<'static, str> = Cow::Borrowed("CONTENT_LENGTH");
+
+    // HTTP headers
+    pub const HTTP_HOST: Cow<'static, str> = Cow::Borrowed("HTTP_HOST");
+    pub const HTTP_COOKIE: Cow<'static, str> = Cow::Borrowed("HTTP_COOKIE");
+    pub const HTTP_USER_AGENT: Cow<'static, str> = Cow::Borrowed("HTTP_USER_AGENT");
+    pub const HTTP_REFERER: Cow<'static, str> = Cow::Borrowed("HTTP_REFERER");
+    pub const HTTP_ACCEPT_LANGUAGE: Cow<'static, str> = Cow::Borrowed("HTTP_ACCEPT_LANGUAGE");
+    pub const HTTP_ACCEPT: Cow<'static, str> = Cow::Borrowed("HTTP_ACCEPT");
+    pub const HTTP_TRACEPARENT: Cow<'static, str> = Cow::Borrowed("HTTP_TRACEPARENT");
+
+    // TLS info
+    pub const HTTPS: Cow<'static, str> = Cow::Borrowed("HTTPS");
+    pub const SSL_PROTOCOL: Cow<'static, str> = Cow::Borrowed("SSL_PROTOCOL");
+
+    // Trace context
+    pub const TRACE_ID: Cow<'static, str> = Cow::Borrowed("TRACE_ID");
+    pub const SPAN_ID: Cow<'static, str> = Cow::Borrowed("SPAN_ID");
+    pub const PARENT_SPAN_ID: Cow<'static, str> = Cow::Borrowed("PARENT_SPAN_ID");
+}
+
+// Static server variable values (zero allocation)
+mod server_var_values {
+    use std::borrow::Cow;
+
+    pub const ADDR_0000: Cow<'static, str> = Cow::Borrowed("0.0.0.0");
+    pub const SERVER_SOFTWARE: Cow<'static, str> = Cow::Borrowed("tokio_php/0.1.0");
+    pub const GATEWAY_INTERFACE: Cow<'static, str> = Cow::Borrowed("CGI/1.1");
+    pub const HTTPS_ON: Cow<'static, str> = Cow::Borrowed("on");
+    pub const PORT_80: Cow<'static, str> = Cow::Borrowed("80");
+    pub const PORT_443: Cow<'static, str> = Cow::Borrowed("443");
+    pub const LOCALHOST: Cow<'static, str> = Cow::Borrowed("localhost");
+}
+
+// ============================================================================
 // IP address formatting (zero heap allocation)
 // ============================================================================
 
@@ -274,7 +345,7 @@ use super::response::{
 };
 use super::routing::{is_direct_index_access, is_php_uri, resolve_file_path};
 use crate::executor::ScriptExecutor;
-use crate::types::ScriptRequest;
+use crate::types::{ScriptRequest, UploadedFile};
 
 /// Check if an error is a common connection reset or timeout.
 #[inline]
@@ -880,122 +951,119 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let server_vars_start = Instant::now();
 
         // Parse Host header for SERVER_NAME and SERVER_PORT
-        let (server_name, server_port) = if !host_header.is_empty() {
+        // Parse server name and port from Host header (using Cow for static ports)
+        let (server_name, server_port): (Cow<'static, str>, Cow<'static, str>) = if !host_header.is_empty() {
             if let Some(colon_pos) = host_header.rfind(':') {
                 if host_header.starts_with('[') && !host_header.contains("]:") {
+                    // IPv6 without port
                     (
-                        host_header.clone(),
-                        if tls_info.is_some() { "443" } else { "80" }.to_string(),
+                        Cow::Owned(host_header.clone()),
+                        if tls_info.is_some() { server_var_values::PORT_443 } else { server_var_values::PORT_80 },
                     )
                 } else {
+                    // Host:port format
                     (
-                        host_header[..colon_pos].to_string(),
-                        host_header[colon_pos + 1..].to_string(),
+                        Cow::Owned(host_header[..colon_pos].to_string()),
+                        Cow::Owned(host_header[colon_pos + 1..].to_string()),
                     )
                 }
             } else {
+                // No port in header
                 (
-                    host_header.clone(),
-                    if tls_info.is_some() { "443" } else { "80" }.to_string(),
+                    Cow::Owned(host_header.clone()),
+                    if tls_info.is_some() { server_var_values::PORT_443 } else { server_var_values::PORT_80 },
                 )
             }
         } else {
+            // No Host header
             (
-                "localhost".to_string(),
-                if tls_info.is_some() { "443" } else { "80" }.to_string(),
+                server_var_values::LOCALHOST,
+                if tls_info.is_some() { server_var_values::PORT_443 } else { server_var_values::PORT_80 },
             )
         };
 
         // Calculate SCRIPT_NAME and PHP_SELF
         let script_name = file_path_string
             .strip_prefix(self.document_root.as_ref())
-            .unwrap_or(&file_path_string)
-            .to_string();
-        let script_name = if script_name.starts_with('/') {
-            script_name
+            .unwrap_or(&file_path_string);
+        let script_name: Cow<'static, str> = if script_name.starts_with('/') {
+            Cow::Owned(script_name.to_string())
         } else {
-            format!("/{}", script_name)
+            Cow::Owned(format!("/{}", script_name))
         };
-
-        let path_info = String::new();
 
         let mut server_vars = Vec::with_capacity(32);
 
-        // Request timing
-        server_vars.push(("REQUEST_TIME".into(), request_time_secs.to_string()));
-        server_vars.push((
-            "REQUEST_TIME_FLOAT".into(),
-            format!("{:.6}", request_time_float),
-        ));
+        // Request timing (keys static, values dynamic)
+        server_vars.push((server_var_keys::REQUEST_TIME, Cow::Owned(request_time_secs.to_string())));
+        server_vars.push((server_var_keys::REQUEST_TIME_FLOAT, Cow::Owned(format!("{:.6}", request_time_float))));
 
         // Request method and URI
-        server_vars.push(("REQUEST_METHOD".into(), method.as_str().to_string()));
-        server_vars.push(("REQUEST_URI".into(), uri.to_string()));
-        server_vars.push(("QUERY_STRING".into(), query_string.to_string()));
+        server_vars.push((server_var_keys::REQUEST_METHOD, Cow::Owned(method.as_str().to_string())));
+        server_vars.push((server_var_keys::REQUEST_URI, Cow::Owned(uri.to_string())));
+        server_vars.push((server_var_keys::QUERY_STRING, Cow::Owned(query_string.to_string())));
 
         // Client info
-        server_vars.push(("REMOTE_ADDR".into(), remote_addr.ip().to_string()));
-        server_vars.push(("REMOTE_PORT".into(), remote_addr.port().to_string()));
+        server_vars.push((server_var_keys::REMOTE_ADDR, Cow::Owned(remote_addr.ip().to_string())));
+        server_vars.push((server_var_keys::REMOTE_PORT, Cow::Owned(remote_addr.port().to_string())));
 
-        // Server info
-        server_vars.push(("SERVER_NAME".into(), server_name));
-        server_vars.push(("SERVER_PORT".into(), server_port));
-        server_vars.push(("SERVER_ADDR".into(), "0.0.0.0".into()));
-        server_vars.push(("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into()));
-        server_vars.push(("SERVER_PROTOCOL".into(), http_version.to_string()));
-        server_vars.push(("DOCUMENT_ROOT".into(), self.document_root.to_string()));
-        server_vars.push(("GATEWAY_INTERFACE".into(), "CGI/1.1".into()));
+        // Server info (mix of static and dynamic values)
+        server_vars.push((server_var_keys::SERVER_NAME, server_name));
+        server_vars.push((server_var_keys::SERVER_PORT, server_port));
+        server_vars.push((server_var_keys::SERVER_ADDR, server_var_values::ADDR_0000));
+        server_vars.push((server_var_keys::SERVER_SOFTWARE, server_var_values::SERVER_SOFTWARE));
+        server_vars.push((server_var_keys::SERVER_PROTOCOL, Cow::Borrowed(http_version)));
+        server_vars.push((server_var_keys::DOCUMENT_ROOT, Cow::Owned(self.document_root.to_string())));
+        server_vars.push((server_var_keys::GATEWAY_INTERFACE, server_var_values::GATEWAY_INTERFACE));
 
         // Script paths
-        server_vars.push(("SCRIPT_NAME".into(), script_name.clone()));
-        server_vars.push(("SCRIPT_FILENAME".into(), file_path_string.clone()));
-        server_vars.push(("PHP_SELF".into(), script_name.clone()));
-        if !path_info.is_empty() {
-            server_vars.push(("PATH_INFO".into(), path_info));
-        }
+        server_vars.push((server_var_keys::SCRIPT_NAME, script_name.clone()));
+        server_vars.push((server_var_keys::SCRIPT_FILENAME, Cow::Owned(file_path_string.clone())));
+        server_vars.push((server_var_keys::PHP_SELF, script_name));
 
         // Content info
-        server_vars.push(("CONTENT_TYPE".into(), content_type_str));
+        server_vars.push((server_var_keys::CONTENT_TYPE, Cow::Owned(content_type_str)));
 
-        // HTTP headers
+        // HTTP headers (all dynamic values)
         if !host_header.is_empty() {
-            server_vars.push(("HTTP_HOST".into(), host_header));
+            server_vars.push((server_var_keys::HTTP_HOST, Cow::Owned(host_header)));
         }
         if !cookie_header_str.is_empty() {
-            server_vars.push(("HTTP_COOKIE".into(), cookie_header_str));
+            server_vars.push((server_var_keys::HTTP_COOKIE, Cow::Owned(cookie_header_str)));
         }
         if !user_agent.is_empty() {
-            server_vars.push(("HTTP_USER_AGENT".into(), user_agent));
+            server_vars.push((server_var_keys::HTTP_USER_AGENT, Cow::Owned(user_agent)));
         }
         if !referer.is_empty() {
-            server_vars.push(("HTTP_REFERER".into(), referer));
+            server_vars.push((server_var_keys::HTTP_REFERER, Cow::Owned(referer)));
         }
         if !accept_language.is_empty() {
-            server_vars.push(("HTTP_ACCEPT_LANGUAGE".into(), accept_language));
+            server_vars.push((server_var_keys::HTTP_ACCEPT_LANGUAGE, Cow::Owned(accept_language)));
         }
         if !accept.is_empty() {
-            server_vars.push(("HTTP_ACCEPT".into(), accept));
+            server_vars.push((server_var_keys::HTTP_ACCEPT, Cow::Owned(accept)));
         }
 
-        // HTTPS/TLS info
+        // HTTPS/TLS info (static value "on")
         if let Some(ref tls) = tls_info {
-            server_vars.push(("HTTPS".into(), "on".into()));
+            server_vars.push((server_var_keys::HTTPS, server_var_values::HTTPS_ON));
             if !tls.protocol.is_empty() {
-                server_vars.push(("SSL_PROTOCOL".into(), tls.protocol.clone()));
+                server_vars.push((server_var_keys::SSL_PROTOCOL, Cow::Owned(tls.protocol.clone())));
             }
         }
 
         // W3C Trace Context for distributed tracing
-        server_vars.push(("HTTP_TRACEPARENT".into(), trace_ctx.to_traceparent()));
-        server_vars.push(("TRACE_ID".into(), trace_ctx.trace_id.clone()));
-        server_vars.push(("SPAN_ID".into(), trace_ctx.span_id.clone()));
+        server_vars.push((server_var_keys::HTTP_TRACEPARENT, Cow::Owned(trace_ctx.to_traceparent())));
+        server_vars.push((server_var_keys::TRACE_ID, Cow::Owned(trace_ctx.trace_id.clone())));
+        server_vars.push((server_var_keys::SPAN_ID, Cow::Owned(trace_ctx.span_id.clone())));
         if let Some(ref parent) = trace_ctx.parent_span_id {
-            server_vars.push(("PARENT_SPAN_ID".into(), parent.clone()));
+            server_vars.push((server_var_keys::PARENT_SPAN_ID, Cow::Owned(parent.clone())));
         }
 
         // Set CONTENT_LENGTH for requests with body
         if let Some(ref body) = raw_body {
-            server_vars.push(("CONTENT_LENGTH".into(), body.len().to_string()));
+            let len: usize = body.len();
+            server_vars.push((server_var_keys::CONTENT_LENGTH, Cow::Owned(len.to_string())));
         }
 
         if profiling_enabled {
@@ -1005,8 +1073,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         if extension == "php" {
             let temp_files: Vec<String> = files
                 .iter()
-                .flat_map(|(_, file_vec)| file_vec.iter().map(|f| f.tmp_name.clone()))
-                .filter(|path| !path.is_empty())
+                .flat_map(|(_, file_vec): &(String, Vec<UploadedFile>)| {
+                    file_vec.iter().map(|f: &UploadedFile| f.tmp_name.clone())
+                })
+                .filter(|path: &String| !path.is_empty())
                 .collect();
 
             let parse_request_us = if profiling_enabled {
@@ -1022,7 +1092,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 cookies,
                 server_vars,
                 files,
-                raw_body: raw_body.map(|b| b.to_vec()),
+                raw_body: raw_body.map(|b: Bytes| b.to_vec()),
                 profile: profiling_enabled,
                 timeout: self.request_timeout.as_duration(),
             };

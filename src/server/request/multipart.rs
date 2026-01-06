@@ -1,5 +1,7 @@
 //! Multipart form data parsing.
 
+use std::borrow::Cow;
+
 use bytes::Bytes;
 use futures_util::stream;
 use multer::Multipart;
@@ -7,7 +9,7 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
-use crate::types::UploadedFile;
+use crate::types::{ParamList, UploadedFile};
 
 /// Maximum upload size (10 MB)
 const MAX_UPLOAD_SIZE: u64 = 10 * 1024 * 1024;
@@ -18,7 +20,7 @@ const MAX_UPLOAD_SIZE: u64 = 10 * 1024 * 1024;
 pub async fn parse_multipart(
     content_type: &str,
     body: Bytes,
-) -> Result<(Vec<(String, String)>, Vec<(String, Vec<UploadedFile>)>), String> {
+) -> Result<(ParamList, Vec<(String, Vec<UploadedFile>)>), String> {
     let boundary = content_type
         .split(';')
         .find_map(|part| {
@@ -91,7 +93,7 @@ pub async fn parse_multipart(
             }
         } else {
             let value = field.text().await.map_err(|e| e.to_string())?;
-            params.push((field_name, value));
+            params.push((Cow::Owned(field_name), Cow::Owned(value)));
         }
     }
 
