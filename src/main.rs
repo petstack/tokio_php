@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Build ServerConfig from new Config
     let mut server_config = ServerConfig::new(config.server.listen_addr)
-        .with_workers(config.executor.workers)
+        .with_workers(config.executor.worker_count())
         .with_document_root(config.server.document_root.to_str().unwrap_or("/var/www/html"));
 
     // TLS configuration
@@ -105,7 +105,7 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     #[allow(unused_variables)]
     let worker_threads = config.executor.worker_count();
     #[allow(unused_variables)]
-    let queue_capacity = config.executor.queue_capacity;
+    let queue_capacity = config.executor.queue_capacity();
     let profile_enabled = config.middleware.profile;
     let access_log_enabled = config.middleware.access_log;
     let rate_limit = config.middleware.rate_limit;

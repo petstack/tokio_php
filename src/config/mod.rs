@@ -57,7 +57,7 @@ impl Config {
         info!("Listen: {}", self.server.listen_addr);
         info!("Document root: {:?}", self.server.document_root);
         info!("Workers: {}", self.executor.worker_count());
-        info!("Queue capacity: {}", self.executor.actual_queue_capacity());
+        info!("Queue capacity: {}", self.executor.queue_capacity());
         info!("Executor: {:?}", self.executor.executor_type);
 
         if let Some(ref index) = self.server.index_file {
@@ -129,9 +129,11 @@ mod tests {
             config.server.document_root.to_str().unwrap(),
             "/var/www/html"
         );
-        assert_eq!(config.executor.workers, 0); // Auto-detect
-        assert_eq!(config.executor.queue_capacity, 0); // Auto-calculate
-        assert_eq!(config.executor.executor_type, ExecutorType::Php);
+        // Workers and queue_capacity are pre-computed (never zero)
+        assert!(config.executor.worker_count() >= 1);
+        assert!(config.executor.queue_capacity() >= 100);
+        // USE_EXT=1 is default, so Ext executor
+        assert_eq!(config.executor.executor_type, ExecutorType::Ext);
         assert!(config.middleware.rate_limit.is_none());
         assert!(!config.middleware.access_log);
     }
