@@ -36,7 +36,8 @@ extern "C" {
 pub static FINALIZE_CODE: &[u8] = b"1;\0";
 pub static FINALIZE_NAME: &[u8] = b"f\0";
 
-/// Name for memfd
+/// Name for memfd (Linux only)
+#[cfg(target_os = "linux")]
 pub static MEMFD_NAME: &[u8] = b"php_out\0";
 
 // =============================================================================

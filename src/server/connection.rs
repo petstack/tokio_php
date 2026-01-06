@@ -94,9 +94,6 @@ pub struct Iso8601Timestamp {
 }
 
 impl Iso8601Timestamp {
-    /// Format "YYYY-MM-DDTHH:MM:SS.mmmZ" (24 bytes exactly).
-    pub const LEN: usize = 24;
-
     /// Create a new timestamp for the current time.
     #[inline]
     pub fn now() -> Self {
