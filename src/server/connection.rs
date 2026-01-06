@@ -7,6 +7,80 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use http::header::{self, HeaderName, HeaderValue};
+
+// ============================================================================
+// Header constants for O(1) lookup (avoid string comparison)
+// ============================================================================
+
+mod header_names {
+    use super::*;
+
+    // Standard headers (from http crate)
+    pub static CONTENT_TYPE: HeaderName = header::CONTENT_TYPE;
+    pub static USER_AGENT: HeaderName = header::USER_AGENT;
+    pub static REFERER: HeaderName = header::REFERER;
+    pub static ACCEPT: HeaderName = header::ACCEPT;
+    pub static ACCEPT_ENCODING: HeaderName = header::ACCEPT_ENCODING;
+    pub static ACCEPT_LANGUAGE: HeaderName = header::ACCEPT_LANGUAGE;
+    pub static COOKIE: HeaderName = header::COOKIE;
+    pub static HOST: HeaderName = header::HOST;
+    pub static IF_NONE_MATCH: HeaderName = header::IF_NONE_MATCH;
+    pub static IF_MODIFIED_SINCE: HeaderName = header::IF_MODIFIED_SINCE;
+    pub static CONTENT_LENGTH: HeaderName = header::CONTENT_LENGTH;
+    pub static RETRY_AFTER: HeaderName = header::RETRY_AFTER;
+}
+
+// Custom headers (lazily initialized)
+static X_REQUEST_ID: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("x-request-id"));
+static X_PROFILE: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("x-profile"));
+static X_FORWARDED_FOR: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("x-forwarded-for"));
+static X_RATELIMIT_LIMIT: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("x-ratelimit-limit"));
+static X_RATELIMIT_REMAINING: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("x-ratelimit-remaining"));
+static X_RATELIMIT_RESET: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("x-ratelimit-reset"));
+static TRACEPARENT: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("traceparent"));
+
+// Static header values (zero allocation)
+mod header_values {
+    use super::*;
+
+    pub static TEXT_PLAIN: HeaderValue = HeaderValue::from_static("text/plain");
+    pub static TEXT_PLAIN_UTF8: HeaderValue = HeaderValue::from_static("text/plain; charset=utf-8");
+    pub static TEXT_HTML_UTF8: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
+    pub static ZERO: HeaderValue = HeaderValue::from_static("0");
+    pub static ONE: HeaderValue = HeaderValue::from_static("1");
+}
+
+// ============================================================================
+// HTTP version constants (avoid String allocation)
+// ============================================================================
+
+mod http_versions {
+    pub const HTTP_10: &str = "HTTP/1.0";
+    pub const HTTP_11: &str = "HTTP/1.1";
+    pub const HTTP_20: &str = "HTTP/2.0";
+    pub const HTTP_30: &str = "HTTP/3.0";
+
+    /// Convert hyper::Version to static string.
+    #[inline]
+    pub fn from_hyper(version: hyper::Version) -> &'static str {
+        match version {
+            hyper::Version::HTTP_10 => HTTP_10,
+            hyper::Version::HTTP_11 => HTTP_11,
+            hyper::Version::HTTP_2 => HTTP_20,
+            hyper::Version::HTTP_3 => HTTP_30,
+            _ => HTTP_11,
+        }
+    }
+}
+
 /// Format current time as ISO 8601 (lightweight, no chrono dependency).
 pub fn chrono_lite_iso8601() -> String {
     let now = SystemTime::now()
@@ -294,7 +368,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Use trace_id as request_id for correlation, or fall back to X-Request-ID
         let request_id = req
             .headers()
-            .get("x-request-id")
+            .get(&*X_REQUEST_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("{}-{}", &trace_ctx.trace_id[..12], &trace_ctx.span_id[..4]));
@@ -303,16 +377,17 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         if let Some(ref limiter) = self.rate_limiter {
             let result = limiter.check(remote_addr.ip());
             if !result.allowed {
-                return Ok(Response::builder()
+                let mut response = Response::builder()
                     .status(StatusCode::TOO_MANY_REQUESTS)
-                    .header("Content-Type", "text/plain")
-                    .header("Retry-After", result.reset_after.to_string())
-                    .header("X-RateLimit-Limit", limiter.limit().to_string())
-                    .header("X-RateLimit-Remaining", "0")
-                    .header("X-RateLimit-Reset", result.reset_after.to_string())
-                    .header("x-request-id", request_id)
+                    .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                    .header(header_names::RETRY_AFTER.clone(), result.reset_after.to_string())
+                    .header(X_RATELIMIT_LIMIT.clone(), limiter.limit().to_string())
+                    .header(X_RATELIMIT_REMAINING.clone(), header_values::ZERO.clone())
+                    .header(X_RATELIMIT_RESET.clone(), result.reset_after.to_string())
                     .body(Full::new(Bytes::from_static(b"429 Too Many Requests")))
-                    .unwrap());
+                    .unwrap();
+                response.headers_mut().insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
+                return Ok(response);
             }
         }
 
@@ -326,21 +401,21 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let method_str = req.method().to_string();
         let uri_str = req.uri().path().to_string();
         let query_str = req.uri().query().map(|s| s.to_string());
-        let http_version = format!("{:?}", req.version());
+        let http_version = http_versions::from_hyper(req.version());
 
         // Extract headers for access log
         let (user_agent_log, referer_log, xff_log) = if access_log_enabled {
             (
                 req.headers()
-                    .get("user-agent")
+                    .get(&header_names::USER_AGENT)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
                 req.headers()
-                    .get("referer")
+                    .get(&header_names::REFERER)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
                 req.headers()
-                    .get("x-forwarded-for")
+                    .get(&*X_FORWARDED_FOR)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
             )
@@ -354,7 +429,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Check if client accepts HTML (for custom error pages)
         let client_accepts_html = req
             .headers()
-            .get("accept")
+            .get(&header_names::ACCEPT)
             .and_then(|v| v.to_str().ok())
             .map(accepts_html)
             .unwrap_or(false);
@@ -372,7 +447,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             }
             _ => Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
-                .header("Content-Type", "text/plain")
+                .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
                 .body(Full::new(METHOD_NOT_ALLOWED_BODY.clone()))
                 .unwrap(),
         };
@@ -386,12 +461,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 if client_accepts_html {
                     if let Some(error_html) = self.error_pages.get(status) {
                         let (mut parts, _) = response.into_parts();
+                        parts
+                            .headers
+                            .insert(header_names::CONTENT_TYPE.clone(), header_values::TEXT_HTML_UTF8.clone());
                         parts.headers.insert(
-                            hyper::header::CONTENT_TYPE,
-                            "text/html; charset=utf-8".parse().unwrap(),
-                        );
-                        parts.headers.insert(
-                            hyper::header::CONTENT_LENGTH,
+                            header_names::CONTENT_LENGTH.clone(),
                             error_html.len().to_string().parse().unwrap(),
                         );
                         response = Response::from_parts(parts, Full::new(error_html.clone()));
@@ -399,12 +473,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                         // No custom page, use default reason phrase
                         let reason = status_reason_phrase(status);
                         let (mut parts, _) = response.into_parts();
+                        parts
+                            .headers
+                            .insert(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN_UTF8.clone());
                         parts.headers.insert(
-                            hyper::header::CONTENT_TYPE,
-                            "text/plain; charset=utf-8".parse().unwrap(),
-                        );
-                        parts.headers.insert(
-                            hyper::header::CONTENT_LENGTH,
+                            header_names::CONTENT_LENGTH.clone(),
                             reason.len().to_string().parse().unwrap(),
                         );
                         response = Response::from_parts(parts, Full::new(Bytes::from(reason)));
@@ -413,12 +486,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     // Non-HTML client, use default reason phrase
                     let reason = status_reason_phrase(status);
                     let (mut parts, _) = response.into_parts();
+                    parts
+                        .headers
+                        .insert(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN_UTF8.clone());
                     parts.headers.insert(
-                        hyper::header::CONTENT_TYPE,
-                        "text/plain; charset=utf-8".parse().unwrap(),
-                    );
-                    parts.headers.insert(
-                        hyper::header::CONTENT_LENGTH,
+                        header_names::CONTENT_LENGTH.clone(),
                         reason.len().to_string().parse().unwrap(),
                     );
                     response = Response::from_parts(parts, Full::new(Bytes::from(reason)));
@@ -434,12 +506,12 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Add X-Request-ID header to response
         response
             .headers_mut()
-            .insert("x-request-id", request_id.parse().unwrap());
+            .insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
 
         // Add W3C Trace Context header to response
         response
             .headers_mut()
-            .insert("traceparent", trace_ctx.to_traceparent().parse().unwrap());
+            .insert(TRACEPARENT.clone(), trace_ctx.to_traceparent().parse().unwrap());
 
         // Access logging
         if access_log_enabled {
@@ -498,14 +570,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let mut file_check_us = 0u64;
 
         let method = req.method().clone();
-        let http_version = match req.version() {
-            hyper::Version::HTTP_2 => "HTTP/2.0",
-            hyper::Version::HTTP_11 => "HTTP/1.1",
-            hyper::Version::HTTP_10 => "HTTP/1.0",
-            hyper::Version::HTTP_3 => "HTTP/3.0",
-            _ => "HTTP/1.1",
-        }
-        .to_string();
+        let http_version = http_versions::from_hyper(req.version());
         let uri = req.uri().clone();
         let uri_path = uri.path();
         let query_string = uri.query().unwrap_or("");
@@ -518,7 +583,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Check for profiling header
         let profile_requested = req
             .headers()
-            .get("x-profile")
+            .get(&*X_PROFILE)
             .and_then(|v| v.to_str().ok())
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -528,7 +593,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Check if client accepts Brotli compression
         let use_brotli = req
             .headers()
-            .get("accept-encoding")
+            .get(&header_names::ACCEPT_ENCODING)
             .and_then(|v| v.to_str().ok())
             .map(accepts_brotli)
             .unwrap_or(false);
@@ -536,13 +601,13 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Extract conditional caching headers for static file serving
         let if_none_match = req
             .headers()
-            .get("if-none-match")
+            .get(&header_names::IF_NONE_MATCH)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
         let if_modified_since = req
             .headers()
-            .get("if-modified-since")
+            .get(&header_names::IF_MODIFIED_SINCE)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
@@ -556,45 +621,45 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let headers = req.headers();
 
         let content_type_str = headers
-            .get("content-type")
+            .get(&header_names::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
 
         let cookie_header_str = headers
-            .get("cookie")
+            .get(&header_names::COOKIE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
 
         // For HTTP/2, the :authority pseudo-header is in uri.authority()
         let host_header = headers
-            .get("host")
+            .get(&header_names::HOST)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
             .or_else(|| uri.authority().map(|a| a.to_string()))
             .unwrap_or_default();
 
         let user_agent = headers
-            .get("user-agent")
+            .get(&header_names::USER_AGENT)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
 
         let referer = headers
-            .get("referer")
+            .get(&header_names::REFERER)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
 
         let accept_language = headers
-            .get("accept-language")
+            .get(&header_names::ACCEPT_LANGUAGE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
 
         let accept = headers
-            .get("accept")
+            .get(&header_names::ACCEPT)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
@@ -635,7 +700,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 Err(_) => {
                     return Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .header("Content-Type", "text/plain")
+                        .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
                         .body(Full::new(BAD_REQUEST_BODY.clone()))
                         .unwrap();
                 }
@@ -657,7 +722,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     Err(e) => {
                         return Response::builder()
                             .status(StatusCode::BAD_REQUEST)
-                            .header("Content-Type", "text/plain")
+                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
                             .body(Full::new(Bytes::from(format!(
                                 "Failed to parse multipart form: {}",
                                 e
@@ -763,7 +828,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         server_vars.push(("SERVER_PORT".into(), server_port));
         server_vars.push(("SERVER_ADDR".into(), "0.0.0.0".into()));
         server_vars.push(("SERVER_SOFTWARE".into(), "tokio_php/0.1.0".into()));
-        server_vars.push(("SERVER_PROTOCOL".into(), http_version.clone()));
+        server_vars.push(("SERVER_PROTOCOL".into(), http_version.to_string()));
         server_vars.push(("DOCUMENT_ROOT".into(), self.document_root.to_string()));
         server_vars.push(("GATEWAY_INTERFACE".into(), "CGI/1.1".into()));
 
@@ -857,7 +922,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     // Add parse breakdown to profile data if profiling
                     if profiling_enabled {
                         if let Some(ref mut profile) = resp.profile {
-                            profile.http_version = http_version.clone();
+                            profile.http_version = http_version.to_string();
                             if let Some(ref tls) = tls_info {
                                 profile.tls_handshake_us = tls.handshake_us;
                                 profile.tls_protocol = tls.protocol.clone();
@@ -883,7 +948,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                         warn!("Request timeout: {}", uri_path);
                         Response::builder()
                             .status(StatusCode::GATEWAY_TIMEOUT)
-                            .header("Content-Type", "text/plain")
+                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
                             .body(Full::new(Bytes::from_static(b"504 Gateway Timeout")))
                             .unwrap()
                     } else if e.is_queue_full() {
@@ -891,15 +956,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                         self.request_metrics.inc_dropped();
                         Response::builder()
                             .status(StatusCode::SERVICE_UNAVAILABLE)
-                            .header("Content-Type", "text/plain")
-                            .header("Retry-After", "1")
+                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                            .header(header_names::RETRY_AFTER.clone(), header_values::ONE.clone())
                             .body(Full::new(Bytes::from_static(b"503 Service Unavailable - Server overloaded")))
                             .unwrap()
                     } else {
                         error!("Script execution error: {}", e);
                         Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .header("Content-Type", "text/html")
+                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_HTML_UTF8.clone())
                             .body(Full::new(Bytes::from(format!(
                                 "<h1>500 Internal Server Error</h1><pre>{}</pre>",
                                 e
