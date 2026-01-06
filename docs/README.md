@@ -6,13 +6,13 @@
 
 Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, worker pools, OPcache/JIT, Brotli compression.
 
-**Supported PHP versions:** 8.4, 8.5 (ZTS)
+**Supported PHP versions:** 8.5, 8.4 (ZTS)
 
 ## Features
 
 | Feature | Description                                                |
 |---------|------------------------------------------------------------|
-| [PHP Support](php-support.md) | PHP 8.4/8.5, ZTS, embed SAPI, extensions                   |
+| [PHP Support](php-support.md) | PHP 8.5/8.4, ZTS, embed SAPI, extensions                   |
 | [Architecture](architecture.md) | System design, components, request flow                    |
 | [HTTP/2 & TLS](http2-tls.md) | HTTP/1.1, HTTP/2, HTTPS with TLS 1.3                       |
 | [HTTP Methods](http-methods.md) | GET, POST, PUT, PATCH, DELETE, OPTIONS, QUERY              |
@@ -105,8 +105,7 @@ tokio_php/
 │   │   ├── ext.rs           # ExtExecutor (php_execute_script)
 │   │   ├── stub.rs          # StubExecutor (benchmarks)
 │   │   ├── common.rs        # Shared worker pool
-│   │   ├── sapi.rs          # SAPI initialization
-│   │   └── pool/            # Generic thread pool
+│   │   └── sapi.rs          # SAPI initialization
 │   ├── core/                # Core types and context
 │   ├── config/              # Configuration parsing
 │   ├── logging.rs           # Structured JSON logging

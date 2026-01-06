@@ -170,7 +170,7 @@ Returns `false` if:
 ### Key Technical Details
 
 - SAPI name set to "cli-server" before `php_embed_init` for OPcache/JIT compatibility
-- PHP 8.4 ZTS (Thread Safe) build required
+- PHP 8.5/8.4 ZTS (Thread Safe) build required
 - Single-threaded Tokio runtime (PHP workers handle blocking work)
 - OPcache settings in Dockerfile: `opcache.jit=tracing`, `opcache.validate_timestamps=0`
 - Preloading enabled via `opcache.preload` for framework optimization

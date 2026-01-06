@@ -264,7 +264,7 @@ extension=tokio_sapi.so
 The Rust side uses FFI to call extension functions:
 
 ```rust
-// src/executor/ext_ffi.rs
+// src/executor/ext.rs
 extern "C" {
     pub fn tokio_sapi_request_init(request_id: u64) -> c_int;
     pub fn tokio_sapi_request_shutdown();

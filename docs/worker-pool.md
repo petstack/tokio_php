@@ -116,7 +116,7 @@ loop {
 
 ### PHP ZTS (Thread Safe)
 
-Workers use PHP 8.4 ZTS (Zend Thread Safety):
+Workers use PHP 8.5/8.4 ZTS (Zend Thread Safety):
 
 - **TSRM**: Thread Safe Resource Manager isolates per-request state
 - **Shared OPcache**: Compiled scripts shared across threads

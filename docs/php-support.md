@@ -6,10 +6,10 @@ tokio_php executes PHP scripts via the **php-embed SAPI** — a C library that a
 
 | Version | Status | Docker Tag |
 |---------|--------|------------|
+| PHP 8.5 | Supported (default) | `diolektor/tokio_php:php8.5` |
 | PHP 8.4 | Supported | `diolektor/tokio_php:php8.4` |
-| PHP 8.5 | Supported | `diolektor/tokio_php:php8.5` |
 
-PHP 8.4 is the default version in Docker images.
+PHP 8.5 is the default version in Docker images.
 
 ## Requirements
 
@@ -115,12 +115,12 @@ php-config --extension-dir
 
 ### Available Tags
 
-| Tag                                     | Contents | Use Case |
-|-----------------------------------------|----------|----------|
-| `php8.5`, `php8.5-alpine3.23`, `latest` | Full image (PHP + server) | Production, development |
-| `php8.4`, `php8.4-alpine3.23`           | Full image (PHP + server) | Production, development |
-| `php8.5-alpine3.23-bin`                 | Binaries only | Custom PHP builds |
-| `php8.4-alpine3.23-bin`                 | Binaries only | Custom PHP builds |
+| Tag | Contents | Use Case |
+|-----|----------|----------|
+| `latest`, `php8.5` | Full image (PHP 8.5 + server) | Production, development |
+| `php8.4` | Full image (PHP 8.4 + server) | Production, development |
+| `php8.5-bin` | Binaries only | Custom PHP builds |
+| `php8.4-bin` | Binaries only | Custom PHP builds |
 
 ### Binary-Only Images
 
@@ -128,7 +128,7 @@ For advanced users who want to use their own PHP build, binary-only images are a
 
 ```bash
 # Extract binaries from the image
-docker create --name tmp diolektor/tokio_php:php8.4-alpine3.23-bin
+docker create --name tmp diolektor/tokio_php:php8.5-bin
 docker cp tmp:/tokio_php ./tokio_php
 docker cp tmp:/tokio_sapi.so ./tokio_sapi.so
 docker rm tmp
@@ -170,8 +170,8 @@ RUN pecl install redis && \
 RUN apk del .build-deps
 
 # Copy tokio_php binaries
-COPY --from=diolektor/tokio_php:php8.4-alpine3.23-bin /tokio_php /usr/local/bin/
-COPY --from=diolektor/tokio_php:php8.4-alpine3.23-bin /tokio_sapi.so /tmp/
+COPY --from=diolektor/tokio_php:php8.4-bin /tokio_php /usr/local/bin/
+COPY --from=diolektor/tokio_php:php8.4-bin /tokio_sapi.so /tmp/
 
 # Install tokio_sapi extension
 RUN EXT_DIR=$(php-config --extension-dir) && \
@@ -329,7 +329,7 @@ Custom extension providing:
 - `tokio_request_id()` — current request ID
 - `tokio_worker_id()` — current worker thread ID
 - `tokio_server_info()` — server configuration
-- `tokio_request_heartbeat($seconds)` — extend request timeout
+- `tokio_request_heartbeat(int $time = 10)` — extend request timeout
 
 See [tokio_sapi Extension](tokio-sapi-extension.md) for details.
 
@@ -340,9 +340,21 @@ See [tokio_sapi Extension](tokio-sapi-extension.md) for details.
 | Feature | Reason | Alternative |
 |---------|--------|-------------|
 | `$_SESSION` | No session handler | Use Redis/database sessions |
-| `set_time_limit()` | Thread-based execution | Use `tokio_request_heartbeat()` |
 | `pcntl_*` | No process control in embed | Not applicable |
 | `readline` | No interactive input | Not applicable |
+
+### Timeout Handling
+
+`set_time_limit()` works for PHP's internal timeout, but does not affect the server's request timeout (`REQUEST_TIMEOUT`). For long-running scripts, use both:
+
+```php
+<?php
+// Extend PHP's max_execution_time
+set_time_limit(60);
+
+// Extend server's request deadline
+tokio_request_heartbeat(60);
+```
 
 ### Compatibility Notes
 

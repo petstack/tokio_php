@@ -91,11 +91,7 @@ src/
 │   ├── ext.rs           # ExtExecutor (FFI, recommended)
 │   ├── php.rs           # PhpExecutor (eval-based)
 │   ├── stub.rs          # StubExecutor (benchmarking)
-│   ├── sapi.rs          # PHP SAPI initialization
-│   └── pool/            # Worker pool internals
-│       ├── mod.rs
-│       ├── thread.rs
-│       └── error.rs
+│   └── sapi.rs          # PHP SAPI initialization
 │
 ├── core/                # Core types
 │   ├── mod.rs
@@ -166,7 +162,7 @@ Bounded `sync_channel` connecting async server to blocking PHP workers:
 
 ### PHP Worker Pool
 
-Multi-threaded worker pool using PHP 8.4/8.5 ZTS (Thread Safe):
+Multi-threaded worker pool using PHP 8.5/8.4 ZTS (Thread Safe):
 - Each worker runs in a dedicated OS thread
 - Workers share OPcache via shared memory
 - Work-stealing load balancing
@@ -289,8 +285,8 @@ pub trait ScriptExecutor: Send + Sync {
 
 | Executor | Selection | Method | Best For |
 |----------|-----------|--------|----------|
-| `ExtExecutor` | `USE_EXT=1` | `php_execute_script()` + FFI | **Real apps (48% faster)** |
-| `PhpExecutor` | Default | `zend_eval_string()` | Minimal scripts |
+| `ExtExecutor` | `USE_EXT=1` (default) | `php_execute_script()` + FFI | **Real apps (48% faster)** |
+| `PhpExecutor` | `USE_EXT=0` | `zend_eval_string()` | Minimal scripts |
 | `StubExecutor` | `USE_STUB=1` | No PHP | Benchmarking only |
 
 ### Performance Comparison
@@ -313,8 +309,8 @@ pub trait ScriptExecutor: Send + Sync {
 
 Selection priority in `main.rs`:
 1. `USE_STUB=1` → StubExecutor
-2. `USE_EXT=1` → ExtExecutor **← recommended for production**
-3. Default → PhpExecutor
+2. `USE_EXT=1` (default) → ExtExecutor **← production default**
+3. `USE_EXT=0` → PhpExecutor
 
 ## Request Heartbeat
 

@@ -20,7 +20,7 @@ tokio_php is configured via environment variables.
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
-| `USE_EXT` | `0` | **Recommended.** Use ExtExecutor (2x faster) |
+| `USE_EXT` | `1` | **Default.** Use ExtExecutor (2x faster) |
 | `PROFILE` | `0` | Enable request profiling |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
@@ -482,14 +482,14 @@ Stub mode returns empty 200 responses without executing PHP. Useful for measurin
 
 ### USE_EXT
 
-**Recommended for production.** Use ExtExecutor with FFI-based superglobals.
+**Default and recommended.** Use ExtExecutor with FFI-based superglobals.
 
 ```bash
-# PhpExecutor - eval-based superglobals (default)
-USE_EXT=0
-
-# ExtExecutor - FFI superglobals + php_execute_script() (recommended)
+# ExtExecutor - FFI superglobals + php_execute_script() (default, recommended)
 USE_EXT=1
+
+# PhpExecutor - eval-based superglobals (legacy)
+USE_EXT=0
 ```
 
 ExtExecutor is **2x faster** than PhpExecutor:
@@ -843,8 +843,8 @@ impl ExecutorConfig {
 
 pub enum ExecutorType {
     Stub,  // USE_STUB=1
-    Php,   // Default (legacy)
-    Ext,   // USE_EXT=1 (recommended)
+    Php,   // USE_EXT=0 (legacy)
+    Ext,   // USE_EXT=1 (default, recommended)
 }
 ```
 
