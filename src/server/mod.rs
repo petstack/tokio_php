@@ -271,8 +271,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 internal_addr: internal_addr.to_string(),
                 error_pages_dir: self.config.error_pages_dir.clone().unwrap_or_default(),
                 drain_timeout_secs: self.config.drain_timeout.as_secs().to_string(),
-                static_cache_ttl: format_duration_ttl(&self.config.static_cache_ttl),
-                request_timeout: format_duration_timeout(&self.config.request_timeout),
+                static_cache_ttl: format_optional_duration(&self.config.static_cache_ttl),
+                request_timeout: format_optional_duration(&self.config.request_timeout),
                 access_log: if self.access_log_enabled { "1".to_string() } else { "0".to_string() },
                 rate_limit: self.rate_limiter.as_ref().map(|r| r.limit().to_string()).unwrap_or_else(|| "0".to_string()),
                 rate_window: self.rate_limiter.as_ref().map(|r| r.window_secs().to_string()).unwrap_or_else(|| "60".to_string()),
@@ -446,42 +446,19 @@ impl<E: ScriptExecutor + 'static> Server<E> {
     }
 }
 
-/// Format static cache TTL for config display.
-fn format_duration_ttl(ttl: &config::StaticCacheTtl) -> String {
-    match ttl.0 {
-        None => "off".to_string(),
-        Some(d) => {
-            let secs = d.as_secs();
-            if secs == 0 {
-                "off".to_string()
-            } else if secs % 86400 == 0 {
-                format!("{}d", secs / 86400)
-            } else if secs % 3600 == 0 {
-                format!("{}h", secs / 3600)
-            } else if secs % 60 == 0 {
-                format!("{}m", secs / 60)
-            } else {
-                format!("{}s", secs)
-            }
-        }
+/// Format OptionalDuration for config display.
+fn format_optional_duration(d: &config::OptionalDuration) -> String {
+    if !d.is_enabled() {
+        return "off".to_string();
     }
-}
-
-/// Format request timeout for config display.
-fn format_duration_timeout(timeout: &config::RequestTimeout) -> String {
-    match timeout.0 {
-        None => "off".to_string(),
-        Some(d) => {
-            let secs = d.as_secs();
-            if secs == 0 {
-                "off".to_string()
-            } else if secs % 3600 == 0 {
-                format!("{}h", secs / 3600)
-            } else if secs % 60 == 0 {
-                format!("{}m", secs / 60)
-            } else {
-                format!("{}s", secs)
-            }
-        }
+    let secs = d.as_secs();
+    if secs % 86400 == 0 {
+        format!("{}d", secs / 86400)
+    } else if secs % 3600 == 0 {
+        format!("{}h", secs / 3600)
+    } else if secs % 60 == 0 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}s", secs)
     }
 }

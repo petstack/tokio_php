@@ -93,13 +93,11 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     // Drain timeout
     server_config = server_config.with_drain_timeout(config.server.drain_timeout);
 
-    // Static cache TTL
-    let static_cache_ttl = crate::server::config::StaticCacheTtl(config.server.static_cache_ttl.0);
-    server_config = server_config.with_static_cache_ttl(static_cache_ttl);
+    // Static cache TTL (unified type, no conversion needed)
+    server_config = server_config.with_static_cache_ttl(config.server.static_cache_ttl);
 
-    // Request timeout
-    let request_timeout = crate::server::config::RequestTimeout(config.server.request_timeout.0);
-    server_config = server_config.with_request_timeout(request_timeout);
+    // Request timeout (unified type, no conversion needed)
+    server_config = server_config.with_request_timeout(config.server.request_timeout);
 
     // Get worker parameters
     #[allow(unused_variables)]

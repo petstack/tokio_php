@@ -4,53 +4,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Static file cache TTL configuration.
-/// - None: caching disabled ("off")
-/// - Some(duration): cache for specified duration
-#[derive(Clone, Debug)]
-pub struct StaticCacheTtl(pub Option<Duration>);
-
-impl StaticCacheTtl {
-    /// Check if caching is enabled.
-    #[inline]
-    pub fn is_enabled(&self) -> bool {
-        self.0.is_some()
-    }
-
-    /// Get TTL in seconds (0 if disabled).
-    #[inline]
-    pub fn as_secs(&self) -> u64 {
-        self.0.map(|d| d.as_secs()).unwrap_or(0)
-    }
-}
-
-impl Default for StaticCacheTtl {
-    fn default() -> Self {
-        // Default: 1 day
-        Self(Some(Duration::from_secs(86400)))
-    }
-}
-
-/// Request timeout configuration.
-/// - None: timeout disabled ("off")
-/// - Some(duration): timeout after specified duration
-#[derive(Clone, Debug)]
-pub struct RequestTimeout(pub Option<Duration>);
-
-impl RequestTimeout {
-    /// Get timeout duration.
-    #[inline]
-    pub fn as_duration(&self) -> Option<Duration> {
-        self.0
-    }
-}
-
-impl Default for RequestTimeout {
-    fn default() -> Self {
-        // Default: 2 minutes
-        Self(Some(Duration::from_secs(120)))
-    }
-}
+// Re-export unified types from config module
+pub use crate::config::{OptionalDuration, RequestTimeout, StaticCacheTtl};
 
 /// TLS connection information for profiling
 #[derive(Clone, Default)]
@@ -97,8 +52,8 @@ impl ServerConfig {
             internal_addr: None,
             error_pages_dir: None,
             drain_timeout: Duration::from_secs(30),
-            static_cache_ttl: StaticCacheTtl::default(),
-            request_timeout: RequestTimeout::default(),
+            static_cache_ttl: OptionalDuration::from_secs(86400), // 1 day
+            request_timeout: OptionalDuration::from_secs(120),    // 2 minutes
         }
     }
 

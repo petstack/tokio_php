@@ -23,7 +23,7 @@ pub use error::ConfigError;
 pub use executor::{ExecutorConfig, ExecutorType};
 pub use logging::LoggingConfig;
 pub use middleware::MiddlewareConfig;
-pub use server::ServerConfig;
+pub use server::{OptionalDuration, RequestTimeout, ServerConfig, StaticCacheTtl};
 
 /// Complete application configuration.
 #[derive(Clone, Debug)]
