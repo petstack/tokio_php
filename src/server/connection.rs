@@ -81,63 +81,174 @@ mod http_versions {
     }
 }
 
-/// Format current time as ISO 8601 (lightweight, no chrono dependency).
-pub fn chrono_lite_iso8601() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+// ============================================================================
+// ISO 8601 timestamp formatting (zero heap allocation)
+// ============================================================================
 
-    let secs = now.as_secs();
-    let millis = now.subsec_millis();
+/// ISO 8601 timestamp buffer - exactly 24 bytes: "2024-01-15T10:30:00.123Z"
+/// Stack-allocated, no heap allocation.
+#[derive(Clone, Copy)]
+pub struct Iso8601Timestamp {
+    buf: [u8; 24],
+}
 
-    // Calculate date/time components
-    // Days since Unix epoch
-    let days = secs / 86400;
-    let day_secs = secs % 86400;
+impl Iso8601Timestamp {
+    /// Format "YYYY-MM-DDTHH:MM:SS.mmmZ" (24 bytes exactly).
+    pub const LEN: usize = 24;
 
-    let hours = day_secs / 3600;
-    let minutes = (day_secs % 3600) / 60;
-    let seconds = day_secs % 60;
+    /// Create a new timestamp for the current time.
+    #[inline]
+    pub fn now() -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        Self::from_duration(now)
+    }
 
-    // Calculate year/month/day from days since epoch
-    // Simplified algorithm (valid for 1970-2099)
-    let mut y = 1970;
-    let mut remaining_days = days as i64;
+    /// Create from a Duration since UNIX_EPOCH.
+    #[inline]
+    pub fn from_duration(duration: Duration) -> Self {
+        let secs = duration.as_secs();
+        let millis = duration.subsec_millis();
 
-    loop {
-        let year_days = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
-            366
+        // Time of day
+        let day_secs = secs % 86400;
+        let hours = (day_secs / 3600) as u8;
+        let minutes = ((day_secs % 3600) / 60) as u8;
+        let seconds = (day_secs % 60) as u8;
+
+        // Days since epoch
+        let days = secs / 86400;
+
+        // Year calculation (valid for 1970-2099)
+        let mut year = 1970u16;
+        let mut remaining = days as i64;
+
+        loop {
+            let year_days = if is_leap_year(year) { 366 } else { 365 };
+            if remaining < year_days {
+                break;
+            }
+            remaining -= year_days;
+            year += 1;
+        }
+
+        // Month/day calculation
+        let leap = is_leap_year(year);
+        let month_days: [u8; 12] = if leap {
+            [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         } else {
-            365
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         };
-        if remaining_days < year_days {
-            break;
+
+        let mut month = 1u8;
+        for &days_in_month in &month_days {
+            if remaining < days_in_month as i64 {
+                break;
+            }
+            remaining -= days_in_month as i64;
+            month += 1;
         }
-        remaining_days -= year_days;
-        y += 1;
+        let day = (remaining + 1) as u8;
+
+        // Build buffer directly (no format! macro)
+        let mut buf = [0u8; 24];
+        write_u16_padded(&mut buf[0..4], year);
+        buf[4] = b'-';
+        write_u8_padded(&mut buf[5..7], month);
+        buf[7] = b'-';
+        write_u8_padded(&mut buf[8..10], day);
+        buf[10] = b'T';
+        write_u8_padded(&mut buf[11..13], hours);
+        buf[13] = b':';
+        write_u8_padded(&mut buf[14..16], minutes);
+        buf[16] = b':';
+        write_u8_padded(&mut buf[17..19], seconds);
+        buf[19] = b'.';
+        write_u16_padded_3(&mut buf[20..23], millis as u16);
+        buf[23] = b'Z';
+
+        Self { buf }
     }
 
-    let is_leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days: [i64; 12] = if is_leap {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut m = 0;
-    for (i, &days_in_month) in month_days.iter().enumerate() {
-        if remaining_days < days_in_month {
-            m = i + 1;
-            break;
-        }
-        remaining_days -= days_in_month;
+    /// Get the timestamp as a string slice.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        // SAFETY: We only write ASCII digits and punctuation
+        unsafe { std::str::from_utf8_unchecked(&self.buf) }
     }
-    let d = remaining_days + 1;
+}
 
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        y, m, d, hours, minutes, seconds, millis
-    )
+impl AsRef<str> for Iso8601Timestamp {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for Iso8601Timestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Debug for Iso8601Timestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Check if a year is a leap year.
+#[inline]
+const fn is_leap_year(year: u16) -> bool {
+    (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
+}
+
+/// Write a 4-digit year to buffer (0000-9999).
+#[inline]
+fn write_u16_padded(buf: &mut [u8], val: u16) {
+    buf[0] = b'0' + ((val / 1000) % 10) as u8;
+    buf[1] = b'0' + ((val / 100) % 10) as u8;
+    buf[2] = b'0' + ((val / 10) % 10) as u8;
+    buf[3] = b'0' + (val % 10) as u8;
+}
+
+/// Write a 2-digit value to buffer (00-99).
+#[inline]
+fn write_u8_padded(buf: &mut [u8], val: u8) {
+    buf[0] = b'0' + (val / 10);
+    buf[1] = b'0' + (val % 10);
+}
+
+/// Write a 3-digit milliseconds value to buffer (000-999).
+#[inline]
+fn write_u16_padded_3(buf: &mut [u8], val: u16) {
+    buf[0] = b'0' + ((val / 100) % 10) as u8;
+    buf[1] = b'0' + ((val / 10) % 10) as u8;
+    buf[2] = b'0' + (val % 10) as u8;
+}
+
+/// Legacy function for compatibility - returns owned String.
+/// Prefer `Iso8601Timestamp::now()` for zero-allocation usage.
+#[inline]
+pub fn chrono_lite_iso8601() -> String {
+    Iso8601Timestamp::now().as_str().to_string()
+}
+
+// ============================================================================
+// IP address formatting (zero heap allocation)
+// ============================================================================
+
+/// Format an IP address to a stack buffer, returning the string slice.
+/// Buffer must be at least 45 bytes for IPv6 (max: "xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx").
+#[inline]
+fn format_ip_to_buf<'a>(ip: std::net::IpAddr, buf: &'a mut [u8; 48]) -> &'a str {
+    use std::io::Write;
+    let mut cursor = std::io::Cursor::new(&mut buf[..]);
+    let _ = write!(cursor, "{}", ip);
+    let len = cursor.position() as usize;
+    // SAFETY: IP address formatting only produces ASCII
+    unsafe { std::str::from_utf8_unchecked(&buf[..len]) }
 }
 
 use bytes::Bytes;
@@ -513,21 +624,24 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .headers_mut()
             .insert(TRACEPARENT.clone(), trace_ctx.to_traceparent().parse().unwrap());
 
-        // Access logging
+        // Access logging (optimized: stack-allocated timestamp, no heap alloc for IP)
         if access_log_enabled {
             let duration = request_start.elapsed();
             let body_size = response.body().size_hint().exact().unwrap_or(0);
-            let ts = chrono_lite_iso8601();
-            let ip_str = remote_addr.ip().to_string();
+            let ts = Iso8601Timestamp::now();
+
+            // Format IP to stack buffer (max IPv6 is 45 chars, use 48 for safety)
+            let mut ip_buf = [0u8; 48];
+            let ip_str = format_ip_to_buf(remote_addr.ip(), &mut ip_buf);
 
             access_log::log_request(
-                &ts,
+                ts.as_str(),
                 &request_id,
-                &ip_str,
+                ip_str,
                 &method_str,
                 &uri_str,
                 query_str.as_deref(),
-                &http_version,
+                http_version,
                 response.status().as_u16(),
                 body_size,
                 duration.as_secs_f64() * 1000.0,
@@ -989,5 +1103,100 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 if_modified_since.as_deref(),
             ).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iso8601_timestamp_format() {
+        // Test a known timestamp: 2024-01-15T10:50:45.123Z
+        // Unix timestamp: 1705315845.123
+        let duration = Duration::new(1705315845, 123_000_000);
+        let ts = Iso8601Timestamp::from_duration(duration);
+
+        assert_eq!(ts.as_str(), "2024-01-15T10:50:45.123Z");
+        assert_eq!(ts.as_str().len(), 24);
+    }
+
+    #[test]
+    fn test_iso8601_timestamp_epoch() {
+        // Unix epoch
+        let ts = Iso8601Timestamp::from_duration(Duration::ZERO);
+        assert_eq!(ts.as_str(), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn test_iso8601_timestamp_leap_year() {
+        // Feb 29, 2024 (leap year)
+        // 2024-02-29T12:00:00.500Z
+        let duration = Duration::new(1709208000, 500_000_000);
+        let ts = Iso8601Timestamp::from_duration(duration);
+
+        assert_eq!(ts.as_str(), "2024-02-29T12:00:00.500Z");
+    }
+
+    #[test]
+    fn test_iso8601_timestamp_now() {
+        let ts = Iso8601Timestamp::now();
+        let s = ts.as_str();
+
+        // Basic format validation
+        assert_eq!(s.len(), 24);
+        assert_eq!(&s[4..5], "-");
+        assert_eq!(&s[7..8], "-");
+        assert_eq!(&s[10..11], "T");
+        assert_eq!(&s[13..14], ":");
+        assert_eq!(&s[16..17], ":");
+        assert_eq!(&s[19..20], ".");
+        assert_eq!(&s[23..24], "Z");
+    }
+
+    #[test]
+    fn test_iso8601_timestamp_display() {
+        let duration = Duration::new(1705315845, 123_000_000);
+        let ts = Iso8601Timestamp::from_duration(duration);
+
+        assert_eq!(format!("{}", ts), "2024-01-15T10:50:45.123Z");
+    }
+
+    #[test]
+    fn test_is_leap_year() {
+        assert!(is_leap_year(2000)); // divisible by 400
+        assert!(is_leap_year(2024)); // divisible by 4, not by 100
+        assert!(!is_leap_year(1900)); // divisible by 100, not by 400
+        assert!(!is_leap_year(2023)); // not divisible by 4
+    }
+
+    #[test]
+    fn test_format_ip_to_buf_v4() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let mut buf = [0u8; 48];
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let s = format_ip_to_buf(ip, &mut buf);
+
+        assert_eq!(s, "127.0.0.1");
+    }
+
+    #[test]
+    fn test_format_ip_to_buf_v6() {
+        use std::net::{IpAddr, Ipv6Addr};
+
+        let mut buf = [0u8; 48];
+        let ip = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        let s = format_ip_to_buf(ip, &mut buf);
+
+        assert_eq!(s, "2001:db8::1");
+    }
+
+    #[test]
+    fn test_http_versions_from_hyper() {
+        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_10), "HTTP/1.0");
+        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_11), "HTTP/1.1");
+        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_2), "HTTP/2.0");
+        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_3), "HTTP/3.0");
     }
 }
