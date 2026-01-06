@@ -23,48 +23,42 @@ pub fn env_bool(key: &str, default: bool) -> bool {
 /// Parse duration string (e.g., "30s", "2m", "1h", "1d", "1w").
 /// Returns None for "off" or "0".
 pub fn parse_duration(s: &str) -> Result<Option<Duration>, String> {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    const YEAR: u64 = 365 * DAY;
+
     let s = s.trim().to_lowercase();
 
     if s == "off" || s == "0" || s.is_empty() {
         return Ok(None);
     }
 
-    // Try to split into number and unit
-    let (num_str, unit) = if s.ends_with('s') {
-        (&s[..s.len() - 1], "s")
-    } else if s.ends_with('m') {
-        (&s[..s.len() - 1], "m")
-    } else if s.ends_with('h') {
-        (&s[..s.len() - 1], "h")
-    } else if s.ends_with('d') {
-        (&s[..s.len() - 1], "d")
-    } else if s.ends_with('w') {
-        (&s[..s.len() - 1], "w")
-    } else if s.ends_with('y') {
-        (&s[..s.len() - 1], "y")
-    } else {
-        // Try parsing as seconds
-        return s
-            .parse::<u64>()
-            .map(|secs| Some(Duration::from_secs(secs)))
-            .map_err(|_| format!("invalid duration: {}", s));
+    // Split at first non-digit character
+    let split_idx = s.find(|c: char| !c.is_ascii_digit());
+
+    let (num_str, unit) = match split_idx {
+        Some(0) => return Err(format!("missing number in duration: {s}")),
+        Some(idx) => (&s[..idx], &s[idx..]),
+        None => (&s[..], "s"), // Plain number treated as seconds
     };
 
     let num: u64 = num_str
         .parse()
-        .map_err(|_| format!("invalid number: {}", num_str))?;
+        .map_err(|_| format!("invalid number in duration: {s}"))?;
 
-    let secs = match unit {
-        "s" => num,
-        "m" => num * 60,
-        "h" => num * 3600,
-        "d" => num * 86400,
-        "w" => num * 86400 * 7,
-        "y" => num * 86400 * 365,
-        _ => return Err(format!("invalid unit: {}", unit)),
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => MINUTE,
+        "h" => HOUR,
+        "d" => DAY,
+        "w" => WEEK,
+        "y" => YEAR,
+        _ => return Err(format!("unknown unit '{unit}' in duration: {s}")),
     };
 
-    Ok(Some(Duration::from_secs(secs)))
+    Ok(Some(Duration::from_secs(num * multiplier)))
 }
 
 #[cfg(test)]
@@ -102,6 +96,29 @@ mod tests {
         assert_eq!(
             parse_duration("120").unwrap(),
             Some(Duration::from_secs(120))
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_edge_cases() {
+        // Missing number
+        assert!(parse_duration("s").is_err());
+        assert!(parse_duration("m").is_err());
+
+        // Unknown unit
+        assert!(parse_duration("5x").is_err());
+
+        // Whitespace
+        assert_eq!(
+            parse_duration("  30s  ").unwrap(),
+            Some(Duration::from_secs(30))
+        );
+
+        // Case insensitive
+        assert_eq!(parse_duration("OFF").unwrap(), None);
+        assert_eq!(
+            parse_duration("30S").unwrap(),
+            Some(Duration::from_secs(30))
         );
     }
 }
