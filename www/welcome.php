@@ -255,7 +255,7 @@ $enabled = $status && $status['opcache_enabled'];
     <footer class="footer">
       <div class="container">
         <div class="d-flex justify-content-center gap-3">
-          <a href="https://github.com/anthropics/tokio_php" class="btn btn-outline-secondary" target="_blank">
+          <a href="https://github.com/petstack/tokio_php" class="btn btn-outline-secondary" target="_blank">
             <i class="ti ti-brand-github me-1"></i> GitHub
           </a>
           <a href="https://hub.docker.com/r/diolektor/tokio_php" class="btn btn-outline-secondary" target="_blank">
