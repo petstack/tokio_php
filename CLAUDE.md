@@ -163,6 +163,7 @@ Returns `false` if:
 
 - Uses `tokio-rustls` with `rustls` for TLS 1.3
 - Certificates loaded from PEM files via `TLS_CERT` and `TLS_KEY` env vars
+- Docker secrets support: certificates mounted at `/run/secrets/tls_cert` and `/run/secrets/tls_key`
 - ALPN protocols: `h2`, `http/1.1` for automatic HTTP/2 negotiation
 - Self-signed dev certificates in `certs/` directory
 
@@ -212,8 +213,10 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `1` | **Recommended.** Use ExtExecutor with tokio_sapi extension (2x faster) |
 | `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
-| `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
-| `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
+| `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM). In Docker: `/run/secrets/tls_cert` |
+| `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM). In Docker: `/run/secrets/tls_key` |
+| `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate file |
+| `TLS_KEY_FILE` | `./certs/key.pem` | Docker secrets: host path to private key file |
 | `RUST_LOG` | `tokio_php=info` | Log level (trace, debug, info, warn, error) |
 
 ### Auto-calculated Defaults
@@ -236,8 +239,11 @@ USE_STUB=1 docker compose up -d
 # Laravel/Symfony single entry point
 INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d
 
-# With TLS/HTTPS
-TLS_CERT=/certs/cert.pem TLS_KEY=/certs/key.pem docker compose up -d
+# With TLS/HTTPS (uses Docker secrets, default: ./certs/)
+docker compose --profile tls up -d
+
+# With TLS/HTTPS (custom certificate files via secrets)
+TLS_CERT_FILE=/path/to/cert.pem TLS_KEY_FILE=/path/to/key.pem docker compose --profile tls up -d
 
 # Custom error pages
 ERROR_PAGES_DIR=/var/www/html/errors docker compose up -d

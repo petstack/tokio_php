@@ -99,14 +99,152 @@ INTERNAL_ADDR=127.0.0.1:9090
 Enable HTTPS for production:
 
 ```bash
-TLS_CERT=/certs/cert.pem
-TLS_KEY=/certs/key.pem
+TLS_CERT=/path/to/cert.pem
+TLS_KEY=/path/to/key.pem
 ```
 
 Features:
 - TLS 1.2 and TLS 1.3 support
 - HTTP/2 via ALPN negotiation
 - Strong cipher suites (rustls defaults)
+
+#### Docker Secrets
+
+Docker Compose uses secrets for secure certificate handling:
+
+```yaml
+# docker-compose.yml
+services:
+  app:
+    environment:
+      - TLS_CERT=/run/secrets/tls_cert
+      - TLS_KEY=/run/secrets/tls_key
+    secrets:
+      - tls_cert
+      - tls_key
+
+secrets:
+  tls_cert:
+    file: ./certs/cert.pem
+  tls_key:
+    file: ./certs/key.pem
+```
+
+Benefits:
+- Files mounted in tmpfs (memory only)
+- Not visible in `docker inspect`
+- Mode 0444 by default (read-only)
+
+#### Kubernetes Secrets
+
+Create TLS secret from certificate files:
+
+```bash
+kubectl create secret tls tokio-php-tls \
+  --cert=cert.pem \
+  --key=key.pem
+```
+
+Or declaratively:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tokio-php-tls
+type: kubernetes.io/tls
+data:
+  tls.crt: <base64-encoded-cert>
+  tls.key: <base64-encoded-key>
+```
+
+Mount in deployment:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tokio-php
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: tokio-php:latest
+          env:
+            - name: TLS_CERT
+              value: /tls/tls.crt
+            - name: TLS_KEY
+              value: /tls/tls.key
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: tokio-php-tls
+            defaultMode: 0400  # Owner read-only
+```
+
+#### cert-manager Integration
+
+For automatic certificate management with Let's Encrypt:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tokio-php-cert
+spec:
+  secretName: tokio-php-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - example.com
+    - www.example.com
+```
+
+cert-manager automatically:
+- Obtains certificates from Let's Encrypt
+- Stores them in the specified Secret
+- Renews before expiration (30 days by default)
+
+#### Ingress TLS Termination
+
+Alternative: terminate TLS at Ingress level:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tokio-php
+spec:
+  tls:
+    - hosts:
+        - example.com
+      secretName: tokio-php-tls
+  rules:
+    - host: example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tokio-php
+                port:
+                  number: 8080
+```
+
+Considerations:
+| Approach | Pros | Cons |
+|----------|------|------|
+| App-level TLS | End-to-end encryption, HTTP/2 to app | More resource usage |
+| Ingress TLS | Centralized certs, offload crypto | Internal traffic unencrypted |
+
+For sensitive data, use app-level TLS or enable mTLS with service mesh (Istio, Linkerd).
 
 ## Rate Limiting
 
@@ -266,6 +404,7 @@ See [Configuration](configuration.md) for details.
 
 - [ ] Run as non-root (`USER www-data`)
 - [ ] Enable TLS (`TLS_CERT`, `TLS_KEY`)
+- [ ] Use secrets for certificates (not plain volumes)
 - [ ] Enable rate limiting (`RATE_LIMIT`)
 - [ ] Separate internal endpoints (`INTERNAL_ADDR`)
 - [ ] Read-only volumes (`:ro`)
@@ -279,6 +418,9 @@ See [Configuration](configuration.md) for details.
 - [ ] `allowPrivilegeEscalation: false`
 - [ ] `readOnlyRootFilesystem: true`
 - [ ] `capabilities.drop: ALL`
+- [ ] TLS via `kubernetes.io/tls` Secret
+- [ ] Secret volume `defaultMode: 0400`
+- [ ] cert-manager for auto-renewal (if using Let's Encrypt)
 - [ ] Network policies configured
 - [ ] Pod security policy/standards enforced
 

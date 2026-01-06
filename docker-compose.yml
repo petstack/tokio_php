@@ -54,7 +54,7 @@ services:
 #    logging:
 #      driver: "none"  # или ограничить: driver: "json-file", options: { max-size: "1m" }
 
-  # HTTPS/TLS variant
+  # HTTPS/TLS variant (uses Docker secrets for certificates)
   tokio_php_tls:
     build:
       context: .
@@ -73,8 +73,8 @@ services:
       - PROFILE=${PROFILE:-0}
       - INDEX_FILE=${INDEX_FILE:-}
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
-      - TLS_CERT=/certs/cert.pem
-      - TLS_KEY=/certs/key.pem
+      - TLS_CERT=/run/secrets/tls_cert
+      - TLS_KEY=/run/secrets/tls_key
       - INTERNAL_ADDR=0.0.0.0:9090
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
       - ACCESS_LOG=${ACCESS_LOG:-0}
@@ -82,10 +82,12 @@ services:
       - RATE_WINDOW=${RATE_WINDOW:-60}
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+    secrets:
+      - tls_cert
+      - tls_key
     volumes:
       - ./www:/var/www/html:ro
       - ./php.ini:/usr/local/etc/php/conf.d/tokio_php.ini:ro
-      - ./certs:/certs:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
@@ -95,3 +97,9 @@ services:
       start_period: 10s
     profiles:
       - tls
+
+secrets:
+  tls_cert:
+    file: ${TLS_CERT_FILE:-./certs/cert.pem}
+  tls_key:
+    file: ${TLS_KEY_FILE:-./certs/key.pem}
