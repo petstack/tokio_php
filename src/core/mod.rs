@@ -27,7 +27,7 @@ mod error;
 mod request;
 mod response;
 
-pub use context::{Context, ContextBuilder};
+pub use context::{generate_span_id, generate_trace_id, Context, ContextBuilder, HttpVersion};
 pub use error::{Error, Result};
 pub use request::Request;
 pub use response::{Response, ResponseBuilder};
