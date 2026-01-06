@@ -104,10 +104,9 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     let worker_threads = config.executor.worker_count();
     #[allow(unused_variables)]
     let queue_capacity = config.executor.queue_capacity();
-    let profile_enabled = config.middleware.profile;
-    let access_log_enabled = config.middleware.access_log;
-    let rate_limit = config.middleware.rate_limit;
-    let rate_window = config.middleware.rate_window;
+    let profile_enabled = config.middleware.is_profile_enabled();
+    let access_log_enabled = config.middleware.is_access_log_enabled();
+    let rate_limit_config = config.middleware.rate_limit();
 
     // Create executor based on type
     match config.executor.executor_type {
@@ -117,7 +116,7 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
             let server = Server::new(server_config, executor)?
                 .with_profile_enabled(profile_enabled)
                 .with_access_log_enabled(access_log_enabled)
-                .with_rate_limiter(rate_limit, rate_window);
+                .with_rate_limiter(rate_limit_config);
             run_server(server).await
         }
         ExecutorType::Ext => {
@@ -144,7 +143,7 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 let server = Server::new(server_config, executor)?
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
-                    .with_rate_limiter(rate_limit, rate_window);
+                    .with_rate_limiter(rate_limit_config);
                 run_server(server).await
             }
 
@@ -155,7 +154,7 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 let server = Server::new(server_config, executor)?
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
-                    .with_rate_limiter(rate_limit, rate_window);
+                    .with_rate_limiter(rate_limit_config);
                 run_server(server).await
             }
         }
@@ -180,7 +179,7 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 let server = Server::new(server_config, executor)?
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
-                    .with_rate_limiter(rate_limit, rate_window);
+                    .with_rate_limiter(rate_limit_config);
                 run_server(server).await
             }
 
@@ -191,7 +190,7 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 let server = Server::new(server_config, executor)?
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
-                    .with_rate_limiter(rate_limit, rate_window);
+                    .with_rate_limiter(rate_limit_config);
                 run_server(server).await
             }
         }

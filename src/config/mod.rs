@@ -22,7 +22,7 @@ mod server;
 pub use error::ConfigError;
 pub use executor::{ExecutorConfig, ExecutorType};
 pub use logging::LoggingConfig;
-pub use middleware::MiddlewareConfig;
+pub use middleware::{MiddlewareConfig, RateLimitConfig};
 pub use server::{OptionalDuration, RequestTimeout, ServerConfig, StaticCacheTtl};
 
 /// Complete application configuration.
@@ -90,14 +90,15 @@ impl Config {
             info!("Request timeout: disabled");
         }
 
-        if let Some(limit) = self.middleware.rate_limit {
+        if let Some(rl) = self.middleware.rate_limit() {
             info!(
                 "Rate limit: {} req/{}s per IP",
-                limit, self.middleware.rate_window
+                rl.limit(),
+                rl.window_secs()
             );
         }
 
-        if self.middleware.access_log {
+        if self.middleware.is_access_log_enabled() {
             info!("Access log: enabled");
         }
     }
@@ -134,7 +135,7 @@ mod tests {
         assert!(config.executor.queue_capacity() >= 100);
         // USE_EXT=1 is default, so Ext executor
         assert_eq!(config.executor.executor_type, ExecutorType::Ext);
-        assert!(config.middleware.rate_limit.is_none());
-        assert!(!config.middleware.access_log);
+        assert!(config.middleware.rate_limit().is_none());
+        assert!(!config.middleware.is_access_log_enabled());
     }
 }

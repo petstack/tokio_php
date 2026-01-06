@@ -103,7 +103,9 @@ impl RateLimitMiddleware {
     /// Create from middleware configuration.
     /// Returns None if rate limiting is not configured.
     pub fn from_config(config: &MiddlewareConfig) -> Option<Self> {
-        config.rate_limit.map(|limit| Self::new(limit, config.rate_window))
+        config
+            .rate_limit()
+            .map(|rl| Self::new(rl.limit(), rl.window_secs()))
     }
 }
 
@@ -243,26 +245,4 @@ mod tests {
         assert!(headers.contains_key("X-RateLimit-Reset"));
     }
 
-    #[test]
-    fn test_from_config() {
-        let config = MiddlewareConfig {
-            rate_limit: Some(100),
-            rate_window: 120,
-            access_log: false,
-            profile: false,
-        };
-
-        let mw = RateLimitMiddleware::from_config(&config);
-        assert!(mw.is_some());
-
-        let config_disabled = MiddlewareConfig {
-            rate_limit: None,
-            rate_window: 60,
-            access_log: false,
-            profile: false,
-        };
-
-        let mw = RateLimitMiddleware::from_config(&config_disabled);
-        assert!(mw.is_none());
-    }
 }

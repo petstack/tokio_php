@@ -31,6 +31,7 @@ use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics, ServerConfigInfo};
 use rate_limit::RateLimiter;
 
+use crate::config::RateLimitConfig;
 use crate::executor::ScriptExecutor;
 
 /// HTTP server with pluggable script executor.
@@ -151,13 +152,9 @@ impl<E: ScriptExecutor + 'static> Server<E> {
     }
 
     /// Configure rate limiting for this server.
-    ///
-    /// # Arguments
-    /// * `limit` - Maximum requests per IP per window (None = disabled)
-    /// * `window_secs` - Window duration in seconds
-    pub fn with_rate_limiter(mut self, limit: Option<u64>, window_secs: u64) -> Self {
-        if let Some(limit) = limit {
-            let limiter = RateLimiter::new(limit, window_secs);
+    pub fn with_rate_limiter(mut self, config: Option<RateLimitConfig>) -> Self {
+        if let Some(rl) = config {
+            let limiter = RateLimiter::new(rl.limit(), rl.window_secs());
             info!(
                 "Rate limiting enabled: {} requests per {} seconds per IP",
                 limiter.limit(),
