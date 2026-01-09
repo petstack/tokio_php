@@ -450,19 +450,9 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     code
 }
 
-/// Builds combined code: set_time_limit + superglobals + require script (single eval)
+/// Builds combined code: superglobals + require script (single eval)
 pub fn build_combined_code(request: &ScriptRequest) -> String {
     let mut code = String::with_capacity(4096);
-
-    // Inject set_time_limit() if timeout is configured
-    if let Some(timeout) = request.timeout {
-        // Use ceiling to ensure at least 1 second for very short timeouts
-        let secs = timeout.as_secs().max(1);
-        code.push_str("set_time_limit(");
-        code.push_str(&secs.to_string());
-        code.push_str(");");
-    }
-
     code.push_str(&build_superglobals_code(request));
     code.push_str("require'");
     write_escaped(&mut code, &request.script_path);

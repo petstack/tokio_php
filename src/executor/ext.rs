@@ -330,21 +330,6 @@ fn execute_script_with_ffi(
         timing.ffi_init_eval_us = init_start.elapsed().as_micros() as u64;
     }
 
-    // Set time limit if configured
-    if let Some(timeout) = request.timeout {
-        let secs = timeout.as_secs().max(1);
-        let code = format!("set_time_limit({});", secs);
-        let code_c = CString::new(code).unwrap();
-        let name = b"set_time_limit\0";
-        unsafe {
-            zend_eval_string(
-                code_c.as_ptr() as *mut c_char,
-                ptr::null_mut(),
-                name.as_ptr() as *mut c_char,
-            );
-        }
-    }
-
     // Execute script via FFI
     let script_start = Instant::now();
     unsafe {
