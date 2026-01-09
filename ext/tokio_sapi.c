@@ -240,11 +240,139 @@ static zval* get_cached_superglobal(int track_var)
  * Batch API - set multiple variables in one FFI call
  * ============================================================================ */
 
+/* Set a nested array value using bracket notation (e.g., form[field][subfield])
+ * Handles PHP-style array key parsing:
+ * - form[field] -> $arr['form']['field'] = value
+ * - form[] -> $arr['form'][] = value (auto-indexed)
+ * - form[0][name] -> $arr['form'][0]['name'] = value
+ */
+static void set_nested_array_value(zval *arr, const char *key, size_t key_len, const char *val, size_t val_len)
+{
+    /* Find first bracket */
+    const char *bracket = memchr(key, '[', key_len);
+
+    if (bracket == NULL) {
+        /* Simple key, no brackets - direct set */
+        zval zval_val;
+        ZVAL_STRINGL(&zval_val, val, val_len);
+        zend_hash_str_update(Z_ARRVAL_P(arr), key, key_len, &zval_val);
+        return;
+    }
+
+    /* Extract base name (before first bracket) */
+    size_t base_len = bracket - key;
+    if (base_len == 0) {
+        /* Key starts with [ - invalid, treat as literal */
+        zval zval_val;
+        ZVAL_STRINGL(&zval_val, val, val_len);
+        zend_hash_str_update(Z_ARRVAL_P(arr), key, key_len, &zval_val);
+        return;
+    }
+
+    /* Get or create base array */
+    zval *current = zend_hash_str_find(Z_ARRVAL_P(arr), key, base_len);
+    if (current == NULL || Z_TYPE_P(current) != IS_ARRAY) {
+        /* Create new array for base key */
+        zval new_arr;
+        array_init(&new_arr);
+        current = zend_hash_str_update(Z_ARRVAL_P(arr), key, base_len, &new_arr);
+    }
+
+    /* Parse remaining brackets */
+    const char *ptr = bracket;
+    const char *end = key + key_len;
+
+    while (ptr < end && *ptr == '[') {
+        ptr++; /* Skip '[' */
+
+        /* Find closing bracket */
+        const char *close = memchr(ptr, ']', end - ptr);
+        if (close == NULL) {
+            /* Malformed - no closing bracket, bail out */
+            break;
+        }
+
+        size_t index_len = close - ptr;
+
+        /* Check if there are more brackets after this one */
+        const char *next = close + 1;
+        int has_more = (next < end && *next == '[');
+
+        if (index_len == 0) {
+            /* Empty brackets [] - auto-indexed append */
+            if (has_more) {
+                /* More brackets after - create array element */
+                zval new_arr;
+                array_init(&new_arr);
+                current = zend_hash_next_index_insert(Z_ARRVAL_P(current), &new_arr);
+                if (current == NULL) break;
+            } else {
+                /* Final [] - append value */
+                zval zval_val;
+                ZVAL_STRINGL(&zval_val, val, val_len);
+                zend_hash_next_index_insert(Z_ARRVAL_P(current), &zval_val);
+                return;
+            }
+        } else {
+            /* Named or numeric index */
+            /* Check if it's a numeric index */
+            int is_numeric = 1;
+            for (size_t i = 0; i < index_len; i++) {
+                if (ptr[i] < '0' || ptr[i] > '9') {
+                    is_numeric = 0;
+                    break;
+                }
+            }
+
+            if (has_more) {
+                /* More brackets - get or create sub-array */
+                zval *next_arr;
+                if (is_numeric) {
+                    zend_long idx = ZEND_STRTOL(ptr, NULL, 10);
+                    next_arr = zend_hash_index_find(Z_ARRVAL_P(current), idx);
+                    if (next_arr == NULL || Z_TYPE_P(next_arr) != IS_ARRAY) {
+                        zval new_arr;
+                        array_init(&new_arr);
+                        next_arr = zend_hash_index_update(Z_ARRVAL_P(current), idx, &new_arr);
+                    }
+                } else {
+                    next_arr = zend_hash_str_find(Z_ARRVAL_P(current), ptr, index_len);
+                    if (next_arr == NULL || Z_TYPE_P(next_arr) != IS_ARRAY) {
+                        zval new_arr;
+                        array_init(&new_arr);
+                        next_arr = zend_hash_str_update(Z_ARRVAL_P(current), ptr, index_len, &new_arr);
+                    }
+                }
+                current = next_arr;
+            } else {
+                /* Final index - set value */
+                zval zval_val;
+                ZVAL_STRINGL(&zval_val, val, val_len);
+                if (is_numeric) {
+                    zend_long idx = ZEND_STRTOL(ptr, NULL, 10);
+                    zend_hash_index_update(Z_ARRVAL_P(current), idx, &zval_val);
+                } else {
+                    zend_hash_str_update(Z_ARRVAL_P(current), ptr, index_len, &zval_val);
+                }
+                return;
+            }
+        }
+
+        ptr = next;
+    }
+
+    /* If we get here with remaining value (malformed brackets), set as last element */
+    zval zval_val;
+    ZVAL_STRINGL(&zval_val, val, val_len);
+    zend_hash_next_index_insert(Z_ARRVAL_P(current), &zval_val);
+}
+
 /* Batch set superglobal from packed buffer:
  * Buffer format: [key_len:u32][key\0][val_len:u32][val]...
  * key_len includes null terminator, val_len does not
+ * parse_brackets: if true, parse PHP-style bracket notation (e.g., form[field])
  * Returns number of variables set */
-static int set_superglobal_batch(int track_var, const char *buffer, size_t buffer_len, size_t count)
+static int set_superglobal_batch(int track_var, const char *buffer, size_t buffer_len, size_t count, int parse_brackets)
 {
     /* Get cached array (fast path, no repeated zend_is_auto_global) */
     zval *arr = get_cached_superglobal(track_var);
@@ -277,38 +405,43 @@ static int set_superglobal_batch(int track_var, const char *buffer, size_t buffe
         const char *val = (const char *)ptr;
         ptr += val_len;
 
-        /* Direct hash update (faster than php_register_variable_safe) */
-        zval zval_val;
-        ZVAL_STRINGL(&zval_val, val, val_len);
-        zend_hash_str_update(Z_ARRVAL_P(arr), key, key_str_len, &zval_val);
+        if (parse_brackets) {
+            /* Parse bracket notation (e.g., form[field] -> nested array) */
+            set_nested_array_value(arr, key, key_str_len, val, val_len);
+        } else {
+            /* Direct hash update (faster for simple keys like $_SERVER) */
+            zval zval_val;
+            ZVAL_STRINGL(&zval_val, val, val_len);
+            zend_hash_str_update(Z_ARRVAL_P(arr), key, key_str_len, &zval_val);
+        }
         set_count++;
     }
 
     return set_count;
 }
 
-/* Public API: batch set $_SERVER variables */
+/* Public API: batch set $_SERVER variables (no bracket parsing) */
 int tokio_sapi_set_server_vars_batch(const char *buffer, size_t buffer_len, size_t count)
 {
-    return set_superglobal_batch(TRACK_VARS_SERVER, buffer, buffer_len, count);
+    return set_superglobal_batch(TRACK_VARS_SERVER, buffer, buffer_len, count, 0);
 }
 
-/* Public API: batch set $_GET variables */
+/* Public API: batch set $_GET variables (with bracket parsing) */
 int tokio_sapi_set_get_vars_batch(const char *buffer, size_t buffer_len, size_t count)
 {
-    return set_superglobal_batch(TRACK_VARS_GET, buffer, buffer_len, count);
+    return set_superglobal_batch(TRACK_VARS_GET, buffer, buffer_len, count, 1);
 }
 
-/* Public API: batch set $_POST variables */
+/* Public API: batch set $_POST variables (with bracket parsing) */
 int tokio_sapi_set_post_vars_batch(const char *buffer, size_t buffer_len, size_t count)
 {
-    return set_superglobal_batch(TRACK_VARS_POST, buffer, buffer_len, count);
+    return set_superglobal_batch(TRACK_VARS_POST, buffer, buffer_len, count, 1);
 }
 
-/* Public API: batch set $_COOKIE variables */
+/* Public API: batch set $_COOKIE variables (with bracket parsing) */
 int tokio_sapi_set_cookie_vars_batch(const char *buffer, size_t buffer_len, size_t count)
 {
-    return set_superglobal_batch(TRACK_VARS_COOKIE, buffer, buffer_len, count);
+    return set_superglobal_batch(TRACK_VARS_COOKIE, buffer, buffer_len, count, 1);
 }
 
 /* Public API: ultra-batch - set ALL superglobals in one call
@@ -338,16 +471,16 @@ void tokio_sapi_set_all_superglobals(
 
     /* 2. Set all superglobals using cached arrays */
     if (server_count > 0) {
-        set_superglobal_batch(TRACK_VARS_SERVER, server_buf, server_len, server_count);
+        set_superglobal_batch(TRACK_VARS_SERVER, server_buf, server_len, server_count, 0);
     }
     if (get_count > 0) {
-        set_superglobal_batch(TRACK_VARS_GET, get_buf, get_len, get_count);
+        set_superglobal_batch(TRACK_VARS_GET, get_buf, get_len, get_count, 1);
     }
     if (post_count > 0) {
-        set_superglobal_batch(TRACK_VARS_POST, post_buf, post_len, post_count);
+        set_superglobal_batch(TRACK_VARS_POST, post_buf, post_len, post_count, 1);
     }
     if (cookie_count > 0) {
-        set_superglobal_batch(TRACK_VARS_COOKIE, cookie_buf, cookie_len, cookie_count);
+        set_superglobal_batch(TRACK_VARS_COOKIE, cookie_buf, cookie_len, cookie_count, 1);
     }
 
     /* 3. Build $_REQUEST from $_GET + $_POST */
