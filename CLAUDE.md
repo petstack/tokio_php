@@ -710,6 +710,39 @@ Timeline:
 - 5-30s: App drains connections
 - 30s: SIGKILL if still running
 
+## Framework Compatibility
+
+Symfony, Laravel, and other frameworks compile cache on-the-fly in development mode. These file operations are not thread-safe and cause segfaults with multiple workers.
+
+| Mode | Workers | Setup |
+|------|---------|-------|
+| **Development** | `PHP_WORKERS=1` | Single worker (safe) |
+| **Production** | `PHP_WORKERS=0` (auto) | Pre-warm cache first |
+
+### Symfony
+
+```bash
+# Development
+PHP_WORKERS=1 APP_ENV=dev docker compose up -d
+
+# Production
+docker compose exec app php bin/console cache:warmup --env=prod
+APP_ENV=prod PHP_WORKERS=0 docker compose up -d
+```
+
+### Laravel
+
+```bash
+# Development
+PHP_WORKERS=1 APP_ENV=local docker compose up -d
+
+# Production
+docker compose exec app php artisan optimize
+APP_ENV=production PHP_WORKERS=0 docker compose up -d
+```
+
+See [docs/framework-compatibility.md](docs/framework-compatibility.md) for full documentation.
+
 ## Limitations
 
 - No `$_SESSION` support (requires session handler implementation)
