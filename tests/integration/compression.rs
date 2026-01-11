@@ -114,10 +114,7 @@ async fn test_compression_php_output() {
 async fn test_compression_css_file() {
     let server = TestServer::new();
 
-    let client = reqwest::Client::builder()
-        .no_brotli()
-        .build()
-        .unwrap();
+    let client = reqwest::Client::builder().no_brotli().build().unwrap();
 
     let resp = client
         .get(format!("{}/test.css", server.base_url))
@@ -162,10 +159,7 @@ async fn test_gzip_not_supported() {
 async fn test_accept_encoding_multiple() {
     let server = TestServer::new();
 
-    let client = reqwest::Client::builder()
-        .no_brotli()
-        .build()
-        .unwrap();
+    let client = reqwest::Client::builder().no_brotli().build().unwrap();
 
     let resp = client
         .get(format!("{}/index.php", server.base_url))

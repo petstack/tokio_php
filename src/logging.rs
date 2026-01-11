@@ -97,9 +97,21 @@ where
         // Build message
         let msg = if log_type == "access" {
             // For access logs, build "METHOD /path STATUS"
-            let method = visitor.fields.get("method").and_then(|v| v.as_str()).unwrap_or("?");
-            let path = visitor.fields.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            let status = visitor.fields.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+            let method = visitor
+                .fields
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let path = visitor
+                .fields
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let status = visitor
+                .fields
+                .get("status")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             format!("{} {} {}", method, path, status)
         } else {
             visitor.message.clone().unwrap_or_default()
@@ -126,7 +138,11 @@ where
             "data": data,
         });
 
-        writeln!(writer, "{}", serde_json::to_string(&entry).unwrap_or_default())
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string(&entry).unwrap_or_default()
+        )
     }
 }
 

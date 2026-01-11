@@ -18,7 +18,10 @@ async fn test_get_superglobal() {
 async fn test_post_superglobal() {
     let server = TestServer::new();
     let resp = server
-        .post_form("/form.php", &[("name", "PostTest"), ("email", "test@test.com")])
+        .post_form(
+            "/form.php",
+            &[("name", "PostTest"), ("email", "test@test.com")],
+        )
         .await;
 
     assert_status(&resp, StatusCode::OK);
@@ -172,9 +175,7 @@ async fn test_empty_post() {
 async fn test_large_query_string() {
     let server = TestServer::new();
     let long_value = "x".repeat(1000);
-    let resp = server
-        .get(&format!("/hello.php?name={}", long_value))
-        .await;
+    let resp = server.get(&format!("/hello.php?name={}", long_value)).await;
 
     assert_status(&resp, StatusCode::OK);
 }
@@ -199,9 +200,7 @@ async fn test_concurrent_requests() {
     for i in 0..10 {
         let client = server.client.clone();
         let url = format!("{}/hello.php?name=User{}", server.base_url, i);
-        handles.push(tokio::spawn(async move {
-            client.get(&url).send().await
-        }));
+        handles.push(tokio::spawn(async move { client.get(&url).send().await }));
     }
 
     // All should succeed

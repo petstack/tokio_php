@@ -56,11 +56,10 @@ impl RateLimiter {
             let counters = self.counters.read().unwrap();
             if let Some(counter) = counters.get(&ip) {
                 let elapsed = now.duration_since(counter.window_start);
-                if elapsed < self.window
-                    && counter.count >= self.limit {
-                        let reset_after = (self.window - elapsed).as_secs().max(1);
-                        return (false, 0, reset_after);
-                    }
+                if elapsed < self.window && counter.count >= self.limit {
+                    let reset_after = (self.window - elapsed).as_secs().max(1);
+                    return (false, 0, reset_after);
+                }
             }
         }
 
@@ -253,5 +252,4 @@ mod tests {
         assert!(headers.contains_key("X-RateLimit-Remaining"));
         assert!(headers.contains_key("X-RateLimit-Reset"));
     }
-
 }

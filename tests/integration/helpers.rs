@@ -40,11 +40,7 @@ impl TestServer {
     }
 
     /// Make a GET request with custom headers
-    pub async fn get_with_headers(
-        &self,
-        path: &str,
-        headers: &[(&str, &str)],
-    ) -> Response {
+    pub async fn get_with_headers(&self, path: &str, headers: &[(&str, &str)]) -> Response {
         let mut req = self.client.get(format!("{}{}", self.base_url, path));
         for (name, value) in headers {
             req = req.header(*name, *value);
@@ -63,11 +59,7 @@ impl TestServer {
     }
 
     /// Make a POST request with JSON body
-    pub async fn post_json<T: serde::Serialize + ?Sized>(
-        &self,
-        path: &str,
-        json: &T,
-    ) -> Response {
+    pub async fn post_json<T: serde::Serialize + ?Sized>(&self, path: &str, json: &T) -> Response {
         self.client
             .post(format!("{}{}", self.base_url, path))
             .json(json)
@@ -87,7 +79,8 @@ impl TestServer {
 
     /// Check if server is running
     pub async fn is_running(&self) -> bool {
-        match self.client
+        match self
+            .client
             .get(format!("{}/health", self.internal_url))
             .timeout(Duration::from_secs(2))
             .send()

@@ -1,10 +1,10 @@
 //! TLS listener implementation using rustls.
 
 use std::fs::File;
+use std::future::Future;
 use std::io::{self, BufReader};
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -93,9 +93,8 @@ impl TlsListener {
     /// Create a new TLS listener bound to the given address.
     pub async fn bind(addr: SocketAddr, config: &TlsConfig) -> io::Result<Self> {
         let tcp_listener = TokioTcpListener::bind(addr).await?;
-        let tls_config = Self::load_tls_config(config).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, e.to_string())
-        })?;
+        let tls_config = Self::load_tls_config(config)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
         let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
         Ok(Self {
@@ -113,7 +112,9 @@ impl TlsListener {
     }
 
     /// Load TLS configuration from cert and key files.
-    fn load_tls_config(config: &TlsConfig) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    fn load_tls_config(
+        config: &TlsConfig,
+    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         // Load certificate chain
         let cert_file = File::open(&config.cert_path)?;
         let mut cert_reader = BufReader::new(cert_file);
@@ -175,9 +176,11 @@ impl Listener for TlsListener {
 
             // Perform TLS handshake with timing
             let handshake_start = Instant::now();
-            let tls_stream = self.acceptor.accept(stream).await.map_err(|e| {
-                io::Error::new(io::ErrorKind::ConnectionAborted, e)
-            })?;
+            let tls_stream = self
+                .acceptor
+                .accept(stream)
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::ConnectionAborted, e))?;
             let handshake_duration = handshake_start.elapsed();
 
             // Extract TLS info

@@ -96,7 +96,9 @@ impl SystemMetrics {
                 }
             }
             if metrics.memory_total_bytes > 0 {
-                metrics.memory_used_bytes = metrics.memory_total_bytes.saturating_sub(metrics.memory_available_bytes);
+                metrics.memory_used_bytes = metrics
+                    .memory_total_bytes
+                    .saturating_sub(metrics.memory_available_bytes);
                 metrics.memory_usage_percent =
                     (metrics.memory_used_bytes as f64 / metrics.memory_total_bytes as f64) * 100.0;
             }
@@ -235,7 +237,8 @@ impl RequestMetrics {
     /// Record response time in microseconds.
     #[inline]
     pub fn record_response_time(&self, duration_us: u64) {
-        self.total_response_time_us.fetch_add(duration_us, Ordering::Relaxed);
+        self.total_response_time_us
+            .fetch_add(duration_us, Ordering::Relaxed);
         self.response_count.fetch_add(1, Ordering::Relaxed);
     }
 

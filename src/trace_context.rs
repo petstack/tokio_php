@@ -211,19 +211,31 @@ mod tests {
     #[test]
     fn test_parse_invalid_traceparent() {
         // Wrong version
-        assert!(TraceContext::parse("01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").is_none());
+        assert!(
+            TraceContext::parse("01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+                .is_none()
+        );
 
         // All zeros trace-id
-        assert!(TraceContext::parse("00-00000000000000000000000000000000-b7ad6b7169203331-01").is_none());
+        assert!(
+            TraceContext::parse("00-00000000000000000000000000000000-b7ad6b7169203331-01")
+                .is_none()
+        );
 
         // All zeros parent-id
-        assert!(TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01").is_none());
+        assert!(
+            TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01")
+                .is_none()
+        );
 
         // Wrong length
         assert!(TraceContext::parse("00-0af7651916cd43dd-b7ad6b7169203331-01").is_none());
 
         // Invalid hex
-        assert!(TraceContext::parse("00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-b7ad6b7169203331-01").is_none());
+        assert!(
+            TraceContext::parse("00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-b7ad6b7169203331-01")
+                .is_none()
+        );
     }
 
     #[test]
@@ -237,7 +249,8 @@ mod tests {
 
     #[test]
     fn test_to_traceparent() {
-        let ctx = TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").unwrap();
+        let ctx =
+            TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").unwrap();
         let header = ctx.to_traceparent();
 
         // trace_id stays the same, span_id is new

@@ -24,8 +24,22 @@ pub fn log_request(
     span_id: Option<&str>,
 ) {
     crate::logging::log_access(
-        ts, request_id, ip, method, path, query, http, status, bytes, duration_ms, ua, referer,
-        xff, tls, trace_id, span_id,
+        ts,
+        request_id,
+        ip,
+        method,
+        path,
+        query,
+        http,
+        status,
+        bytes,
+        duration_ms,
+        ua,
+        referer,
+        xff,
+        tls,
+        trace_id,
+        span_id,
     );
 }
 

@@ -42,12 +42,7 @@ async fn test_rate_limit_remaining_decreases() {
 
     // If rate limiting is enabled, remaining should decrease
     if let (Some(r1), Some(r2)) = (remaining1, remaining2) {
-        assert!(
-            r2 <= r1,
-            "Remaining should decrease: {} -> {}",
-            r1,
-            r2
-        );
+        assert!(r2 <= r1, "Remaining should decrease: {} -> {}", r1, r2);
     }
 }
 

@@ -481,9 +481,18 @@ mod tests {
         assert_eq!(HttpVersion::HTTP_11.as_str(), "HTTP/1.1");
         assert_eq!(HttpVersion::HTTP_20.as_str(), "HTTP/2.0");
 
-        assert_eq!(HttpVersion::from_http(http::Version::HTTP_10), HttpVersion::HTTP_10);
-        assert_eq!(HttpVersion::from_http(http::Version::HTTP_11), HttpVersion::HTTP_11);
-        assert_eq!(HttpVersion::from_http(http::Version::HTTP_2), HttpVersion::HTTP_20);
+        assert_eq!(
+            HttpVersion::from_http(http::Version::HTTP_10),
+            HttpVersion::HTTP_10
+        );
+        assert_eq!(
+            HttpVersion::from_http(http::Version::HTTP_11),
+            HttpVersion::HTTP_11
+        );
+        assert_eq!(
+            HttpVersion::from_http(http::Version::HTTP_2),
+            HttpVersion::HTTP_20
+        );
 
         // Display
         assert_eq!(format!("{}", HttpVersion::HTTP_20), "HTTP/2.0");

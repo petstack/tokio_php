@@ -105,7 +105,11 @@ impl ListenerConfig {
     }
 
     /// Create a new TLS listener configuration.
-    pub fn tls(addr: SocketAddr, cert_path: impl Into<String>, key_path: impl Into<String>) -> Self {
+    pub fn tls(
+        addr: SocketAddr,
+        cert_path: impl Into<String>,
+        key_path: impl Into<String>,
+    ) -> Self {
         Self {
             addr,
             tls: Some(TlsConfig {

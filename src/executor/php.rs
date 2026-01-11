@@ -74,7 +74,10 @@ pub struct PhpExecutor {
 impl PhpExecutor {
     /// Creates a new PHP executor with custom queue capacity.
     /// If queue_capacity is 0, uses default (workers * 100).
-    pub fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, ExecutorError> {
+    pub fn with_queue_capacity(
+        num_workers: usize,
+        queue_capacity: usize,
+    ) -> Result<Self, ExecutorError> {
         let pool = PhpPool::with_queue_capacity(num_workers, queue_capacity)?;
         Ok(Self { pool })
     }

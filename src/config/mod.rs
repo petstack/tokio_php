@@ -122,10 +122,7 @@ mod tests {
 
         let config = Config::from_env().expect("Should load config");
 
-        assert_eq!(
-            config.server.listen_addr,
-            "0.0.0.0:8080".parse().unwrap()
-        );
+        assert_eq!(config.server.listen_addr, "0.0.0.0:8080".parse().unwrap());
         assert_eq!(
             config.server.document_root.to_str().unwrap(),
             "/var/www/html"

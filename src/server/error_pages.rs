@@ -102,7 +102,6 @@ impl ErrorPages {
     pub fn get(&self, status_code: u16) -> Option<&Bytes> {
         self.pages.get(&status_code)
     }
-
 }
 
 /// Get the default reason phrase for an HTTP status code.

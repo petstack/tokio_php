@@ -39,7 +39,10 @@ async fn test_get_with_multiple_params() {
 async fn test_post_form_data() {
     let server = TestServer::new();
     let resp = server
-        .post_form("/form.php", &[("name", "John"), ("email", "john@example.com")])
+        .post_form(
+            "/form.php",
+            &[("name", "John"), ("email", "john@example.com")],
+        )
         .await;
 
     assert_status(&resp, StatusCode::OK);

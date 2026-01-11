@@ -98,8 +98,8 @@ use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics, ServerConfigInfo};
 
 use crate::config::RateLimitConfig;
-use crate::middleware::rate_limit::RateLimiter;
 use crate::executor::ScriptExecutor;
+use crate::middleware::rate_limit::RateLimiter;
 
 /// HTTP server with pluggable script executor.
 ///
@@ -359,16 +359,42 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 drain_timeout_secs: self.config.drain_timeout.as_secs().to_string(),
                 static_cache_ttl: format_optional_duration(&self.config.static_cache_ttl),
                 request_timeout: format_optional_duration(&self.config.request_timeout),
-                access_log: if self.access_log_enabled { "1".to_string() } else { "0".to_string() },
-                rate_limit: self.rate_limiter.as_ref().map(|r| r.limit().to_string()).unwrap_or_else(|| "0".to_string()),
-                rate_window: self.rate_limiter.as_ref().map(|r| r.window_secs().to_string()).unwrap_or_else(|| "60".to_string()),
-                use_stub: if executor_name == "stub" { "1".to_string() } else { "0".to_string() },
-                use_ext: if executor_name == "ext" { "1".to_string() } else { "0".to_string() },
-                profile: if self.profile_enabled { "1".to_string() } else { "0".to_string() },
+                access_log: if self.access_log_enabled {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
+                rate_limit: self
+                    .rate_limiter
+                    .as_ref()
+                    .map(|r| r.limit().to_string())
+                    .unwrap_or_else(|| "0".to_string()),
+                rate_window: self
+                    .rate_limiter
+                    .as_ref()
+                    .map(|r| r.window_secs().to_string())
+                    .unwrap_or_else(|| "60".to_string()),
+                use_stub: if executor_name == "stub" {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
+                use_ext: if executor_name == "ext" {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
+                profile: if self.profile_enabled {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
                 tls_cert: self.config.tls_cert.clone().unwrap_or_default(),
                 tls_key: self.config.tls_key.clone().unwrap_or_default(),
-                rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "tokio_php=info".to_string()),
-                service_name: std::env::var("SERVICE_NAME").unwrap_or_else(|_| "tokio_php".to_string()),
+                rust_log: std::env::var("RUST_LOG")
+                    .unwrap_or_else(|_| "tokio_php=info".to_string()),
+                service_name: std::env::var("SERVICE_NAME")
+                    .unwrap_or_else(|_| "tokio_php".to_string()),
             });
 
             let handle = tokio::spawn(async move {
@@ -514,10 +540,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             }
 
             if start.elapsed() >= timeout {
-                warn!(
-                    "Drain timeout reached with {} active connections",
-                    active
-                );
+                warn!("Drain timeout reached with {} active connections", active);
                 return false;
             }
 

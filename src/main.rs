@@ -28,7 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .with(
             tracing_subscriber::fmt::layer()
-                .event_format(logging::JsonFormatter::new(config.logging.service_name.clone()))
+                .event_format(logging::JsonFormatter::new(
+                    config.logging.service_name.clone(),
+                ))
                 .with_ansi(false),
         )
         .init();
@@ -50,7 +52,13 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     // Build ServerConfig from new Config
     let mut server_config = ServerConfig::new(config.server.listen_addr)
         .with_workers(config.executor.worker_count())
-        .with_document_root(config.server.document_root.to_str().unwrap_or("/var/www/html"));
+        .with_document_root(
+            config
+                .server
+                .document_root
+                .to_str()
+                .unwrap_or("/var/www/html"),
+        );
 
     // TLS configuration
     if let (Some(cert), Some(key)) = (
@@ -117,13 +125,11 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                     worker_threads
                 );
 
-                let executor =
-                    ExtExecutor::with_queue_capacity(worker_threads, queue_capacity).map_err(
-                        |e| {
-                            eprintln!("Failed to initialize ExtExecutor: {}", e);
-                            e
-                        },
-                    )?;
+                let executor = ExtExecutor::with_queue_capacity(worker_threads, queue_capacity)
+                    .map_err(|e| {
+                        eprintln!("Failed to initialize ExtExecutor: {}", e);
+                        e
+                    })?;
 
                 info!(
                     "ExtExecutor ready ({} workers, FFI mode)",
@@ -156,13 +162,11 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                     worker_threads
                 );
 
-                let executor =
-                    PhpExecutor::with_queue_capacity(worker_threads, queue_capacity).map_err(
-                        |e| {
-                            eprintln!("Failed to initialize PHP: {}", e);
-                            e
-                        },
-                    )?;
+                let executor = PhpExecutor::with_queue_capacity(worker_threads, queue_capacity)
+                    .map_err(|e| {
+                        eprintln!("Failed to initialize PHP: {}", e);
+                        e
+                    })?;
 
                 info!("PHP executor ready ({} workers)", executor.worker_count());
 

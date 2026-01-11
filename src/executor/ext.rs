@@ -17,9 +17,8 @@ use std::time::Instant;
 use async_trait::async_trait;
 
 use super::common::{
-    php_request_shutdown, php_request_startup, ts_resource_ex,
-    tokio_php_heartbeat, StdoutCapture, WorkerPool, WorkerRequest,
-    FINALIZE_CODE, FINALIZE_NAME,
+    php_request_shutdown, php_request_startup, tokio_php_heartbeat, ts_resource_ex, StdoutCapture,
+    WorkerPool, WorkerRequest, FINALIZE_CODE, FINALIZE_NAME,
 };
 use super::sapi;
 use super::{ExecutorError, ScriptExecutor};
@@ -41,26 +40,43 @@ extern "C" {
     fn tokio_sapi_request_shutdown();
 
     fn tokio_sapi_set_files_var(
-        field: *const c_char, field_len: usize,
+        field: *const c_char,
+        field_len: usize,
         name: *const c_char,
         file_type: *const c_char,
         tmp_name: *const c_char,
         error: c_int,
-        size: usize
+        size: usize,
     );
 
     // Set raw POST body for php://input
     fn tokio_sapi_set_post_data(data: *const c_char, len: usize);
 
     // Batch API - set multiple variables in one FFI call
-    fn tokio_sapi_set_server_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
-    fn tokio_sapi_set_get_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
-    fn tokio_sapi_set_post_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
-    fn tokio_sapi_set_cookie_vars_batch(buffer: *const c_char, buffer_len: usize, count: usize) -> c_int;
+    fn tokio_sapi_set_server_vars_batch(
+        buffer: *const c_char,
+        buffer_len: usize,
+        count: usize,
+    ) -> c_int;
+    fn tokio_sapi_set_get_vars_batch(
+        buffer: *const c_char,
+        buffer_len: usize,
+        count: usize,
+    ) -> c_int;
+    fn tokio_sapi_set_post_vars_batch(
+        buffer: *const c_char,
+        buffer_len: usize,
+        count: usize,
+    ) -> c_int;
+    fn tokio_sapi_set_cookie_vars_batch(
+        buffer: *const c_char,
+        buffer_len: usize,
+        count: usize,
+    ) -> c_int;
 
     fn tokio_sapi_clear_superglobals();
-    fn tokio_sapi_init_superglobals();   // Initialize superglobal array caches (call once per request)
-    fn tokio_sapi_init_request_state();  // Replaces header_remove();ob_start() eval
+    fn tokio_sapi_init_superglobals(); // Initialize superglobal array caches (call once per request)
+    fn tokio_sapi_init_request_state(); // Replaces header_remove();ob_start() eval
     fn tokio_sapi_build_request();
 
     // Script execution
@@ -212,11 +228,19 @@ fn execute_script_with_ffi(
             extra_vars.push(("TOKIO_HEARTBEAT_MAX_SECS", &hb.max_secs));
             extra_vars.push(("TOKIO_HEARTBEAT_CALLBACK", &hb.callback_hex));
         }
-        pack_into_buffer(&mut buf, request.server_vars.iter().map(|(k, v)| (k, v)), &extra_vars)
+        pack_into_buffer(
+            &mut buf,
+            request.server_vars.iter().map(|(k, v)| (k, v)),
+            &extra_vars,
+        )
     });
     if count > 0 {
         SERVER_BUFFER.with(|buf| unsafe {
-            tokio_sapi_set_server_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+            tokio_sapi_set_server_vars_batch(
+                buf.borrow().as_ptr() as *const c_char,
+                buf_len,
+                count,
+            );
         });
     }
     if profiling {
@@ -228,7 +252,11 @@ fn execute_script_with_ffi(
     let phase_start = Instant::now();
     let (buf_len, count) = GET_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.get_params.iter().map(|(k, v)| (k, v)), &[])
+        pack_into_buffer(
+            &mut buf,
+            request.get_params.iter().map(|(k, v)| (k, v)),
+            &[],
+        )
     });
     if count > 0 {
         GET_BUFFER.with(|buf| unsafe {
@@ -244,7 +272,11 @@ fn execute_script_with_ffi(
     let phase_start = Instant::now();
     let (buf_len, count) = POST_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.post_params.iter().map(|(k, v)| (k, v)), &[])
+        pack_into_buffer(
+            &mut buf,
+            request.post_params.iter().map(|(k, v)| (k, v)),
+            &[],
+        )
     });
     if count > 0 {
         POST_BUFFER.with(|buf| unsafe {
@@ -271,7 +303,11 @@ fn execute_script_with_ffi(
     });
     if count > 0 {
         COOKIE_BUFFER.with(|buf| unsafe {
-            tokio_sapi_set_cookie_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+            tokio_sapi_set_cookie_vars_batch(
+                buf.borrow().as_ptr() as *const c_char,
+                buf_len,
+                count,
+            );
         });
     }
     if profiling {
@@ -290,12 +326,13 @@ fn execute_script_with_ffi(
                 let tmp_c = CString::new(file.tmp_name.as_str()).unwrap_or_default();
 
                 tokio_sapi_set_files_var(
-                    field_name.as_ptr() as *const c_char, field_name.len(),
+                    field_name.as_ptr() as *const c_char,
+                    field_name.len(),
                     name_c.as_ptr(),
                     type_c.as_ptr(),
                     tmp_c.as_ptr(),
                     file.error as c_int,
-                    file.size as usize
+                    file.size as usize,
                 );
                 files_count += 1;
             }
@@ -308,7 +345,9 @@ fn execute_script_with_ffi(
 
     // 7. Build $_REQUEST from $_GET + $_POST
     let phase_start = Instant::now();
-    unsafe { tokio_sapi_build_request(); }
+    unsafe {
+        tokio_sapi_build_request();
+    }
     if profiling {
         timing.ffi_build_request_us = phase_start.elapsed().as_micros() as u64;
         timing.superglobals_build_us = total_start.elapsed().as_micros() as u64;
@@ -383,9 +422,14 @@ fn finalize_execution(
 
     let profile = if profiling {
         Some(ProfileData {
-            total_us: queue_wait_us + php_startup_us + timing.superglobals_build_us
-                + timing.ffi_init_eval_us + timing.script_exec_us + timing.finalize_us
-                + stdout_restore_us + php_shutdown_us,
+            total_us: queue_wait_us
+                + php_startup_us
+                + timing.superglobals_build_us
+                + timing.ffi_init_eval_us
+                + timing.script_exec_us
+                + timing.finalize_us
+                + stdout_restore_us
+                + php_shutdown_us,
             queue_wait_us,
             php_startup_us,
             superglobals_us: timing.superglobals_build_us,
@@ -422,17 +466,18 @@ fn finalize_execution(
         None
     };
 
-    Ok(ScriptResponse { body, headers, profile })
+    Ok(ScriptResponse {
+        body,
+        headers,
+        profile,
+    })
 }
 
 // =============================================================================
 // Worker Main Loop
 // =============================================================================
 
-fn ext_worker_main_loop(
-    id: usize,
-    rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>,
-) {
+fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) {
     // Initialize thread-local storage for ZTS
     unsafe {
         let _ = ts_resource_ex(0, ptr::null_mut());
@@ -447,7 +492,12 @@ fn ext_worker_main_loop(
         };
 
         match work {
-            Ok(WorkerRequest { request, response_tx, queued_at, heartbeat_ctx }) => {
+            Ok(WorkerRequest {
+                request,
+                response_tx,
+                queued_at,
+                heartbeat_ctx,
+            }) => {
                 let profiling = request.profile;
                 let request_id = next_request_id();
 
@@ -491,7 +541,13 @@ fn ext_worker_main_loop(
                     };
 
                     // Execute script with FFI superglobals (no eval overhead!)
-                    match execute_script_with_ffi(&request, request_id, id, profiling, heartbeat_info) {
+                    match execute_script_with_ffi(
+                        &request,
+                        request_id,
+                        id,
+                        profiling,
+                        heartbeat_info,
+                    ) {
                         Ok((capture, mut timing)) => {
                             // Add request_init timing
                             timing.ffi_request_init_us = ffi_request_init_us;
@@ -607,7 +663,10 @@ pub struct ExtExecutor {
 impl ExtExecutor {
     /// Creates a new ExtExecutor with custom queue capacity.
     /// If queue_capacity is 0, uses default (workers * 100).
-    pub fn with_queue_capacity(num_workers: usize, queue_capacity: usize) -> Result<Self, ExecutorError> {
+    pub fn with_queue_capacity(
+        num_workers: usize,
+        queue_capacity: usize,
+    ) -> Result<Self, ExecutorError> {
         let pool = ExtPool::with_queue_capacity(num_workers, queue_capacity)?;
         Ok(Self { pool })
     }

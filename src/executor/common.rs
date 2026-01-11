@@ -170,7 +170,12 @@ impl WorkerPool {
     where
         F: Fn(usize, Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
     {
-        Self::with_queue_capacity(num_workers, name_prefix, num_workers * DEFAULT_QUEUE_MULTIPLIER, worker_fn)
+        Self::with_queue_capacity(
+            num_workers,
+            name_prefix,
+            num_workers * DEFAULT_QUEUE_MULTIPLIER,
+            worker_fn,
+        )
     }
 
     /// Creates a new worker pool with custom queue capacity.
@@ -205,7 +210,9 @@ impl WorkerPool {
 
         tracing::info!(
             "WorkerPool '{}' created with {} workers, queue capacity {}",
-            name_prefix, num_workers, queue_capacity
+            name_prefix,
+            num_workers,
+            queue_capacity
         );
 
         Ok(Self {
@@ -230,7 +237,8 @@ impl WorkerPool {
         let queued_at = Instant::now();
 
         // Create heartbeat context reusing queued_at (one Instant::now() for both)
-        let heartbeat_ctx = timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
+        let heartbeat_ctx =
+            timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
 
         // Use try_send to avoid blocking and detect queue full
         self.request_tx
@@ -354,7 +362,9 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     // $_GET
     code.push_str("$_GET=[");
     for (i, (key, value)) in request.get_params.iter().enumerate() {
-        if i > 0 { code.push(','); }
+        if i > 0 {
+            code.push(',');
+        }
         write_kv(&mut code, key, value);
     }
     code.push_str("];");
@@ -362,7 +372,9 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     // $_POST
     code.push_str("$_POST=[");
     for (i, (key, value)) in request.post_params.iter().enumerate() {
-        if i > 0 { code.push(','); }
+        if i > 0 {
+            code.push(',');
+        }
         write_kv(&mut code, key, value);
     }
     code.push_str("];");
@@ -370,7 +382,9 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     // $_SERVER
     code.push_str("$_SERVER=[");
     for (i, (key, value)) in request.server_vars.iter().enumerate() {
-        if i > 0 { code.push(','); }
+        if i > 0 {
+            code.push(',');
+        }
         write_kv(&mut code, key, value);
     }
     code.push_str("];");
@@ -378,7 +392,9 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     // $_COOKIE
     code.push_str("$_COOKIE=[");
     for (i, (key, value)) in request.cookies.iter().enumerate() {
-        if i > 0 { code.push(','); }
+        if i > 0 {
+            code.push(',');
+        }
         write_kv(&mut code, key, value);
     }
     code.push_str("];");
@@ -391,7 +407,9 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     } else {
         code.push_str("$_FILES=[");
         for (i, (field_name, files_vec)) in request.files.iter().enumerate() {
-            if i > 0 { code.push(','); }
+            if i > 0 {
+                code.push(',');
+            }
             code.push('\'');
             write_escaped(&mut code, field_name);
             code.push_str("'=>");
@@ -412,33 +430,43 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
             } else {
                 code.push_str("['name'=>[");
                 for (j, f) in files_vec.iter().enumerate() {
-                    if j > 0 { code.push(','); }
+                    if j > 0 {
+                        code.push(',');
+                    }
                     code.push('\'');
                     write_escaped(&mut code, &f.name);
                     code.push('\'');
                 }
                 code.push_str("],'type'=>[");
                 for (j, f) in files_vec.iter().enumerate() {
-                    if j > 0 { code.push(','); }
+                    if j > 0 {
+                        code.push(',');
+                    }
                     code.push('\'');
                     write_escaped(&mut code, &f.mime_type);
                     code.push('\'');
                 }
                 code.push_str("],'tmp_name'=>[");
                 for (j, f) in files_vec.iter().enumerate() {
-                    if j > 0 { code.push(','); }
+                    if j > 0 {
+                        code.push(',');
+                    }
                     code.push('\'');
                     write_escaped(&mut code, &f.tmp_name);
                     code.push('\'');
                 }
                 code.push_str("],'error'=>[");
                 for (j, f) in files_vec.iter().enumerate() {
-                    if j > 0 { code.push(','); }
+                    if j > 0 {
+                        code.push(',');
+                    }
                     code.push_str(&f.error.to_string());
                 }
                 code.push_str("],'size'=>[");
                 for (j, f) in files_vec.iter().enumerate() {
-                    if j > 0 { code.push(','); }
+                    if j > 0 {
+                        code.push(',');
+                    }
                     code.push_str(&f.size.to_string());
                 }
                 code.push_str("]]");
@@ -496,7 +524,11 @@ impl StdoutCapture {
         #[cfg(not(target_os = "linux"))]
         let write_fd = unsafe {
             let f = libc::tmpfile();
-            if f.is_null() { -1 } else { libc::fileno(f) }
+            if f.is_null() {
+                -1
+            } else {
+                libc::fileno(f)
+            }
         };
 
         if write_fd < 0 {
@@ -505,7 +537,9 @@ impl StdoutCapture {
 
         let original_stdout = unsafe { libc::dup(1) };
         if original_stdout < 0 {
-            unsafe { libc::close(write_fd); }
+            unsafe {
+                libc::close(write_fd);
+            }
             return Err("Failed to dup stdout".to_string());
         }
 
@@ -517,7 +551,10 @@ impl StdoutCapture {
             return Err("Failed to redirect stdout".to_string());
         }
 
-        Ok(Self { write_fd, original_stdout })
+        Ok(Self {
+            write_fd,
+            original_stdout,
+        })
     }
 
     /// Restores stdout and reads captured output
@@ -537,8 +574,14 @@ impl StdoutCapture {
 
                 let mut chunk = [0u8; 8192];
                 loop {
-                    let n = libc::read(self.write_fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len());
-                    if n <= 0 { break; }
+                    let n = libc::read(
+                        self.write_fd,
+                        chunk.as_mut_ptr() as *mut libc::c_void,
+                        chunk.len(),
+                    );
+                    if n <= 0 {
+                        break;
+                    }
                     buf.extend_from_slice(&chunk[..n as usize]);
                 }
 
@@ -637,8 +680,10 @@ pub fn execute_php_script_finish(
         timing.output_parse_us = parse_start.elapsed().as_micros() as u64;
     }
 
-    let output_capture_us = timing.finalize_eval_us + timing.stdout_restore_us
-        + timing.output_read_us + timing.output_parse_us;
+    let output_capture_us = timing.finalize_eval_us
+        + timing.stdout_restore_us
+        + timing.output_read_us
+        + timing.output_parse_us;
     let superglobals_us = timing.superglobals_build_us;
 
     let profile = if profiling {
@@ -664,14 +709,15 @@ pub fn execute_php_script_finish(
         None
     };
 
-    Ok(ScriptResponse { body, headers, profile })
+    Ok(ScriptResponse {
+        body,
+        headers,
+        profile,
+    })
 }
 
 /// Worker thread main loop - processes requests until channel closes
-pub fn worker_main_loop(
-    id: usize,
-    rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>,
-) {
+pub fn worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) {
     // Initialize thread-local storage for ZTS
     unsafe {
         let _ = ts_resource_ex(0, ptr::null_mut());
@@ -686,7 +732,12 @@ pub fn worker_main_loop(
         };
 
         match work {
-            Ok(WorkerRequest { request, response_tx, queued_at, heartbeat_ctx: _ }) => {
+            Ok(WorkerRequest {
+                request,
+                response_tx,
+                queued_at,
+                heartbeat_ctx: _,
+            }) => {
                 // Note: heartbeat_ctx is ignored here - it's only used in ExtExecutor
                 // which has the tokio_sapi extension for heartbeat support
                 let profiling = request.profile;
@@ -714,7 +765,9 @@ pub fn worker_main_loop(
                             // Call php_request_shutdown WHILE stdout is still captured
                             // This ensures shutdown handlers output goes to memfd
                             let shutdown_start = Instant::now();
-                            unsafe { php_request_shutdown(ptr::null_mut()); }
+                            unsafe {
+                                php_request_shutdown(ptr::null_mut());
+                            }
                             let php_shutdown_us = if profiling {
                                 shutdown_start.elapsed().as_micros() as u64
                             } else {
@@ -722,7 +775,13 @@ pub fn worker_main_loop(
                             };
 
                             // NOW finalize capture (restore stdout, read output)
-                            match execute_php_script_finish(capture, timing, profiling, queue_wait_us, php_startup_us) {
+                            match execute_php_script_finish(
+                                capture,
+                                timing,
+                                profiling,
+                                queue_wait_us,
+                                php_startup_us,
+                            ) {
                                 Ok(mut resp) => {
                                     if let Some(ref mut profile) = resp.profile {
                                         profile.php_shutdown_us = php_shutdown_us;
@@ -735,11 +794,13 @@ pub fn worker_main_loop(
                                     }
                                     Ok(resp)
                                 }
-                                Err(e) => Err(e)
+                                Err(e) => Err(e),
                             }
                         }
                         Err(e) => {
-                            unsafe { php_request_shutdown(ptr::null_mut()); }
+                            unsafe {
+                                php_request_shutdown(ptr::null_mut());
+                            }
                             Err(e)
                         }
                     }
@@ -958,9 +1019,10 @@ mod tests {
     fn test_build_superglobals_code_with_post() {
         let request = ScriptRequest {
             script_path: "/test.php".to_string(),
-            post_params: vec![
-                (Cow::Owned("username".to_string()), Cow::Owned("admin".to_string())),
-            ],
+            post_params: vec![(
+                Cow::Owned("username".to_string()),
+                Cow::Owned("admin".to_string()),
+            )],
             ..Default::default()
         };
 
@@ -974,8 +1036,14 @@ mod tests {
         let request = ScriptRequest {
             script_path: "/test.php".to_string(),
             get_params: vec![
-                (Cow::Owned("path".to_string()), Cow::Owned("c:\\windows".to_string())),
-                (Cow::Owned("name".to_string()), Cow::Owned("O'Brien".to_string())),
+                (
+                    Cow::Owned("path".to_string()),
+                    Cow::Owned("c:\\windows".to_string()),
+                ),
+                (
+                    Cow::Owned("name".to_string()),
+                    Cow::Owned("O'Brien".to_string()),
+                ),
             ],
             ..Default::default()
         };

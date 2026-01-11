@@ -212,7 +212,10 @@ mod tests {
         let index_name: Arc<str> = Arc::from("index.php");
         // /index.php/foo should be blocked (path info after index)
         assert!(is_direct_index_access("/index.php/foo", Some(&index_name)));
-        assert!(is_direct_index_access("/index.php/api/users", Some(&index_name)));
+        assert!(is_direct_index_access(
+            "/index.php/api/users",
+            Some(&index_name)
+        ));
     }
 
     #[test]
@@ -227,7 +230,10 @@ mod tests {
         assert!(!is_direct_index_access("/", Some(&index_name)));
         assert!(!is_direct_index_access("/api/users", Some(&index_name)));
         assert!(!is_direct_index_access("/other.php", Some(&index_name)));
-        assert!(!is_direct_index_access("/admin/index.php", Some(&index_name)));
+        assert!(!is_direct_index_access(
+            "/admin/index.php",
+            Some(&index_name)
+        ));
     }
 
     #[test]

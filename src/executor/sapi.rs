@@ -51,7 +51,8 @@ type FlushFn = unsafe extern "C" fn(*mut c_void);
 type GetStatFn = unsafe extern "C" fn() -> *mut c_void;
 type GetEnvFn = unsafe extern "C" fn(*const c_char, usize) -> *mut c_char;
 type ErrorFn = unsafe extern "C" fn(c_int, *const c_char, ...);
-type HeaderHandlerFn = unsafe extern "C" fn(*mut SapiHeader, SapiHeaderOp, *mut SapiHeaders) -> c_int;
+type HeaderHandlerFn =
+    unsafe extern "C" fn(*mut SapiHeader, SapiHeaderOp, *mut SapiHeaders) -> c_int;
 type SendHeadersFn = unsafe extern "C" fn(*mut SapiHeaders) -> c_int;
 type SendHeaderFn = unsafe extern "C" fn(*mut SapiHeader, *mut c_void);
 type ReadPostFn = unsafe extern "C" fn(*mut c_char, usize) -> usize;
@@ -170,7 +171,8 @@ unsafe extern "C" fn custom_header_handler(
                 if let Ok(header_str) = CStr::from_ptr(header_ptr).to_str() {
                     let name_lower = header_str.trim().to_lowercase();
                     CAPTURED_HEADERS.with(|h| {
-                        h.borrow_mut().retain(|(n, _)| n.to_lowercase() != name_lower);
+                        h.borrow_mut()
+                            .retain(|(n, _)| n.to_lowercase() != name_lower);
                     });
                 }
             }
@@ -218,7 +220,9 @@ pub fn init() -> Result<(), String> {
         // tokio_sapi extension loaded dynamically via php.ini
     }
 
-    tracing::info!("PHP initialized with SAPI 'cli-server' (OPcache compatible, custom header handler)");
+    tracing::info!(
+        "PHP initialized with SAPI 'cli-server' (OPcache compatible, custom header handler)"
+    );
     Ok(())
 }
 

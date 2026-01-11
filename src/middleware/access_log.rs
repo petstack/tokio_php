@@ -58,7 +58,6 @@ impl AccessLogMiddleware {
     }
 }
 
-
 impl Middleware for AccessLogMiddleware {
     fn name(&self) -> &'static str {
         "access_log"
@@ -93,8 +92,14 @@ impl Middleware for AccessLogMiddleware {
             return res;
         }
 
-        let method = ctx.get::<String>("log_method").map(|s| s.as_str()).unwrap_or("?");
-        let path = ctx.get::<String>("log_path").map(|s| s.as_str()).unwrap_or("?");
+        let method = ctx
+            .get::<String>("log_method")
+            .map(|s| s.as_str())
+            .unwrap_or("?");
+        let path = ctx
+            .get::<String>("log_path")
+            .map(|s| s.as_str())
+            .unwrap_or("?");
         let query = ctx.get::<String>("log_query");
         let ua = ctx.get::<String>("log_ua");
         let referer = ctx.get::<String>("log_referer");

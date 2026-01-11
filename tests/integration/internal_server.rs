@@ -34,7 +34,10 @@ async fn test_health_json_fields() {
     let body = resp.text().await.unwrap();
 
     // Should contain status field
-    assert!(body.contains("status"), "Health response should contain 'status'");
+    assert!(
+        body.contains("status"),
+        "Health response should contain 'status'"
+    );
     assert!(body.contains("ok"), "Health status should be 'ok'");
 }
 

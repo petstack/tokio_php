@@ -1,9 +1,9 @@
 //! TCP listener implementation.
 
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::future::Future;
 
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream};
 
@@ -18,7 +18,10 @@ pub struct TcpConnection {
 impl TcpConnection {
     /// Create a new TCP connection.
     pub fn new(stream: TcpStream, remote_addr: SocketAddr) -> Self {
-        Self { stream, remote_addr }
+        Self {
+            stream,
+            remote_addr,
+        }
     }
 
     /// Get the underlying TCP stream.
@@ -149,9 +152,7 @@ mod tests {
         let server_addr = listener.local_addr().unwrap();
 
         // Spawn a task to accept the connection
-        let accept_task = tokio::spawn(async move {
-            listener.accept().await.unwrap()
-        });
+        let accept_task = tokio::spawn(async move { listener.accept().await.unwrap() });
 
         // Connect to the server
         let _client = TcpStream::connect(server_addr).await.unwrap();

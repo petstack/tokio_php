@@ -8,7 +8,9 @@ use http_body_util::Full;
 use hyper::{Response, StatusCode};
 
 use crate::types::ScriptResponse;
-use compression::{compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE};
+use compression::{
+    compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE,
+};
 
 pub use compression::accepts_brotli;
 pub use static_file::serve_static_file;

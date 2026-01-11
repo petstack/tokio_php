@@ -77,8 +77,7 @@ pub type StaticCacheTtl = OptionalDuration;
 pub type RequestTimeout = OptionalDuration;
 
 /// TLS configuration.
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TlsConfig {
     /// Path to TLS certificate (PEM format).
     pub cert_path: Option<PathBuf>,
@@ -87,7 +86,6 @@ pub struct TlsConfig {
     /// Pre-computed enabled flag (zero-cost check).
     enabled: bool,
 }
-
 
 impl TlsConfig {
     /// Check if TLS is configured (pre-computed, zero-cost).

@@ -11,12 +11,9 @@ use super::Middleware;
 /// Static file extensions that should be cached.
 const CACHEABLE_EXTENSIONS: &[&str] = &[
     // Images
-    "png", "jpg", "jpeg", "gif", "ico", "webp", "svg", "avif",
-    // Fonts
-    "woff", "woff2", "ttf", "otf", "eot",
-    // Styles/Scripts
-    "css", "js", "mjs",
-    // Other
+    "png", "jpg", "jpeg", "gif", "ico", "webp", "svg", "avif", // Fonts
+    "woff", "woff2", "ttf", "otf", "eot", // Styles/Scripts
+    "css", "js", "mjs", // Other
     "json", "xml", "txt", "pdf", "map",
 ];
 

@@ -30,8 +30,10 @@ pub async fn parse_multipart(
         })
         .ok_or("Missing boundary in multipart content-type")?;
 
-    let mut multipart =
-        Multipart::new(stream::once(async { Ok::<_, std::io::Error>(body) }), boundary);
+    let mut multipart = Multipart::new(
+        stream::once(async { Ok::<_, std::io::Error>(body) }),
+        boundary,
+    );
 
     let mut params = Vec::new();
     let mut files: Vec<(String, Vec<UploadedFile>)> = Vec::new();

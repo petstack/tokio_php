@@ -7,14 +7,19 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Response, StatusCode};
 
-use super::compression::{compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE};
+use super::compression::{
+    compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE,
+};
 use super::EMPTY_BODY;
 use crate::server::config::StaticCacheTtl;
 
 /// Format SystemTime as HTTP-date (RFC 7231).
 /// Example: "Sun, 06 Nov 1994 08:49:37 GMT"
 fn format_http_date(time: SystemTime) -> String {
-    let secs = time.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let secs = time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     // Calculate date/time components
     let days = secs / 86400;
@@ -142,7 +147,10 @@ fn parse_http_date(s: &str) -> Option<SystemTime> {
 /// Generate ETag from file size and modification time.
 /// Format: "size-mtime_hex"
 fn generate_etag(size: u64, mtime: SystemTime) -> String {
-    let mtime_secs = mtime.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mtime_secs = mtime
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     format!("\"{:x}-{:x}\"", size, mtime_secs)
 }
 
@@ -177,8 +185,14 @@ fn is_cache_valid(
         if let Some(client_time) = parse_http_date(date_str) {
             // File not modified if mtime <= client_time
             // Compare at second granularity (HTTP-date has no sub-second precision)
-            let mtime_secs = mtime.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-            let client_secs = client_time.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            let mtime_secs = mtime
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let client_secs = client_time
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             return mtime_secs <= client_secs;
         }
     }
@@ -270,7 +284,12 @@ pub async fn serve_static_file(
 
                 builder = builder
                     .header("Cache-Control", format!("public, max-age={}", ttl_secs))
-                    .header("Expires", format_http_date(SystemTime::now() + std::time::Duration::from_secs(ttl_secs)))
+                    .header(
+                        "Expires",
+                        format_http_date(
+                            SystemTime::now() + std::time::Duration::from_secs(ttl_secs),
+                        ),
+                    )
                     .header("ETag", &etag)
                     .header("Last-Modified", &last_modified);
             }

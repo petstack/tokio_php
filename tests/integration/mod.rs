@@ -9,10 +9,10 @@
 
 mod helpers;
 
-mod http_basic;
-mod static_files;
-mod php_execution;
-mod rate_limiting;
 mod compression;
 mod error_pages;
+mod http_basic;
 mod internal_server;
+mod php_execution;
+mod rate_limiting;
+mod static_files;

@@ -334,7 +334,6 @@ use tracing::{debug, error, warn};
 use super::access_log;
 use super::config::TlsInfo;
 use super::error_pages::{accepts_html, status_reason_phrase, ErrorPages};
-use crate::middleware::rate_limit::RateLimiter;
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
     accepts_brotli, empty_stub_response, from_script_response, not_found_response,
@@ -342,6 +341,7 @@ use super::response::{
 };
 use super::routing::{is_direct_index_access, is_php_uri, resolve_file_path};
 use crate::executor::ScriptExecutor;
+use crate::middleware::rate_limit::RateLimiter;
 use crate::types::{ScriptRequest, UploadedFile};
 
 /// Check if an error is a common connection reset or timeout.
@@ -419,7 +419,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Note: HTTP/2 GOAWAY frames would require hyper's graceful_shutdown(),
         // but auto::Builder's API design prevents storing the connection for later use.
         // This is acceptable for most deployments - connections complete in-flight work.
-        self.handle_connection(stream, remote_addr, tls_acceptor).await;
+        self.handle_connection(stream, remote_addr, tls_acceptor)
+            .await;
     }
 
     async fn handle_tls_connection(
@@ -431,22 +432,18 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let tls_start = Instant::now();
 
         // TLS handshake with timeout
-        let tls_stream = match tokio::time::timeout(
-            Duration::from_secs(10),
-            acceptor.accept(stream),
-        )
-        .await
-        {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                debug!("TLS handshake failed: {:?}", e);
-                return;
-            }
-            Err(_) => {
-                debug!("TLS handshake timeout: {:?}", remote_addr);
-                return;
-            }
-        };
+        let tls_stream =
+            match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    debug!("TLS handshake failed: {:?}", e);
+                    return;
+                }
+                Err(_) => {
+                    debug!("TLS handshake timeout: {:?}", remote_addr);
+                    return;
+                }
+            };
 
         let handshake_us = tls_start.elapsed().as_micros() as u64;
 
@@ -550,7 +547,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .get(&*X_REQUEST_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("{}-{}", &trace_ctx.trace_id[..12], &trace_ctx.span_id[..4]));
+            .unwrap_or_else(|| {
+                format!("{}-{}", &trace_ctx.trace_id[..12], &trace_ctx.span_id[..4])
+            });
 
         // Check rate limit (per-IP)
         if let Some(ref limiter) = self.rate_limiter {
@@ -558,14 +557,19 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             if !allowed {
                 let mut response = Response::builder()
                     .status(StatusCode::TOO_MANY_REQUESTS)
-                    .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                    .header(
+                        header_names::CONTENT_TYPE.clone(),
+                        header_values::TEXT_PLAIN.clone(),
+                    )
                     .header(header_names::RETRY_AFTER.clone(), reset_after.to_string())
                     .header(X_RATELIMIT_LIMIT.clone(), limiter.limit().to_string())
                     .header(X_RATELIMIT_REMAINING.clone(), header_values::ZERO.clone())
                     .header(X_RATELIMIT_RESET.clone(), reset_after.to_string())
                     .body(Full::new(Bytes::from_static(b"429 Too Many Requests")))
                     .unwrap();
-                response.headers_mut().insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
+                response
+                    .headers_mut()
+                    .insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
                 return Ok(response);
             }
         }
@@ -615,7 +619,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         let mut response = match req.method().as_str() {
             "GET" | "POST" | "HEAD" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "QUERY" => {
-                let mut resp = self.process_request(req, remote_addr, tls_info, &trace_ctx).await;
+                let mut resp = self
+                    .process_request(req, remote_addr, tls_info, &trace_ctx)
+                    .await;
 
                 // HEAD: return headers only, no body
                 if is_head {
@@ -626,7 +632,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             }
             _ => Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
-                .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                .header(
+                    header_names::CONTENT_TYPE.clone(),
+                    header_values::TEXT_PLAIN.clone(),
+                )
                 .body(Full::new(METHOD_NOT_ALLOWED_BODY.clone()))
                 .unwrap(),
         };
@@ -640,9 +649,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 if client_accepts_html {
                     if let Some(error_html) = self.error_pages.get(status) {
                         let (mut parts, _) = response.into_parts();
-                        parts
-                            .headers
-                            .insert(header_names::CONTENT_TYPE.clone(), header_values::TEXT_HTML_UTF8.clone());
+                        parts.headers.insert(
+                            header_names::CONTENT_TYPE.clone(),
+                            header_values::TEXT_HTML_UTF8.clone(),
+                        );
                         parts.headers.insert(
                             header_names::CONTENT_LENGTH.clone(),
                             error_html.len().to_string().parse().unwrap(),
@@ -652,9 +662,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                         // No custom page, use default reason phrase
                         let reason = status_reason_phrase(status);
                         let (mut parts, _) = response.into_parts();
-                        parts
-                            .headers
-                            .insert(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN_UTF8.clone());
+                        parts.headers.insert(
+                            header_names::CONTENT_TYPE.clone(),
+                            header_values::TEXT_PLAIN_UTF8.clone(),
+                        );
                         parts.headers.insert(
                             header_names::CONTENT_LENGTH.clone(),
                             reason.len().to_string().parse().unwrap(),
@@ -665,9 +676,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     // Non-HTML client, use default reason phrase
                     let reason = status_reason_phrase(status);
                     let (mut parts, _) = response.into_parts();
-                    parts
-                        .headers
-                        .insert(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN_UTF8.clone());
+                    parts.headers.insert(
+                        header_names::CONTENT_TYPE.clone(),
+                        header_values::TEXT_PLAIN_UTF8.clone(),
+                    );
                     parts.headers.insert(
                         header_names::CONTENT_LENGTH.clone(),
                         reason.len().to_string().parse().unwrap(),
@@ -680,7 +692,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Record response time and status metrics
         let response_time_us = request_start.elapsed().as_micros() as u64;
         self.request_metrics.record_response_time(response_time_us);
-        self.request_metrics.increment_status(response.status().as_u16());
+        self.request_metrics
+            .increment_status(response.status().as_u16());
 
         // Add X-Request-ID header to response
         response
@@ -688,9 +701,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
 
         // Add W3C Trace Context header to response
-        response
-            .headers_mut()
-            .insert(TRACEPARENT.clone(), trace_ctx.to_traceparent().parse().unwrap());
+        response.headers_mut().insert(
+            TRACEPARENT.clone(),
+            trace_ctx.to_traceparent().parse().unwrap(),
+        );
 
         // Access logging (optimized: stack-allocated timestamp, no heap alloc for IP)
         if access_log_enabled {
@@ -874,7 +888,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         // Handle request body (POST, PUT, PATCH, DELETE, OPTIONS, QUERY - not GET/HEAD)
         let method_str = method.as_str();
-        let has_body = matches!(method_str, "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "QUERY");
+        let has_body = matches!(
+            method_str,
+            "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "QUERY"
+        );
         let (post_params, files, raw_body) = if has_body {
             let body_read_start = Instant::now();
             let body_bytes = match req.collect().await {
@@ -882,7 +899,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 Err(_) => {
                     return Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                        .header(
+                            header_names::CONTENT_TYPE.clone(),
+                            header_values::TEXT_PLAIN.clone(),
+                        )
                         .body(Full::new(BAD_REQUEST_BODY.clone()))
                         .unwrap();
                 }
@@ -904,7 +924,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     Err(e) => {
                         return Response::builder()
                             .status(StatusCode::BAD_REQUEST)
-                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                            .header(
+                                header_names::CONTENT_TYPE.clone(),
+                                header_values::TEXT_PLAIN.clone(),
+                            )
                             .body(Full::new(Bytes::from(format!(
                                 "Failed to parse multipart form: {}",
                                 e
@@ -949,35 +972,48 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         // Parse Host header for SERVER_NAME and SERVER_PORT
         // Parse server name and port from Host header (using Cow for static ports)
-        let (server_name, server_port): (Cow<'static, str>, Cow<'static, str>) = if !host_header.is_empty() {
-            if let Some(colon_pos) = host_header.rfind(':') {
-                if host_header.starts_with('[') && !host_header.contains("]:") {
-                    // IPv6 without port
+        let (server_name, server_port): (Cow<'static, str>, Cow<'static, str>) =
+            if !host_header.is_empty() {
+                if let Some(colon_pos) = host_header.rfind(':') {
+                    if host_header.starts_with('[') && !host_header.contains("]:") {
+                        // IPv6 without port
+                        (
+                            Cow::Owned(host_header.clone()),
+                            if tls_info.is_some() {
+                                server_var_values::PORT_443
+                            } else {
+                                server_var_values::PORT_80
+                            },
+                        )
+                    } else {
+                        // Host:port format
+                        (
+                            Cow::Owned(host_header[..colon_pos].to_string()),
+                            Cow::Owned(host_header[colon_pos + 1..].to_string()),
+                        )
+                    }
+                } else {
+                    // No port in header
                     (
                         Cow::Owned(host_header.clone()),
-                        if tls_info.is_some() { server_var_values::PORT_443 } else { server_var_values::PORT_80 },
-                    )
-                } else {
-                    // Host:port format
-                    (
-                        Cow::Owned(host_header[..colon_pos].to_string()),
-                        Cow::Owned(host_header[colon_pos + 1..].to_string()),
+                        if tls_info.is_some() {
+                            server_var_values::PORT_443
+                        } else {
+                            server_var_values::PORT_80
+                        },
                     )
                 }
             } else {
-                // No port in header
+                // No Host header
                 (
-                    Cow::Owned(host_header.clone()),
-                    if tls_info.is_some() { server_var_values::PORT_443 } else { server_var_values::PORT_80 },
+                    server_var_values::LOCALHOST,
+                    if tls_info.is_some() {
+                        server_var_values::PORT_443
+                    } else {
+                        server_var_values::PORT_80
+                    },
                 )
-            }
-        } else {
-            // No Host header
-            (
-                server_var_values::LOCALHOST,
-                if tls_info.is_some() { server_var_values::PORT_443 } else { server_var_values::PORT_80 },
-            )
-        };
+            };
 
         // Calculate SCRIPT_NAME and PHP_SELF
         let script_name = file_path_string
@@ -992,30 +1028,63 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let mut server_vars = Vec::with_capacity(32);
 
         // Request timing (keys static, values dynamic)
-        server_vars.push((server_var_keys::REQUEST_TIME, Cow::Owned(request_time_secs.to_string())));
-        server_vars.push((server_var_keys::REQUEST_TIME_FLOAT, Cow::Owned(format!("{:.6}", request_time_float))));
+        server_vars.push((
+            server_var_keys::REQUEST_TIME,
+            Cow::Owned(request_time_secs.to_string()),
+        ));
+        server_vars.push((
+            server_var_keys::REQUEST_TIME_FLOAT,
+            Cow::Owned(format!("{:.6}", request_time_float)),
+        ));
 
         // Request method and URI
-        server_vars.push((server_var_keys::REQUEST_METHOD, Cow::Owned(method.as_str().to_string())));
+        server_vars.push((
+            server_var_keys::REQUEST_METHOD,
+            Cow::Owned(method.as_str().to_string()),
+        ));
         server_vars.push((server_var_keys::REQUEST_URI, Cow::Owned(uri.to_string())));
-        server_vars.push((server_var_keys::QUERY_STRING, Cow::Owned(query_string.to_string())));
+        server_vars.push((
+            server_var_keys::QUERY_STRING,
+            Cow::Owned(query_string.to_string()),
+        ));
 
         // Client info
-        server_vars.push((server_var_keys::REMOTE_ADDR, Cow::Owned(remote_addr.ip().to_string())));
-        server_vars.push((server_var_keys::REMOTE_PORT, Cow::Owned(remote_addr.port().to_string())));
+        server_vars.push((
+            server_var_keys::REMOTE_ADDR,
+            Cow::Owned(remote_addr.ip().to_string()),
+        ));
+        server_vars.push((
+            server_var_keys::REMOTE_PORT,
+            Cow::Owned(remote_addr.port().to_string()),
+        ));
 
         // Server info (mix of static and dynamic values)
         server_vars.push((server_var_keys::SERVER_NAME, server_name));
         server_vars.push((server_var_keys::SERVER_PORT, server_port));
         server_vars.push((server_var_keys::SERVER_ADDR, server_var_values::ADDR_0000));
-        server_vars.push((server_var_keys::SERVER_SOFTWARE, server_var_values::SERVER_SOFTWARE));
-        server_vars.push((server_var_keys::SERVER_PROTOCOL, Cow::Borrowed(http_version)));
-        server_vars.push((server_var_keys::DOCUMENT_ROOT, Cow::Owned(self.document_root.to_string())));
-        server_vars.push((server_var_keys::GATEWAY_INTERFACE, server_var_values::GATEWAY_INTERFACE));
+        server_vars.push((
+            server_var_keys::SERVER_SOFTWARE,
+            server_var_values::SERVER_SOFTWARE,
+        ));
+        server_vars.push((
+            server_var_keys::SERVER_PROTOCOL,
+            Cow::Borrowed(http_version),
+        ));
+        server_vars.push((
+            server_var_keys::DOCUMENT_ROOT,
+            Cow::Owned(self.document_root.to_string()),
+        ));
+        server_vars.push((
+            server_var_keys::GATEWAY_INTERFACE,
+            server_var_values::GATEWAY_INTERFACE,
+        ));
 
         // Script paths
         server_vars.push((server_var_keys::SCRIPT_NAME, script_name.clone()));
-        server_vars.push((server_var_keys::SCRIPT_FILENAME, Cow::Owned(file_path_string.clone())));
+        server_vars.push((
+            server_var_keys::SCRIPT_FILENAME,
+            Cow::Owned(file_path_string.clone()),
+        ));
         server_vars.push((server_var_keys::PHP_SELF, script_name));
 
         // Content info
@@ -1035,7 +1104,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             server_vars.push((server_var_keys::HTTP_REFERER, Cow::Owned(referer)));
         }
         if !accept_language.is_empty() {
-            server_vars.push((server_var_keys::HTTP_ACCEPT_LANGUAGE, Cow::Owned(accept_language)));
+            server_vars.push((
+                server_var_keys::HTTP_ACCEPT_LANGUAGE,
+                Cow::Owned(accept_language),
+            ));
         }
         if !accept.is_empty() {
             server_vars.push((server_var_keys::HTTP_ACCEPT, Cow::Owned(accept)));
@@ -1045,14 +1117,26 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         if let Some(ref tls) = tls_info {
             server_vars.push((server_var_keys::HTTPS, server_var_values::HTTPS_ON));
             if !tls.protocol.is_empty() {
-                server_vars.push((server_var_keys::SSL_PROTOCOL, Cow::Owned(tls.protocol.clone())));
+                server_vars.push((
+                    server_var_keys::SSL_PROTOCOL,
+                    Cow::Owned(tls.protocol.clone()),
+                ));
             }
         }
 
         // W3C Trace Context for distributed tracing
-        server_vars.push((server_var_keys::HTTP_TRACEPARENT, Cow::Owned(trace_ctx.to_traceparent())));
-        server_vars.push((server_var_keys::TRACE_ID, Cow::Owned(trace_ctx.trace_id.clone())));
-        server_vars.push((server_var_keys::SPAN_ID, Cow::Owned(trace_ctx.span_id.clone())));
+        server_vars.push((
+            server_var_keys::HTTP_TRACEPARENT,
+            Cow::Owned(trace_ctx.to_traceparent()),
+        ));
+        server_vars.push((
+            server_var_keys::TRACE_ID,
+            Cow::Owned(trace_ctx.trace_id.clone()),
+        ));
+        server_vars.push((
+            server_var_keys::SPAN_ID,
+            Cow::Owned(trace_ctx.span_id.clone()),
+        ));
         if let Some(ref parent) = trace_ctx.parent_span_id {
             server_vars.push((server_var_keys::PARENT_SPAN_ID, Cow::Owned(parent.clone())));
         }
@@ -1129,7 +1213,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                         warn!("Request timeout: {}", uri_path);
                         Response::builder()
                             .status(StatusCode::GATEWAY_TIMEOUT)
-                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                            .header(
+                                header_names::CONTENT_TYPE.clone(),
+                                header_values::TEXT_PLAIN.clone(),
+                            )
                             .body(Full::new(Bytes::from_static(b"504 Gateway Timeout")))
                             .unwrap()
                     } else if e.is_queue_full() {
@@ -1137,15 +1224,26 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                         self.request_metrics.inc_dropped();
                         Response::builder()
                             .status(StatusCode::SERVICE_UNAVAILABLE)
-                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
-                            .header(header_names::RETRY_AFTER.clone(), header_values::ONE.clone())
-                            .body(Full::new(Bytes::from_static(b"503 Service Unavailable - Server overloaded")))
+                            .header(
+                                header_names::CONTENT_TYPE.clone(),
+                                header_values::TEXT_PLAIN.clone(),
+                            )
+                            .header(
+                                header_names::RETRY_AFTER.clone(),
+                                header_values::ONE.clone(),
+                            )
+                            .body(Full::new(Bytes::from_static(
+                                b"503 Service Unavailable - Server overloaded",
+                            )))
                             .unwrap()
                     } else {
                         error!("Script execution error: {}", e);
                         Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_HTML_UTF8.clone())
+                            .header(
+                                header_names::CONTENT_TYPE.clone(),
+                                header_values::TEXT_HTML_UTF8.clone(),
+                            )
                             .body(Full::new(Bytes::from(format!(
                                 "<h1>500 Internal Server Error</h1><pre>{}</pre>",
                                 e
@@ -1168,7 +1266,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 &self.static_cache_ttl,
                 if_none_match.as_deref(),
                 if_modified_since.as_deref(),
-            ).await
+            )
+            .await
         }
     }
 }
@@ -1261,9 +1360,21 @@ mod tests {
 
     #[test]
     fn test_http_versions_from_hyper() {
-        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_10), "HTTP/1.0");
-        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_11), "HTTP/1.1");
-        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_2), "HTTP/2.0");
-        assert_eq!(http_versions::from_hyper(hyper::Version::HTTP_3), "HTTP/3.0");
+        assert_eq!(
+            http_versions::from_hyper(hyper::Version::HTTP_10),
+            "HTTP/1.0"
+        );
+        assert_eq!(
+            http_versions::from_hyper(hyper::Version::HTTP_11),
+            "HTTP/1.1"
+        );
+        assert_eq!(
+            http_versions::from_hyper(hyper::Version::HTTP_2),
+            "HTTP/2.0"
+        );
+        assert_eq!(
+            http_versions::from_hyper(hyper::Version::HTTP_3),
+            "HTTP/3.0"
+        );
     }
 }

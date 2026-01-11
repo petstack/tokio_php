@@ -12,9 +12,7 @@ pub enum Error {
     InvalidResponse(String),
 
     /// Request timeout.
-    Timeout {
-        duration_ms: u64,
-    },
+    Timeout { duration_ms: u64 },
 
     /// Script execution error.
     Execution(String),
