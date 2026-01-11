@@ -107,38 +107,33 @@ jobs:
         run: |
           docker compose build
           docker compose up -d
-          sleep 3
 
-      - name: Health check
+      - name: Wait for server to be ready
         run: |
-          curl -sf http://localhost:8080/ || exit 1
+          echo "Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:9090/health > /dev/null 2>&1; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30: Server not ready yet..."
+            sleep 1
+          done
+          echo "Server failed to start"
+          docker compose logs
+          exit 1
 
-      - name: Test PHP execution
+      - name: Run integration tests
+        env:
+          TEST_SERVER_URL: http://localhost:8080
+          TEST_INTERNAL_URL: http://localhost:9090
         run: |
-          response=$(curl -sf http://localhost:8080/index.php)
-          echo "Response: $response"
-          [[ "$response" == *"tokio_php"* ]] || exit 1
+          chmod +x ./scripts/run-integration-tests.sh
+          ./scripts/run-integration-tests.sh
 
-      - name: Test superglobals
-        run: |
-          # Test $_GET
-          response=$(curl -sf "http://localhost:8080/index.php?foo=bar")
-          echo "GET response: $response"
-
-          # Test $_POST
-          response=$(curl -sf -X POST -d "key=value" http://localhost:8080/index.php)
-          echo "POST response: $response"
-
-      - name: Test internal server
-        run: |
-          # Health endpoint
-          curl -sf http://localhost:9090/health | jq .
-
-          # Metrics endpoint
-          curl -sf http://localhost:9090/metrics
-
-          # Config endpoint
-          curl -sf http://localhost:9090/config | jq .
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
 
       - name: Stop server
         if: always()
