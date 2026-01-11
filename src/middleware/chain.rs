@@ -21,17 +21,17 @@ impl MiddlewareChain {
         }
     }
 
-    /// Add a middleware to the chain.
+    /// Add a middleware to the chain (builder pattern).
     ///
     /// Middleware are automatically sorted by priority.
-    pub fn add<M: Middleware + 'static>(mut self, middleware: M) -> Self {
+    pub fn with<M: Middleware + 'static>(mut self, middleware: M) -> Self {
         self.middlewares.push(Arc::new(middleware));
         self.middlewares.sort_by_key(|m| m.priority());
         self
     }
 
-    /// Add a middleware wrapped in Arc to the chain.
-    pub fn add_arc(mut self, middleware: Arc<dyn Middleware>) -> Self {
+    /// Add a middleware wrapped in Arc to the chain (builder pattern).
+    pub fn with_arc(mut self, middleware: Arc<dyn Middleware>) -> Self {
         self.middlewares.push(middleware);
         self.middlewares.sort_by_key(|m| m.priority());
         self
@@ -235,8 +235,8 @@ mod tests {
     #[test]
     fn test_add_middleware() {
         let chain = MiddlewareChain::new()
-            .add(CountingMiddleware::new("first", 0))
-            .add(CountingMiddleware::new("second", 10));
+            .with(CountingMiddleware::new("first", 0))
+            .with(CountingMiddleware::new("second", 10));
 
         assert_eq!(chain.len(), 2);
         assert!(!chain.is_empty());
@@ -245,9 +245,9 @@ mod tests {
     #[test]
     fn test_priority_ordering() {
         let chain = MiddlewareChain::new()
-            .add(CountingMiddleware::new("low", 100))
-            .add(CountingMiddleware::new("high", -100))
-            .add(CountingMiddleware::new("medium", 0));
+            .with(CountingMiddleware::new("low", 100))
+            .with(CountingMiddleware::new("high", -100))
+            .with(CountingMiddleware::new("medium", 0));
 
         let names = chain.names();
         assert_eq!(names, vec!["high", "medium", "low"]);
@@ -256,8 +256,8 @@ mod tests {
     #[test]
     fn test_process_request_pass_through() {
         let chain = MiddlewareChain::new()
-            .add(CountingMiddleware::new("first", 0))
-            .add(CountingMiddleware::new("second", 10));
+            .with(CountingMiddleware::new("first", 0))
+            .with(CountingMiddleware::new("second", 10));
 
         let req = create_test_request();
         let mut ctx = create_test_context();
@@ -269,8 +269,8 @@ mod tests {
     #[test]
     fn test_process_request_short_circuit() {
         let chain = MiddlewareChain::new()
-            .add(CountingMiddleware::new("after", 0))
-            .add(BlockingMiddleware);
+            .with(CountingMiddleware::new("after", 0))
+            .with(BlockingMiddleware);
 
         let req = create_test_request();
         let mut ctx = create_test_context();
@@ -301,11 +301,11 @@ mod tests {
         }
 
         let chain = MiddlewareChain::new()
-            .add(HeaderMiddleware {
+            .with(HeaderMiddleware {
                 header_name: "x-first",
                 header_value: "1",
             })
-            .add(HeaderMiddleware {
+            .with(HeaderMiddleware {
                 header_name: "x-second",
                 header_value: "2",
             });
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_process_full_cycle() {
-        let chain = MiddlewareChain::new().add(CountingMiddleware::new("counter", 0));
+        let chain = MiddlewareChain::new().with(CountingMiddleware::new("counter", 0));
 
         let req = create_test_request();
         let mut ctx = create_test_context();
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_clone() {
-        let chain = MiddlewareChain::new().add(CountingMiddleware::new("test", 0));
+        let chain = MiddlewareChain::new().with(CountingMiddleware::new("test", 0));
 
         let cloned = chain.clone();
         assert_eq!(chain.len(), cloned.len());

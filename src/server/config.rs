@@ -1,4 +1,21 @@
 //! Server configuration and TLS types.
+//!
+//! This module provides [`ServerConfig`] for configuring the HTTP server,
+//! including listen address, document root, TLS, and various options.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use std::net::SocketAddr;
+//! use std::time::Duration;
+//! use tokio_php::server::ServerConfig;
+//!
+//! let config = ServerConfig::new("0.0.0.0:8080".parse().unwrap())
+//!     .with_document_root("/var/www/html")
+//!     .with_workers(4)
+//!     .with_index_file("index.php".to_string())
+//!     .with_drain_timeout(Duration::from_secs(30));
+//! ```
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -16,6 +33,29 @@ pub struct TlsInfo {
 }
 
 /// Server configuration.
+///
+/// Use the builder pattern to construct a configuration:
+///
+/// ```rust,ignore
+/// let config = ServerConfig::new("0.0.0.0:8080".parse()?)
+///     .with_document_root("/var/www/html")
+///     .with_workers(4)
+///     .with_tls("cert.pem".into(), "key.pem".into());
+/// ```
+///
+/// # Environment Variables
+///
+/// When using [`crate::config::Config::from_env()`], these environment variables
+/// are used to configure the server:
+///
+/// | Variable | Default | Description |
+/// |----------|---------|-------------|
+/// | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
+/// | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
+/// | `INDEX_FILE` | _(empty)_ | Single entry point mode |
+/// | `TLS_CERT` | _(empty)_ | TLS certificate path |
+/// | `TLS_KEY` | _(empty)_ | TLS private key path |
+/// | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout |
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub addr: SocketAddr,

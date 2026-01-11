@@ -1,7 +1,7 @@
 //! W3C Trace Context support for distributed tracing.
 //!
 //! Implements the W3C Trace Context specification:
-//! https://www.w3.org/TR/trace-context/
+//! <https://www.w3.org/TR/trace-context/>
 //!
 //! Format: `traceparent: {version}-{trace-id}-{parent-id}-{trace-flags}`
 //! Example: `traceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01`

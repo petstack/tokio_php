@@ -1,27 +1,17 @@
-mod config;
-pub mod core;
-mod executor;
-pub mod listener;
-pub mod logging;
-pub mod middleware;
-pub mod profiler;
-mod server;
-pub mod trace_context;
-mod types;
-
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::config::{Config, ExecutorType};
-use crate::server::{Server, ServerConfig};
+use tokio_php::config::{Config, ExecutorType};
+use tokio_php::logging;
+use tokio_php::server::{Server, ServerConfig};
 
 #[cfg(feature = "php")]
-use crate::executor::PhpExecutor;
+use tokio_php::executor::PhpExecutor;
 
 #[cfg(feature = "php")]
-use crate::executor::ExtExecutor;
+use tokio_php::executor::ExtExecutor;
 
-use crate::executor::StubExecutor;
+use tokio_php::executor::StubExecutor;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Load configuration from environment
@@ -222,7 +212,7 @@ async fn shutdown_signal() {
     }
 }
 
-async fn run_server<E: crate::executor::ScriptExecutor + 'static>(
+async fn run_server<E: tokio_php::executor::ScriptExecutor + 'static>(
     server: Server<E>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drain_timeout = server.drain_timeout();

@@ -24,12 +24,9 @@ pub async fn parse_multipart(
     let boundary = content_type
         .split(';')
         .find_map(|part| {
-            let part = part.trim();
-            if part.starts_with("boundary=") {
-                Some(part[9..].trim_matches('"').to_string())
-            } else {
-                None
-            }
+            part.trim()
+                .strip_prefix("boundary=")
+                .map(|b| b.trim_matches('"').to_string())
         })
         .ok_or("Missing boundary in multipart content-type")?;
 

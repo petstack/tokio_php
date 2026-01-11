@@ -1,3 +1,54 @@
+//! Script execution backends for tokio_php.
+//!
+//! This module provides pluggable executors for script execution.
+//! The server uses the [`ScriptExecutor`] trait to abstract over different
+//! execution backends.
+//!
+//! # Available Executors
+//!
+//! | Executor | Feature | Description |
+//! |----------|---------|-------------|
+//! | [`ExtExecutor`] | `php` | **Recommended.** Uses FFI for superglobals, best performance |
+//! | [`PhpExecutor`] | `php` | Legacy executor using `zend_eval_string` |
+//! | [`StubExecutor`] | - | Returns empty responses, useful for benchmarking |
+//!
+//! # Performance Comparison
+//!
+//! For real applications using superglobals (`$_GET`, `$_POST`, `$_SERVER`),
+//! [`ExtExecutor`] is ~48% faster than [`PhpExecutor`] due to FFI batch API.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tokio_php::executor::{ScriptExecutor, ExtExecutor};
+//! use tokio_php::types::ScriptRequest;
+//!
+//! // Create executor with 4 worker threads
+//! let executor = ExtExecutor::new(4, 400)?;
+//!
+//! // Execute a script
+//! let request = ScriptRequest::new("/var/www/html/index.php");
+//! let response = executor.execute(request).await?;
+//! ```
+//!
+//! # Worker Pool Architecture
+//!
+//! Both [`ExtExecutor`] and [`PhpExecutor`] use a multi-threaded worker pool:
+//!
+//! ```text
+//! ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+//! │   Request   │────▶│ mpsc channel │────▶│   Worker    │
+//! └─────────────┘     └──────────────┘     │   Thread    │
+//!                            │             │ (PHP TSRM)  │
+//!                            │             └─────────────┘
+//!                            │             ┌─────────────┐
+//!                            └────────────▶│   Worker    │
+//!                                          │   Thread    │
+//!                                          └─────────────┘
+//! ```
+//!
+//! Each worker thread has its own PHP context via TSRM (Thread Safe Resource Manager).
+
 mod stub;
 
 #[cfg(feature = "php")]

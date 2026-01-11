@@ -757,3 +757,288 @@ pub fn worker_main_loop(
 
     tracing::debug!("Worker {}: Shutdown complete", id);
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------------------------------------------------------------------------
+    // HeartbeatContext tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_heartbeat_context_new() {
+        let start = Instant::now();
+        let ctx = HeartbeatContext::new(start, 30);
+
+        assert_eq!(ctx.max_extension(), 30);
+        assert!(ctx.remaining().is_some());
+    }
+
+    #[test]
+    fn test_heartbeat_context_remaining() {
+        let start = Instant::now();
+        let ctx = HeartbeatContext::new(start, 10);
+
+        let remaining = ctx.remaining().unwrap();
+        // Should be close to 10 seconds (allow some tolerance)
+        assert!(remaining.as_secs() >= 9);
+        assert!(remaining.as_secs() <= 10);
+    }
+
+    #[test]
+    fn test_heartbeat_extends_deadline() {
+        let start = Instant::now();
+        let ctx = HeartbeatContext::new(start, 60);
+
+        // Wait a tiny bit
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Extend by 30 seconds
+        assert!(ctx.heartbeat(30));
+
+        // Check remaining is about 30 seconds from now
+        let remaining = ctx.remaining().unwrap();
+        assert!(remaining.as_secs() >= 29);
+        assert!(remaining.as_secs() <= 30);
+    }
+
+    #[test]
+    fn test_heartbeat_rejects_zero() {
+        let start = Instant::now();
+        let ctx = HeartbeatContext::new(start, 60);
+
+        assert!(!ctx.heartbeat(0));
+    }
+
+    #[test]
+    fn test_heartbeat_rejects_over_max() {
+        let start = Instant::now();
+        let ctx = HeartbeatContext::new(start, 30);
+
+        // Try to extend by more than max (30)
+        assert!(!ctx.heartbeat(31));
+        assert!(!ctx.heartbeat(60));
+
+        // But max is allowed
+        assert!(ctx.heartbeat(30));
+    }
+
+    #[test]
+    fn test_heartbeat_expired() {
+        let start = Instant::now() - Duration::from_secs(100);
+        let ctx = HeartbeatContext::new(start, 10);
+
+        // Should be expired (started 100s ago, timeout 10s)
+        assert!(ctx.remaining().is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // PHP string escaping tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_needs_escape_clean_string() {
+        assert!(!needs_escape("hello"));
+        assert!(!needs_escape("foo bar"));
+        assert!(!needs_escape("123"));
+        assert!(!needs_escape(""));
+    }
+
+    #[test]
+    fn test_needs_escape_with_backslash() {
+        assert!(needs_escape("foo\\bar"));
+        assert!(needs_escape("\\"));
+    }
+
+    #[test]
+    fn test_needs_escape_with_quote() {
+        assert!(needs_escape("it's"));
+        assert!(needs_escape("'quoted'"));
+    }
+
+    #[test]
+    fn test_needs_escape_with_null() {
+        assert!(needs_escape("foo\0bar"));
+    }
+
+    #[test]
+    fn test_write_escaped_clean() {
+        let mut buf = String::new();
+        write_escaped(&mut buf, "hello world");
+        assert_eq!(buf, "hello world");
+    }
+
+    #[test]
+    fn test_write_escaped_backslash() {
+        let mut buf = String::new();
+        write_escaped(&mut buf, "foo\\bar");
+        assert_eq!(buf, "foo\\\\bar");
+    }
+
+    #[test]
+    fn test_write_escaped_quote() {
+        let mut buf = String::new();
+        write_escaped(&mut buf, "it's");
+        assert_eq!(buf, "it\\'s");
+    }
+
+    #[test]
+    fn test_write_escaped_null_stripped() {
+        let mut buf = String::new();
+        write_escaped(&mut buf, "foo\0bar");
+        assert_eq!(buf, "foobar");
+    }
+
+    #[test]
+    fn test_write_escaped_mixed() {
+        let mut buf = String::new();
+        write_escaped(&mut buf, "path\\to\\'file'");
+        assert_eq!(buf, "path\\\\to\\\\\\'file\\'");
+    }
+
+    #[test]
+    fn test_write_kv() {
+        let mut buf = String::new();
+        write_kv(&mut buf, "key", "value");
+        assert_eq!(buf, "'key'=>'value'");
+    }
+
+    #[test]
+    fn test_write_kv_with_escaping() {
+        let mut buf = String::new();
+        write_kv(&mut buf, "it's", "O'Brien");
+        assert_eq!(buf, "'it\\'s'=>'O\\'Brien'");
+    }
+
+    // -------------------------------------------------------------------------
+    // PHP code generation tests
+    // -------------------------------------------------------------------------
+
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_build_superglobals_code_empty() {
+        let request = ScriptRequest {
+            script_path: "/test.php".to_string(),
+            ..Default::default()
+        };
+
+        let code = build_superglobals_code(&request);
+
+        assert!(code.contains("$_GET=[];"));
+        assert!(code.contains("$_POST=[];"));
+        assert!(code.contains("$_SERVER=[];"));
+        assert!(code.contains("$_COOKIE=[];"));
+        assert!(code.contains("$_FILES=[];"));
+        assert!(code.contains("$_REQUEST=$_GET+$_POST;"));
+    }
+
+    #[test]
+    fn test_build_superglobals_code_with_get() {
+        let request = ScriptRequest {
+            script_path: "/test.php".to_string(),
+            get_params: vec![
+                (Cow::Owned("foo".to_string()), Cow::Owned("bar".to_string())),
+                (Cow::Owned("num".to_string()), Cow::Owned("123".to_string())),
+            ],
+            ..Default::default()
+        };
+
+        let code = build_superglobals_code(&request);
+
+        assert!(code.contains("$_GET=['foo'=>'bar','num'=>'123'];"));
+    }
+
+    #[test]
+    fn test_build_superglobals_code_with_post() {
+        let request = ScriptRequest {
+            script_path: "/test.php".to_string(),
+            post_params: vec![
+                (Cow::Owned("username".to_string()), Cow::Owned("admin".to_string())),
+            ],
+            ..Default::default()
+        };
+
+        let code = build_superglobals_code(&request);
+
+        assert!(code.contains("$_POST=['username'=>'admin'];"));
+    }
+
+    #[test]
+    fn test_build_superglobals_code_escapes_values() {
+        let request = ScriptRequest {
+            script_path: "/test.php".to_string(),
+            get_params: vec![
+                (Cow::Owned("path".to_string()), Cow::Owned("c:\\windows".to_string())),
+                (Cow::Owned("name".to_string()), Cow::Owned("O'Brien".to_string())),
+            ],
+            ..Default::default()
+        };
+
+        let code = build_superglobals_code(&request);
+
+        assert!(code.contains("'path'=>'c:\\\\windows'"));
+        assert!(code.contains("'name'=>'O\\'Brien'"));
+    }
+
+    #[test]
+    fn test_build_combined_code() {
+        let request = ScriptRequest {
+            script_path: "/var/www/html/index.php".to_string(),
+            ..Default::default()
+        };
+
+        let code = build_combined_code(&request);
+
+        assert!(code.ends_with("require'/var/www/html/index.php';"));
+    }
+
+    #[test]
+    fn test_build_combined_code_escapes_path() {
+        let request = ScriptRequest {
+            script_path: "/var/www/html/it's.php".to_string(),
+            ..Default::default()
+        };
+
+        let code = build_combined_code(&request);
+
+        assert!(code.ends_with("require'/var/www/html/it\\'s.php';"));
+    }
+
+    // -------------------------------------------------------------------------
+    // FFI callback test
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_tokio_php_heartbeat_null_ctx() {
+        // Null context should return 0
+        let result = tokio_php_heartbeat(std::ptr::null_mut(), 10);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_tokio_php_heartbeat_valid() {
+        let start = Instant::now();
+        let ctx = HeartbeatContext::new(start, 60);
+        let ctx_ptr = &ctx as *const HeartbeatContext as *mut std::ffi::c_void;
+
+        let result = tokio_php_heartbeat(ctx_ptr, 30);
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn test_tokio_php_heartbeat_over_max() {
+        let start = Instant::now();
+        let ctx = HeartbeatContext::new(start, 30);
+        let ctx_ptr = &ctx as *const HeartbeatContext as *mut std::ffi::c_void;
+
+        // Try to extend by 60s when max is 30s
+        let result = tokio_php_heartbeat(ctx_ptr, 60);
+        assert_eq!(result, 0);
+    }
+}

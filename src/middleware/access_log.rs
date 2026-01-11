@@ -31,6 +31,7 @@ impl Default for AccessLogConfig {
 ///
 /// Logs requests using the `tracing` framework with structured data.
 /// Log entries are emitted at INFO level with target "access".
+#[derive(Default)]
 pub struct AccessLogMiddleware {
     config: AccessLogConfig,
 }
@@ -57,13 +58,6 @@ impl AccessLogMiddleware {
     }
 }
 
-impl Default for AccessLogMiddleware {
-    fn default() -> Self {
-        Self {
-            config: AccessLogConfig::default(),
-        }
-    }
-}
 
 impl Middleware for AccessLogMiddleware {
     fn name(&self) -> &'static str {

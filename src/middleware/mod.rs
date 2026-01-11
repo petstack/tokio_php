@@ -29,7 +29,7 @@
 //! }
 //!
 //! let chain = MiddlewareChain::new()
-//!     .add(LoggingMiddleware);
+//!     .with(LoggingMiddleware);
 //! ```
 
 mod chain;

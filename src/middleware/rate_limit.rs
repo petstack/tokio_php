@@ -36,6 +36,16 @@ impl RateLimiter {
         }
     }
 
+    /// Get the rate limit value.
+    pub fn limit(&self) -> u64 {
+        self.limit
+    }
+
+    /// Get the window duration in seconds.
+    pub fn window_secs(&self) -> u64 {
+        self.window.as_secs()
+    }
+
     /// Check if a request from the given IP is allowed.
     /// Returns (allowed, remaining, reset_after_secs).
     pub fn check(&self, ip: IpAddr) -> (bool, u64, u64) {
@@ -46,12 +56,11 @@ impl RateLimiter {
             let counters = self.counters.read().unwrap();
             if let Some(counter) = counters.get(&ip) {
                 let elapsed = now.duration_since(counter.window_start);
-                if elapsed < self.window {
-                    if counter.count >= self.limit {
+                if elapsed < self.window
+                    && counter.count >= self.limit {
                         let reset_after = (self.window - elapsed).as_secs().max(1);
                         return (false, 0, reset_after);
                     }
-                }
             }
         }
 

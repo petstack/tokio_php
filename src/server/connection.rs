@@ -199,7 +199,7 @@ impl std::fmt::Debug for Iso8601Timestamp {
 /// Check if a year is a leap year.
 #[inline]
 const fn is_leap_year(year: u16) -> bool {
-    (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 /// Write a 4-digit year to buffer (0000-9999).
@@ -310,7 +310,7 @@ mod server_var_values {
 /// Format an IP address to a stack buffer, returning the string slice.
 /// Buffer must be at least 45 bytes for IPv6 (max: "xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx").
 #[inline]
-fn format_ip_to_buf<'a>(ip: std::net::IpAddr, buf: &'a mut [u8; 48]) -> &'a str {
+fn format_ip_to_buf(ip: std::net::IpAddr, buf: &mut [u8; 48]) -> &str {
     use std::io::Write;
     let mut cursor = std::io::Cursor::new(&mut buf[..]);
     let _ = write!(cursor, "{}", ip);
@@ -334,7 +334,7 @@ use tracing::{debug, error, warn};
 use super::access_log;
 use super::config::TlsInfo;
 use super::error_pages::{accepts_html, status_reason_phrase, ErrorPages};
-use super::rate_limit::RateLimiter;
+use crate::middleware::rate_limit::RateLimiter;
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
     accepts_brotli, empty_stub_response, from_script_response, not_found_response,
@@ -554,15 +554,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         // Check rate limit (per-IP)
         if let Some(ref limiter) = self.rate_limiter {
-            let result = limiter.check(remote_addr.ip());
-            if !result.allowed {
+            let (allowed, _remaining, reset_after) = limiter.check(remote_addr.ip());
+            if !allowed {
                 let mut response = Response::builder()
                     .status(StatusCode::TOO_MANY_REQUESTS)
                     .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
-                    .header(header_names::RETRY_AFTER.clone(), result.reset_after.to_string())
+                    .header(header_names::RETRY_AFTER.clone(), reset_after.to_string())
                     .header(X_RATELIMIT_LIMIT.clone(), limiter.limit().to_string())
                     .header(X_RATELIMIT_REMAINING.clone(), header_values::ZERO.clone())
-                    .header(X_RATELIMIT_RESET.clone(), result.reset_after.to_string())
+                    .header(X_RATELIMIT_RESET.clone(), reset_after.to_string())
                     .body(Full::new(Bytes::from_static(b"429 Too Many Requests")))
                     .unwrap();
                 response.headers_mut().insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());

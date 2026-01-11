@@ -1,11 +1,78 @@
 //! HTTP server with pluggable script executor.
+//!
+//! This module provides the main [`Server`] type that handles HTTP requests
+//! and delegates script execution to a pluggable [`ScriptExecutor`].
+//!
+//! # Features
+//!
+//! - **HTTP/1.1 and HTTP/2** - Full protocol support with automatic detection
+//! - **TLS/HTTPS** - TLS 1.3 with ALPN negotiation
+//! - **Graceful Shutdown** - Connection draining with configurable timeout
+//! - **Rate Limiting** - Per-IP request limiting
+//! - **Static File Serving** - With Brotli compression and cache headers
+//! - **Custom Error Pages** - HTML error pages for 4xx/5xx responses
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tokio_php::server::{Server, ServerConfig};
+//! use tokio_php::executor::ExtExecutor;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let config = ServerConfig::default();
+//!     let executor = ExtExecutor::new(4, 400)?;
+//!
+//!     let server = Server::new(config, executor)?
+//!         .with_access_log_enabled(true)
+//!         .with_profile_enabled(true);
+//!
+//!     server.run().await
+//! }
+//! ```
+//!
+//! # Graceful Shutdown
+//!
+//! The server supports graceful shutdown via [`Server::trigger_shutdown`]:
+//!
+//! ```rust,ignore
+//! // Trigger shutdown
+//! server.trigger_shutdown();
+//!
+//! // Wait for connections to drain (with timeout)
+//! server.wait_for_drain(Duration::from_secs(30)).await;
+//! ```
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────┐
+//! │                     Server                          │
+//! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
+//! │  │  Worker 0   │  │  Worker 1   │  │  Worker N   │  │
+//! │  │ (SO_REUSEPORT) │ (SO_REUSEPORT) │ (SO_REUSEPORT) │
+//! │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
+//! │         │                │                │         │
+//! │         ▼                ▼                ▼         │
+//! │  ┌─────────────────────────────────────────────┐    │
+//! │  │           ConnectionContext                 │    │
+//! │  │  • Rate limiting  • Static file serving     │    │
+//! │  │  • Request parsing • Response compression   │    │
+//! │  └─────────────────────┬───────────────────────┘    │
+//! │                        │                            │
+//! │                        ▼                            │
+//! │  ┌─────────────────────────────────────────────┐    │
+//! │  │           ScriptExecutor                    │    │
+//! │  │  (ExtExecutor / PhpExecutor / StubExecutor) │    │
+//! │  └─────────────────────────────────────────────┘    │
+//! └─────────────────────────────────────────────────────┘
+//! ```
 
 pub mod access_log;
 pub mod config;
 pub mod connection;
 pub mod error_pages;
 mod internal;
-pub mod rate_limit;
 pub mod request;
 pub mod response;
 mod routing;
@@ -29,12 +96,34 @@ pub use config::ServerConfig;
 use connection::ConnectionContext;
 use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics, ServerConfigInfo};
-use rate_limit::RateLimiter;
 
 use crate::config::RateLimitConfig;
+use crate::middleware::rate_limit::RateLimiter;
 use crate::executor::ScriptExecutor;
 
 /// HTTP server with pluggable script executor.
+///
+/// The server is generic over [`ScriptExecutor`],
+/// allowing different backends for script execution.
+///
+/// # Type Parameter
+///
+/// * `E` - The script executor type (e.g., `ExtExecutor`, `PhpExecutor`, `StubExecutor`)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use tokio_php::server::{Server, ServerConfig};
+/// use tokio_php::executor::ExtExecutor;
+///
+/// // Create server with ExtExecutor
+/// let config = ServerConfig::default();
+/// let executor = ExtExecutor::new(4, 400)?;
+/// let server = Server::new(config, executor)?;
+///
+/// // Run the server
+/// server.run().await?;
+/// ```
 pub struct Server<E: ScriptExecutor> {
     config: ServerConfig,
     executor: Arc<E>,
@@ -323,8 +412,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 request_metrics: Arc::clone(&self.request_metrics),
                 error_pages: self.error_pages.clone(),
                 rate_limiter: self.rate_limiter.clone(),
-                static_cache_ttl: self.config.static_cache_ttl.clone(),
-                request_timeout: self.config.request_timeout.clone(),
+                static_cache_ttl: self.config.static_cache_ttl,
+                request_timeout: self.config.request_timeout,
                 profile_enabled: self.profile_enabled,
                 access_log_enabled: self.access_log_enabled,
             });
@@ -449,11 +538,11 @@ fn format_optional_duration(d: &config::OptionalDuration) -> String {
         return "off".to_string();
     }
     let secs = d.as_secs();
-    if secs % 86400 == 0 {
+    if secs.is_multiple_of(86400) {
         format!("{}d", secs / 86400)
-    } else if secs % 3600 == 0 {
+    } else if secs.is_multiple_of(3600) {
         format!("{}h", secs / 3600)
-    } else if secs % 60 == 0 {
+    } else if secs.is_multiple_of(60) {
         format!("{}m", secs / 60)
     } else {
         format!("{}s", secs)

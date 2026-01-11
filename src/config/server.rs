@@ -53,7 +53,7 @@ impl OptionalDuration {
         self.secs
     }
 
-    /// Convert to Option<Duration>.
+    /// Convert to `Option<Duration>`.
     #[inline]
     pub const fn as_duration(&self) -> Option<Duration> {
         if self.secs > 0 {
@@ -78,6 +78,7 @@ pub type RequestTimeout = OptionalDuration;
 
 /// TLS configuration.
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct TlsConfig {
     /// Path to TLS certificate (PEM format).
     pub cert_path: Option<PathBuf>,
@@ -87,15 +88,6 @@ pub struct TlsConfig {
     enabled: bool,
 }
 
-impl Default for TlsConfig {
-    fn default() -> Self {
-        Self {
-            cert_path: None,
-            key_path: None,
-            enabled: false,
-        }
-    }
-}
 
 impl TlsConfig {
     /// Check if TLS is configured (pre-computed, zero-cost).

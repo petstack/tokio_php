@@ -3,6 +3,14 @@ name = "tokio_php"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "tokio_php"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tokio_php"
+path = "src/main.rs"
+
 [features]
 default = ["php"]
 php = []
