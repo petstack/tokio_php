@@ -28,9 +28,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: cloud
-          endpoint: "diolektor/default-builder"
+#        with:
+#          driver: cloud
+#          endpoint: "diolektor/default-builder"
 
       - name: Build and push
         uses: docker/build-push-action@v6
