@@ -125,6 +125,7 @@ See [docs/architecture.md](docs/architecture.md#comparison-with-php-fpm) for det
 
 Located in `ext/` directory. Provides:
 - PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_request_heartbeat()`
+- Build version tracking: `$_SERVER['TOKIO_SERVER_BUILD_VERSION']` and `tokio_server_info()['build']`
 - C API for FFI superglobals optimization (no eval overhead)
 - Built as both shared library (.so) and static library (.a)
 

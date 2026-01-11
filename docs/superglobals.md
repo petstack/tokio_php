@@ -185,8 +185,9 @@ echo $_SERVER['SPAN_ID'];           // 16-char span identifier
 echo $_SERVER['PARENT_SPAN_ID'];    // Parent span (if propagated)
 
 // tokio_php specific (USE_EXT=1 only)
-echo $_SERVER['TOKIO_REQUEST_ID'];  // Unique request ID
-echo $_SERVER['TOKIO_WORKER_ID'];   // Worker thread ID
+echo $_SERVER['TOKIO_REQUEST_ID'];           // Unique request ID
+echo $_SERVER['TOKIO_WORKER_ID'];            // Worker thread ID
+echo $_SERVER['TOKIO_SERVER_BUILD_VERSION']; // Build version with git hash
 ```
 
 See [Distributed Tracing](distributed-tracing.md) for trace context details.

@@ -127,8 +127,10 @@ When using `USE_EXT=1`, additional PHP functions are available:
 ```php
 tokio_request_id();            // int - unique request ID
 tokio_worker_id();             // int - worker thread ID (0..N-1)
-tokio_server_info();           // array - server information
+tokio_server_info();           // array - server info including 'build' with git hash
 tokio_request_heartbeat(30);   // bool - extend request timeout by N seconds
+
+$_SERVER['TOKIO_SERVER_BUILD_VERSION']; // "0.1.0 (abc12345)"
 ```
 
 ## Profiling

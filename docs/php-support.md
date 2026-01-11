@@ -328,8 +328,9 @@ Custom extension providing:
 
 - `tokio_request_id()` — current request ID
 - `tokio_worker_id()` — current worker thread ID
-- `tokio_server_info()` — server configuration
+- `tokio_server_info()` — server configuration including build version with git hash
 - `tokio_request_heartbeat(int $time = 10)` — extend request timeout
+- `$_SERVER['TOKIO_SERVER_BUILD_VERSION']` — build version string (e.g., `"0.1.0 (abc12345)"`)
 
 See [tokio_sapi Extension](tokio-sapi-extension.md) for details.
 
