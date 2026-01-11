@@ -32,6 +32,15 @@
 //! server.run().await?;
 //! ```
 
+/// Package version from Cargo.toml
+pub const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Git commit hash (8 chars) with optional "-dirty" suffix
+pub const BUILD_VERSION: &str = env!("BUILD_VERSION");
+
+/// Full version string: "0.1.0 (abc12345)" or "0.1.0 (abc12345-dirty)"
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("BUILD_VERSION"), ")");
+
 pub mod config;
 pub mod core;
 pub mod executor;

@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Log configuration summary
     config.log_summary();
 
-    info!("Starting tokio_php server...");
+    info!("Starting tokio_php v{}", tokio_php::VERSION);
 
     // Use single-threaded Tokio runtime - PHP workers handle blocking work
     let runtime = tokio::runtime::Builder::new_current_thread()

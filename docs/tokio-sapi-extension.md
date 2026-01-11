@@ -54,6 +54,7 @@ print_r($info);
 //     [version] => 0.1.0
 //     [sapi] => tokio_sapi
 //     [zts] => 1
+//     [build] => 0.1.0 (abc12345)
 // )
 ?>
 ```
@@ -99,6 +100,9 @@ The extension adds additional `$_SERVER` variables:
 // Request identification
 echo $_SERVER['TOKIO_REQUEST_ID'];          // Current request ID
 echo $_SERVER['TOKIO_WORKER_ID'];           // Current worker ID
+
+// Server build version with git commit hash
+echo $_SERVER['TOKIO_SERVER_BUILD_VERSION']; // "0.1.0 (abc12345)" or "0.1.0 (abc12345-dirty)"
 
 // Heartbeat (internal, used by tokio_request_heartbeat())
 echo $_SERVER['TOKIO_HEARTBEAT_CTX'];       // Hex pointer to context

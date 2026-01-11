@@ -6,6 +6,7 @@ $functions = [
     'tokio_server_info' => function_exists('tokio_server_info'),
     'tokio_request_heartbeat' => function_exists('tokio_request_heartbeat'),
 ];
+$serverVersion = $_SERVER['TOKIO_SERVER_BUILD_VERSION'] ?? null;
 $serverInfo = function_exists('tokio_server_info') ? tokio_server_info() : null;
 $requestId = function_exists('tokio_request_id') ? tokio_request_id() : null;
 $workerId = function_exists('tokio_worker_id') ? tokio_worker_id() : null;
@@ -69,9 +70,15 @@ $workerId = function_exists('tokio_worker_id') ? tokio_worker_id() : null;
                 <span class="label">tokio_sapi loaded</span>
                 <span class="value <?= $extLoaded ? 'ok' : 'fail' ?>"><?= $extLoaded ? 'Yes' : 'No' ?></span>
             </div>
+            <?php if ($serverVersion): ?>
+            <div class="row">
+                <span class="label">Server Version</span>
+                <span class="value"><?= htmlspecialchars($serverVersion) ?></span>
+            </div>
+            <?php endif; ?>
             <?php if (defined('TOKIO_SAPI_VERSION')): ?>
             <div class="row">
-                <span class="label">Version</span>
+                <span class="label">Extension Version</span>
                 <span class="value"><?= TOKIO_SAPI_VERSION ?></span>
             </div>
             <?php endif; ?>

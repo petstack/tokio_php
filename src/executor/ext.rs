@@ -222,6 +222,7 @@ fn execute_script_with_ffi(
         let mut extra_vars: Vec<(&str, &str)> = vec![
             ("TOKIO_REQUEST_ID", &req_id_value),
             ("TOKIO_WORKER_ID", &worker_id_value),
+            ("TOKIO_SERVER_BUILD_VERSION", crate::VERSION),
         ];
         if let Some(ref hb) = heartbeat {
             extra_vars.push(("TOKIO_HEARTBEAT_CTX", &hb.ctx_hex));

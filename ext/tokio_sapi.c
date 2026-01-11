@@ -867,6 +867,8 @@ PHP_FUNCTION(tokio_worker_id)
 /* tokio_server_info(): array - get server information */
 PHP_FUNCTION(tokio_server_info)
 {
+    zval *server_arr, *build_val;
+
     ZEND_PARSE_PARAMETERS_NONE();
 
     array_init(return_value);
@@ -874,6 +876,15 @@ PHP_FUNCTION(tokio_server_info)
     add_assoc_string(return_value, "version", TOKIO_SAPI_VERSION);
     add_assoc_string(return_value, "sapi", "tokio_sapi");
     add_assoc_bool(return_value, "zts", 1);
+
+    /* Get build version from $_SERVER['TOKIO_SERVER_BUILD_VERSION'] */
+    server_arr = zend_hash_str_find(&EG(symbol_table), "_SERVER", sizeof("_SERVER")-1);
+    if (server_arr && Z_TYPE_P(server_arr) == IS_ARRAY) {
+        build_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_SERVER_BUILD_VERSION", sizeof("TOKIO_SERVER_BUILD_VERSION")-1);
+        if (build_val && Z_TYPE_P(build_val) == IS_STRING) {
+            add_assoc_str(return_value, "build", zend_string_copy(Z_STR_P(build_val)));
+        }
+    }
 }
 
 /* tokio_async_call(string $name, string $data): string|false - call Rust async */
