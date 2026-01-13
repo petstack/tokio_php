@@ -40,8 +40,12 @@ fn resolve_uri_to_path(uri_path: &str, document_root: &str) -> String {
 
     let clean_path = decoded_path.trim_start_matches('/').replace("..", "");
 
-    if clean_path.is_empty() || clean_path.ends_with('/') {
-        format!("{}/{}/index.php", document_root, clean_path)
+    if clean_path.is_empty() {
+        // Root path "/" -> document_root/index.php
+        format!("{}/index.php", document_root)
+    } else if clean_path.ends_with('/') {
+        // Directory path "/foo/" -> document_root/foo/index.php
+        format!("{}/{}index.php", document_root, clean_path)
     } else {
         format!("{}/{}", document_root, clean_path)
     }
@@ -89,13 +93,13 @@ mod tests {
     #[test]
     fn test_resolve_uri_root_path() {
         let result = resolve_uri_to_path("/", "/var/www/html");
-        assert_eq!(result, "/var/www/html//index.php");
+        assert_eq!(result, "/var/www/html/index.php");
     }
 
     #[test]
     fn test_resolve_uri_trailing_slash() {
         let result = resolve_uri_to_path("/admin/", "/var/www/html");
-        assert_eq!(result, "/var/www/html/admin//index.php");
+        assert_eq!(result, "/var/www/html/admin/index.php");
     }
 
     #[test]
@@ -114,13 +118,13 @@ mod tests {
     fn test_resolve_uri_path_traversal_prevention() {
         // .. should be removed for security
         let result = resolve_uri_to_path("/../etc/passwd", "/var/www/html");
-        assert_eq!(result, "/var/www/html//etc/passwd");
+        assert_eq!(result, "/var/www/html//etc/passwd"); // Double slash from removed ..
     }
 
     #[test]
     fn test_resolve_uri_path_traversal_middle() {
         let result = resolve_uri_to_path("/admin/../config.php", "/var/www/html");
-        assert_eq!(result, "/var/www/html/admin//config.php");
+        assert_eq!(result, "/var/www/html/admin//config.php"); // Double slash from removed ..
     }
 
     #[test]
@@ -132,7 +136,7 @@ mod tests {
     #[test]
     fn test_resolve_uri_empty_path() {
         let result = resolve_uri_to_path("", "/var/www/html");
-        assert_eq!(result, "/var/www/html//index.php");
+        assert_eq!(result, "/var/www/html/index.php");
     }
 
     // ========================================
@@ -261,7 +265,7 @@ mod tests {
     fn test_percent_encoded_path_traversal() {
         // %2e%2e is URL-encoded ".."
         let result = resolve_uri_to_path("/%2e%2e/etc/passwd", "/var/www/html");
-        // After decoding, .. should be removed
+        // After decoding, .. should be removed (leaves double slash)
         assert_eq!(result, "/var/www/html//etc/passwd");
     }
 
