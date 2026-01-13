@@ -5,9 +5,12 @@
 //!
 //! Features:
 //! - Request ID tracking via tokio_sapi_request_init()
-//! - FFI superglobals: $_GET, $_POST, $_SERVER, $_COOKIE, $_FILES, $_REQUEST
+//! - $_SERVER via SAPI register_server_variables callback (set before php_request_startup)
+//! - $_GET, $_POST, $_COOKIE, $_FILES via FFI batch calls
+//! - $_REQUEST built from $_GET + $_POST + $_COOKIE
 //! - Script execution via tokio_sapi_execute_script()
 
+use std::borrow::Cow;
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,15 +52,10 @@ extern "C" {
         size: usize,
     );
 
-    // Set raw POST body for php://input
+    // Set raw POST body for php://input (used alongside SAPI read_post callback)
     fn tokio_sapi_set_post_data(data: *const c_char, len: usize);
 
-    // Batch API - set multiple variables in one FFI call
-    fn tokio_sapi_set_server_vars_batch(
-        buffer: *const c_char,
-        buffer_len: usize,
-        count: usize,
-    ) -> c_int;
+    // Batch API for superglobals
     fn tokio_sapi_set_get_vars_batch(
         buffer: *const c_char,
         buffer_len: usize,
@@ -74,23 +72,24 @@ extern "C" {
         count: usize,
     ) -> c_int;
 
-    fn tokio_sapi_clear_superglobals();
-    fn tokio_sapi_init_superglobals(); // Initialize superglobal array caches (call once per request)
-    fn tokio_sapi_init_request_state(); // Replaces header_remove();ob_start() eval
-    fn tokio_sapi_build_request();
+    // Note: $_SERVER uses SAPI callback (register_server_variables)
+    // $_COOKIE uses FFI batch (read_cookies callback not called by PHP embed SAPI)
+
+    fn tokio_sapi_init_superglobals(); // Initialize superglobal array caches
+    fn tokio_sapi_init_request_state(); // Initialize headers, output buffering
+    fn tokio_sapi_build_request(); // Build $_REQUEST from $_GET + $_POST
 
     // Script execution
     fn tokio_sapi_execute_script(path: *const c_char) -> c_int;
-
 }
 
 // =============================================================================
 // Batch Buffer Helper
 // =============================================================================
 
-// Thread-local buffers for ultra-batch serialization (one per superglobal type)
+// Thread-local buffers for batch serialization ($_GET, $_POST, $_COOKIE)
+// Note: $_SERVER uses SAPI callback, others use FFI batch
 thread_local! {
-    static SERVER_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     static GET_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     static POST_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     static COOKIE_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -179,20 +178,22 @@ struct ExtExecutionTiming {
 // Script Execution (using FFI for superglobals - no eval overhead!)
 // =============================================================================
 
-/// Heartbeat info for passing via $_SERVER
+/// Heartbeat info for passing via $_SERVER (used by worker loop)
 struct HeartbeatInfo {
     ctx_hex: String,
     max_secs: String,
     callback_hex: String,
 }
 
-/// Execute PHP script using FFI for superglobals (faster than eval!)
+/// Execute PHP script using FFI for superglobals.
+///
+/// Note: $_SERVER and $_COOKIE are now populated via SAPI callbacks during
+/// php_request_startup(). This function only handles $_GET, $_POST, $_FILES, $_REQUEST.
 fn execute_script_with_ffi(
     request: &ScriptRequest,
-    request_id: u64,
-    worker_id: usize,
+    _request_id: u64,
+    _worker_id: usize,
     profiling: bool,
-    heartbeat: Option<HeartbeatInfo>,
 ) -> Result<(StdoutCapture, ExtExecutionTiming), String> {
     let mut timing = ExtExecutionTiming::default();
 
@@ -200,56 +201,22 @@ fn execute_script_with_ffi(
     sapi::clear_captured_headers();
 
     // === FFI Superglobals with granular timing ===
+    // Note: $_SERVER and $_COOKIE already populated via SAPI callbacks
     let total_start = Instant::now();
 
-    // 1. Clear superglobals and initialize array caches
+    // 1. Initialize superglobal array caches (for $_GET, $_POST, $_FILES)
     let phase_start = Instant::now();
     unsafe {
-        tokio_sapi_clear_superglobals();
         tokio_sapi_init_superglobals();
     }
     if profiling {
         timing.ffi_clear_us = phase_start.elapsed().as_micros() as u64;
     }
 
-    // 2. Set $_SERVER variables (batch)
-    let phase_start = Instant::now();
-    let req_id_value = request_id.to_string();
-    let worker_id_value = worker_id.to_string();
-    let (buf_len, count) = SERVER_BUFFER.with(|buf| {
-        let mut buf = buf.borrow_mut();
-        // Build extra vars including heartbeat info if available
-        let mut extra_vars: Vec<(&str, &str)> = vec![
-            ("TOKIO_REQUEST_ID", &req_id_value),
-            ("TOKIO_WORKER_ID", &worker_id_value),
-            ("TOKIO_SERVER_BUILD_VERSION", crate::VERSION),
-        ];
-        if let Some(ref hb) = heartbeat {
-            extra_vars.push(("TOKIO_HEARTBEAT_CTX", &hb.ctx_hex));
-            extra_vars.push(("TOKIO_HEARTBEAT_MAX_SECS", &hb.max_secs));
-            extra_vars.push(("TOKIO_HEARTBEAT_CALLBACK", &hb.callback_hex));
-        }
-        pack_into_buffer(
-            &mut buf,
-            request.server_vars.iter().map(|(k, v)| (k, v)),
-            &extra_vars,
-        )
-    });
-    if count > 0 {
-        SERVER_BUFFER.with(|buf| unsafe {
-            tokio_sapi_set_server_vars_batch(
-                buf.borrow().as_ptr() as *const c_char,
-                buf_len,
-                count,
-            );
-        });
-    }
-    if profiling {
-        timing.ffi_server_us = phase_start.elapsed().as_micros() as u64;
-        timing.ffi_server_count = count as u64;
-    }
+    // $_SERVER already set via SAPI register_server_variables callback
+    // $_COOKIE already set via SAPI read_cookies callback
 
-    // 3. Set $_GET variables (batch)
+    // 2. Set $_GET variables (batch)
     let phase_start = Instant::now();
     let (buf_len, count) = GET_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
@@ -297,18 +264,19 @@ fn execute_script_with_ffi(
     }
 
     // 5. Set $_COOKIE variables (batch)
+    // Note: SAPI read_cookies callback not called by PHP embed SAPI, using FFI instead
     let phase_start = Instant::now();
     let (buf_len, count) = COOKIE_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(&mut buf, request.cookies.iter().map(|(k, v)| (k, v)), &[])
+        pack_into_buffer(
+            &mut buf,
+            request.cookies.iter().map(|(k, v)| (k, v)),
+            &[],
+        )
     });
     if count > 0 {
         COOKIE_BUFFER.with(|buf| unsafe {
-            tokio_sapi_set_cookie_vars_batch(
-                buf.borrow().as_ptr() as *const c_char,
-                buf_len,
-                count,
-            );
+            tokio_sapi_set_cookie_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
         });
     }
     if profiling {
@@ -509,7 +477,53 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     0
                 };
 
-                // Start PHP request
+                // === PHP-FPM compatible: set request data BEFORE php_request_startup ===
+                // This allows SAPI callbacks to populate $_SERVER and $_COOKIE during startup
+
+                // Build extended server_vars with TOKIO_* variables
+                let req_id_value = Cow::Owned(request_id.to_string());
+                let worker_id_value = Cow::Owned(id.to_string());
+                let mut extended_server_vars = request.server_vars.clone();
+                extended_server_vars.push((Cow::Borrowed("TOKIO_REQUEST_ID"), req_id_value));
+                extended_server_vars.push((Cow::Borrowed("TOKIO_WORKER_ID"), worker_id_value));
+                extended_server_vars.push((
+                    Cow::Borrowed("TOKIO_SERVER_BUILD_VERSION"),
+                    Cow::Borrowed(crate::VERSION),
+                ));
+
+                // Add heartbeat info to server_vars
+                let heartbeat_info = heartbeat_ctx.as_ref().map(|ctx| {
+                    let ctx_ptr = Arc::as_ptr(ctx) as *mut c_void;
+                    HeartbeatInfo {
+                        ctx_hex: format!("{:x}", ctx_ptr as usize),
+                        max_secs: ctx.max_extension().to_string(),
+                        callback_hex: format!("{:x}", tokio_php_heartbeat as usize),
+                    }
+                });
+                if let Some(ref hb) = heartbeat_info {
+                    extended_server_vars.push((
+                        Cow::Borrowed("TOKIO_HEARTBEAT_CTX"),
+                        Cow::Owned(hb.ctx_hex.clone()),
+                    ));
+                    extended_server_vars.push((
+                        Cow::Borrowed("TOKIO_HEARTBEAT_MAX_SECS"),
+                        Cow::Owned(hb.max_secs.clone()),
+                    ));
+                    extended_server_vars.push((
+                        Cow::Borrowed("TOKIO_HEARTBEAT_CALLBACK"),
+                        Cow::Owned(hb.callback_hex.clone()),
+                    ));
+                }
+
+                // Set request data for SAPI callbacks (before php_request_startup)
+                // Note: cookies param is not used (read_cookies callback not called by embed SAPI)
+                sapi::set_request_data(
+                    &extended_server_vars,
+                    &request.cookies,
+                    request.raw_body.as_deref(),
+                );
+
+                // Start PHP request - SAPI callbacks populate $_SERVER
                 let startup_start = Instant::now();
                 let startup_ok = unsafe { php_request_startup() } == 0;
                 let php_startup_us = if profiling {
@@ -524,31 +538,14 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     unsafe {
                         tokio_sapi_request_init(request_id);
                     }
-
-                    // Build heartbeat info for passing via $_SERVER
-                    // (TLS doesn't work between static lib and dynamic extension)
-                    let heartbeat_info = heartbeat_ctx.as_ref().map(|ctx| {
-                        let ctx_ptr = Arc::as_ptr(ctx) as *mut c_void;
-                        HeartbeatInfo {
-                            ctx_hex: format!("{:x}", ctx_ptr as usize),
-                            max_secs: ctx.max_extension().to_string(),
-                            callback_hex: format!("{:x}", tokio_php_heartbeat as usize),
-                        }
-                    });
                     let ffi_request_init_us = if profiling {
                         req_init_start.elapsed().as_micros() as u64
                     } else {
                         0
                     };
 
-                    // Execute script with FFI superglobals (no eval overhead!)
-                    match execute_script_with_ffi(
-                        &request,
-                        request_id,
-                        id,
-                        profiling,
-                        heartbeat_info,
-                    ) {
+                    // Execute script (superglobals already set via SAPI + FFI for $_GET/$_POST)
+                    match execute_script_with_ffi(&request, request_id, id, profiling) {
                         Ok((capture, mut timing)) => {
                             // Add request_init timing
                             timing.ffi_request_init_us = ffi_request_init_us;
@@ -558,6 +555,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                                 tokio_sapi_request_shutdown();
                                 php_request_shutdown(ptr::null_mut());
                             }
+                            sapi::clear_request_data();
                             let php_shutdown_us = if profiling {
                                 shutdown_start.elapsed().as_micros() as u64
                             } else {
@@ -579,10 +577,12 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                                 tokio_sapi_request_shutdown();
                                 php_request_shutdown(ptr::null_mut());
                             }
+                            sapi::clear_request_data();
                             Err(e)
                         }
                     }
                 } else {
+                    sapi::clear_request_data();
                     Err("Failed to start PHP request".to_string())
                 };
 

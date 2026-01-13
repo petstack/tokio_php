@@ -1,9 +1,25 @@
 //! Custom SAPI initialization for PHP embed.
 //!
-//! This module provides PHP initialization with custom SAPI callbacks including
-//! a header_handler to capture HTTP headers set via header().
+//! This module provides PHP initialization with custom SAPI callbacks including:
+//! - header_handler: capture HTTP headers set via header()
+//! - register_server_variables: populate $_SERVER during php_request_startup()
+//! - read_post: provide POST body for php://input
+//!
+//! Note: `read_cookies` callback is registered but NOT called by PHP embed SAPI.
+//! Cookie data is populated via FFI in ext.rs instead.
+//!
 //! Uses 'cli-server' SAPI name for OPcache compatibility.
+//!
+//! ## Request Flow
+//!
+//! 1. Call `set_request_data()` with request data (for $_SERVER)
+//! 2. Call `php_request_startup()` - SAPI callback populates $_SERVER
+//! 3. Set $_GET, $_POST, $_COOKIE via FFI (ext.rs)
+//! 4. Execute PHP script
+//! 5. Call `php_request_shutdown()`
+//! 6. Call `clear_request_data()`
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
@@ -110,17 +126,61 @@ extern "C" {
     fn php_embed_init(argc: c_int, argv: *mut *mut c_char) -> c_int;
     fn php_embed_shutdown();
     static mut php_embed_module: SapiModule;
+
+    // Global SAPI module (copied from php_embed_module during sapi_startup)
+    // This is the actual module used during request handling
+    static mut sapi_module: SapiModule;
+
+    // For registering $_SERVER variables
+    fn php_register_variable_safe(
+        var: *const c_char,
+        val: *const c_char,
+        val_len: usize,
+        track_vars_array: *mut c_void,
+    );
 }
 
 // =============================================================================
-// Thread-local header storage
+// Request Data (set before php_request_startup)
 // =============================================================================
+
+/// Request data for SAPI callbacks.
+/// This must be set BEFORE calling php_request_startup().
+#[derive(Default)]
+pub struct RequestData<'a> {
+    /// $_SERVER variables
+    pub server_vars: Vec<(Cow<'a, str>, Cow<'a, str>)>,
+    /// Cookies as "key1=val1; key2=val2" string (for read_cookies callback - NOT USED)
+    pub cookie_string: Option<CString>,
+    /// Raw POST body for php://input
+    pub post_body: Option<Vec<u8>>,
+    /// Current read position in post_body
+    pub post_read_pos: usize,
+}
+
+// =============================================================================
+// Thread-local storage
+// =============================================================================
+
+/// Owned version of RequestData for thread-local storage
+struct RequestDataOwned {
+    /// $_SERVER variables (owned strings)
+    server_vars: Vec<(String, String)>,
+    /// Cookies as "key1=val1; key2=val2" string (for read_cookies callback - NOT USED)
+    cookie_string: Option<CString>,
+    /// Raw POST body for php://input
+    post_body: Option<Vec<u8>>,
+    /// Current read position in post_body
+    post_read_pos: usize,
+}
 
 thread_local! {
     /// Captured headers for current request
     pub static CAPTURED_HEADERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
     /// Captured HTTP status code
     pub static CAPTURED_STATUS: RefCell<u16> = const { RefCell::new(200) };
+    /// Request data for SAPI callbacks (set before php_request_startup)
+    static REQUEST_DATA: RefCell<Option<RequestDataOwned>> = const { RefCell::new(None) };
 }
 
 /// Custom header handler - captures headers set via header()
@@ -186,11 +246,83 @@ unsafe extern "C" fn custom_header_handler(
 }
 
 // =============================================================================
+// SAPI Callbacks for superglobals (called during php_request_startup)
+// =============================================================================
+
+/// SAPI callback: register $_SERVER variables
+/// Called by PHP during php_request_startup() -> php_hash_environment()
+unsafe extern "C" fn custom_register_server_variables(track_vars_array: *mut c_void) {
+    REQUEST_DATA.with(|data| {
+        let data = data.borrow();
+        if let Some(ref req) = *data {
+            for (key, value) in &req.server_vars {
+                // Create null-terminated key
+                let key_cstr = match CString::new(key.as_str()) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+
+                // php_register_variable_safe handles the value (doesn't need null terminator)
+                php_register_variable_safe(
+                    key_cstr.as_ptr(),
+                    value.as_ptr() as *const c_char,
+                    value.len(),
+                    track_vars_array,
+                );
+            }
+        }
+    });
+}
+
+/// SAPI callback: read cookies
+/// Called by PHP during sapi_activate() to get cookie string
+/// Note: This callback is NOT called by PHP embed SAPI - using FFI instead
+/// Returns pointer to "key1=val1; key2=val2" string (PHP copies it)
+unsafe extern "C" fn custom_read_cookies() -> *mut c_char {
+    REQUEST_DATA.with(|data| {
+        let data = data.borrow();
+        if let Some(ref req) = *data {
+            if let Some(ref cookie_str) = req.cookie_string {
+                return cookie_str.as_ptr() as *mut c_char;
+            }
+        }
+        ptr::null_mut()
+    })
+}
+
+/// SAPI callback: read POST body
+/// Called by PHP to read php://input data
+/// Returns number of bytes read into buffer
+unsafe extern "C" fn custom_read_post(buffer: *mut c_char, count_bytes: usize) -> usize {
+    REQUEST_DATA.with(|data| {
+        let mut data = data.borrow_mut();
+        if let Some(ref mut req) = *data {
+            if let Some(ref body) = req.post_body {
+                let remaining = body.len().saturating_sub(req.post_read_pos);
+                let to_read = remaining.min(count_bytes);
+
+                if to_read > 0 {
+                    ptr::copy_nonoverlapping(
+                        body.as_ptr().add(req.post_read_pos),
+                        buffer as *mut u8,
+                        to_read,
+                    );
+                    req.post_read_pos += to_read;
+                }
+                return to_read;
+            }
+        }
+        0
+    })
+}
+
+// =============================================================================
 // SAPI Configuration
 // =============================================================================
 
 static SAPI_NAME: &[u8] = b"cli-server\0";
 static SAPI_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 
 // =============================================================================
 // Public API
@@ -202,14 +334,18 @@ pub fn init() -> Result<(), String> {
         return Ok(());
     }
 
-    tracing::info!("sapi::init() - initializing PHP with cli-server SAPI name");
+    tracing::info!("sapi::init() - initializing PHP with custom SAPI callbacks");
 
     unsafe {
         // Set SAPI name for OPcache compatibility
         php_embed_module.name = SAPI_NAME.as_ptr() as *mut c_char;
 
-        // Install custom header handler
+        // Install custom callbacks BEFORE php_embed_init
+        // (these get copied to sapi_module during sapi_startup)
         php_embed_module.header_handler = Some(custom_header_handler);
+        php_embed_module.register_server_variables = Some(custom_register_server_variables);
+        php_embed_module.read_cookies = Some(custom_read_cookies);
+        php_embed_module.read_post = Some(custom_read_post);
 
         let program_name = CString::new("tokio_php").unwrap();
         let mut argv: [*mut c_char; 2] = [program_name.as_ptr() as *mut c_char, ptr::null_mut()];
@@ -217,11 +353,19 @@ pub fn init() -> Result<(), String> {
         if php_embed_init(1, argv.as_mut_ptr()) != 0 {
             return Err("Failed to initialize PHP embed".to_string());
         }
+
+        // Also patch sapi_module directly (the global that PHP actually uses)
+        // This is needed because sapi_startup() copies php_embed_module to sapi_module
+        sapi_module.name = SAPI_NAME.as_ptr() as *mut c_char;
+        sapi_module.header_handler = Some(custom_header_handler);
+        sapi_module.register_server_variables = Some(custom_register_server_variables);
+        sapi_module.read_cookies = Some(custom_read_cookies);
+        sapi_module.read_post = Some(custom_read_post);
         // tokio_sapi extension loaded dynamically via php.ini
     }
 
     tracing::info!(
-        "PHP initialized with SAPI 'cli-server' (OPcache compatible, custom header handler)"
+        "PHP initialized with SAPI 'cli-server' (register_server_variables, read_cookies, read_post)"
     );
     Ok(())
 }
@@ -253,4 +397,49 @@ pub fn get_captured_headers() -> Vec<(String, String)> {
 /// Get captured HTTP status code
 pub fn get_captured_status() -> u16 {
     CAPTURED_STATUS.with(|s| *s.borrow())
+}
+
+/// Set request data for SAPI callbacks.
+/// MUST be called BEFORE php_request_startup() for superglobals to be populated correctly.
+///
+/// # Arguments
+/// * `server_vars` - $_SERVER variables (populated via register_server_variables callback)
+/// * `cookies` - Cookie key-value pairs (NOT USED - read_cookies callback not called by embed SAPI)
+/// * `post_body` - Raw POST body for php://input
+pub fn set_request_data(
+    server_vars: &[(Cow<'_, str>, Cow<'_, str>)],
+    cookies: &[(Cow<'_, str>, Cow<'_, str>)],
+    post_body: Option<&[u8]>,
+) {
+    // Format cookies as "key1=val1; key2=val2" (kept for potential future use)
+    let cookie_string = if cookies.is_empty() {
+        None
+    } else {
+        let cookie_str: String = cookies
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("; ");
+        CString::new(cookie_str).ok()
+    };
+
+    REQUEST_DATA.with(|data| {
+        *data.borrow_mut() = Some(RequestDataOwned {
+            server_vars: server_vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            cookie_string,
+            post_body: post_body.map(|b| b.to_vec()),
+            post_read_pos: 0,
+        });
+    });
+}
+
+/// Clear request data after php_request_shutdown().
+/// This frees the thread-local request data.
+pub fn clear_request_data() {
+    REQUEST_DATA.with(|data| {
+        *data.borrow_mut() = None;
+    });
 }
