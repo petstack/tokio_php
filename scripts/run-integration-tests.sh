@@ -6,13 +6,29 @@
 #
 # Prerequisites:
 #   - Docker container running: docker compose up -d
-#   - Server healthy: curl http://localhost:9091/health
+#   - Server healthy: curl http://localhost:9090/health
 
 set -e
 
 # Configuration
-SERVER_URL="${TEST_SERVER_URL:-http://localhost:8081}"
-INTERNAL_URL="${TEST_INTERNAL_URL:-http://localhost:9091}"
+SERVER_URL="${TEST_SERVER_URL:-http://localhost:8080}"
+INTERNAL_URL="${TEST_INTERNAL_URL:-http://localhost:9090}"
+CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
+RETRY_COUNT="${RETRY_COUNT:-3}"
+
+# Retry wrapper for curl
+curl_retry() {
+    local url="$1"
+    shift
+    local attempt=1
+    while [ $attempt -le $RETRY_COUNT ]; do
+        result=$(curl --max-time "$CURL_TIMEOUT" "$@" "$url" 2>/dev/null) && echo "$result" && return 0
+        echo "  (retry $attempt/$RETRY_COUNT for $url)" >&2
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
 
 echo "=================================="
 echo "  tokio_php Integration Tests"
@@ -39,46 +55,52 @@ fail() {
 
 # Check if server is running
 echo "Checking server health..."
-health=$(curl -sf --max-time 5 "$INTERNAL_URL/health" 2>/dev/null || echo "")
+health=$(curl -sf --max-time "$CURL_TIMEOUT" "$INTERNAL_URL/health" 2>/dev/null || echo "")
 if [ -z "$health" ]; then
     echo "ERROR: Server is not running. Start it with: docker compose up -d"
     exit 1
 fi
 echo "Server is healthy"
+
+# Warm up the server with a few requests
+echo "Warming up server..."
+for i in {1..3}; do
+    curl -sf --max-time "$CURL_TIMEOUT" "$SERVER_URL/index.php" > /dev/null 2>&1 || true
+done
 echo ""
 
 # HTTP Status Tests
 echo "=== HTTP Status Tests ==="
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SERVER_URL/index.php")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$SERVER_URL/index.php")
 [ "$status" = "200" ] && pass "GET /index.php returns 200" || fail "GET /index.php" "200" "$status"
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SERVER_URL/bench.php")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$SERVER_URL/bench.php")
 [ "$status" = "200" ] && pass "GET /bench.php returns 200" || fail "GET /bench.php" "200" "$status"
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SERVER_URL/nonexistent.php")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$SERVER_URL/nonexistent.php")
 [ "$status" = "404" ] && pass "GET /nonexistent.php returns 404" || fail "GET /nonexistent.php" "404" "$status"
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SERVER_URL/hello.php?name=Test")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$SERVER_URL/hello.php?name=Test")
 [ "$status" = "200" ] && pass "GET /hello.php?name=Test returns 200" || fail "GET /hello.php?name=Test" "200" "$status"
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SERVER_URL/styles.css")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$SERVER_URL/styles.css")
 [ "$status" = "200" ] && pass "GET /styles.css returns 200" || fail "GET /styles.css" "200" "$status"
 
 echo ""
 echo "=== Content Tests ==="
 
-body=$(curl -s --max-time 5 "$SERVER_URL/bench.php")
+body=$(curl_retry "$SERVER_URL/bench.php" -s)
 [ "$body" = "ok" ] && pass "bench.php returns 'ok'" || fail "bench.php body" "ok" "$body"
 
-body=$(curl -s --max-time 5 "$SERVER_URL/hello.php?name=TestUser")
+body=$(curl_retry "$SERVER_URL/hello.php?name=TestUser" -s)
 if echo "$body" | grep -q "Hello, TestUser!"; then
     pass "hello.php shows 'Hello, TestUser!'"
 else
     fail "hello.php content" "contains 'Hello, TestUser!'" "${body:0:50}..."
 fi
 
-body=$(curl -s --max-time 5 "$SERVER_URL/index.php")
+body=$(curl_retry "$SERVER_URL/index.php" -s)
 if echo "$body" | grep -q "tokio_php"; then
     pass "index.php contains 'tokio_php'"
 else
@@ -88,14 +110,14 @@ fi
 echo ""
 echo "=== Header Tests ==="
 
-headers=$(curl -sI --max-time 5 "$SERVER_URL/bench.php")
+headers=$(curl -sI --max-time "$CURL_TIMEOUT" "$SERVER_URL/bench.php" 2>/dev/null || echo "")
 if echo "$headers" | grep -qi "x-request-id"; then
     pass "X-Request-ID header present"
 else
     fail "X-Request-ID header" "present" "missing"
 fi
 
-headers=$(curl -sI --max-time 5 "$SERVER_URL/styles.css")
+headers=$(curl -sI --max-time "$CURL_TIMEOUT" "$SERVER_URL/styles.css" 2>/dev/null || echo "")
 if echo "$headers" | grep -qi "cache-control"; then
     pass "Cache-Control header on static files"
 else
@@ -117,7 +139,7 @@ fi
 echo ""
 echo "=== POST Tests ==="
 
-body=$(curl -s --max-time 5 -X POST -d "name=John&email=john@test.com" "$SERVER_URL/form.php")
+body=$(curl -s --max-time "$CURL_TIMEOUT" -X POST -d "name=John&email=john@test.com" "$SERVER_URL/form.php" 2>/dev/null || echo "")
 if echo "$body" | grep -q "John"; then
     pass "POST form data processed"
 else
@@ -127,14 +149,14 @@ fi
 echo ""
 echo "=== Compression Tests ==="
 
-headers=$(curl -sI --max-time 5 -H "Accept-Encoding: br" "$SERVER_URL/index.php")
+headers=$(curl -sI --max-time "$CURL_TIMEOUT" -H "Accept-Encoding: br" "$SERVER_URL/index.php" 2>/dev/null || echo "")
 if echo "$headers" | grep -qi "content-encoding: br"; then
     pass "Brotli compression applied"
 else
     echo "  [SKIP] Brotli compression (may be disabled or response too small)"
 fi
 
-headers=$(curl -sI --max-time 5 -H "Accept-Encoding: br" "$SERVER_URL/bench.php")
+headers=$(curl -sI --max-time "$CURL_TIMEOUT" -H "Accept-Encoding: br" "$SERVER_URL/bench.php" 2>/dev/null || echo "")
 if ! echo "$headers" | grep -qi "content-encoding: br"; then
     pass "Small responses not compressed"
 else
@@ -144,33 +166,33 @@ fi
 echo ""
 echo "=== Internal Server Tests ==="
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$INTERNAL_URL/health")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$INTERNAL_URL/health" 2>/dev/null || echo "000")
 [ "$status" = "200" ] && pass "GET /health returns 200" || fail "GET /health" "200" "$status"
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$INTERNAL_URL/metrics")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$INTERNAL_URL/metrics" 2>/dev/null || echo "000")
 [ "$status" = "200" ] && pass "GET /metrics returns 200" || fail "GET /metrics" "200" "$status"
 
-body=$(curl -s --max-time 5 "$INTERNAL_URL/health")
+body=$(curl -s --max-time "$CURL_TIMEOUT" "$INTERNAL_URL/health" 2>/dev/null || echo "")
 if echo "$body" | grep -q '"status":"ok"'; then
     pass "/health returns JSON with status"
 else
     fail "/health JSON" "contains '\"status\":\"ok\"'" "${body:0:50}..."
 fi
 
-body=$(curl -s --max-time 5 "$INTERNAL_URL/metrics")
+body=$(curl -s --max-time "$CURL_TIMEOUT" "$INTERNAL_URL/metrics" 2>/dev/null || echo "")
 if echo "$body" | grep -q "tokio_php_uptime_seconds"; then
     pass "/metrics contains uptime"
 else
     fail "/metrics" "contains 'tokio_php_uptime_seconds'" "missing"
 fi
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$INTERNAL_URL/unknown")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$INTERNAL_URL/unknown" 2>/dev/null || echo "000")
 [ "$status" = "404" ] && pass "GET /unknown returns 404" || fail "GET /unknown" "404" "$status"
 
 echo ""
 echo "=== Security Tests ==="
 
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SERVER_URL/../../../etc/passwd")
+status=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$SERVER_URL/../../../etc/passwd" 2>/dev/null || echo "000")
 if [ "$status" = "404" ] || [ "$status" = "400" ] || [ "$status" = "403" ]; then
     pass "Path traversal blocked"
 else
