@@ -11,8 +11,14 @@ The extension provides:
 
 ## Enabling the Extension
 
+The extension is enabled by default (`USE_EXT=1`):
+
 ```bash
-USE_EXT=1 docker compose up -d
+# Default - ExtExecutor with tokio_sapi
+docker compose up -d
+
+# Disable extension (use legacy PhpExecutor)
+USE_EXT=0 docker compose up -d
 ```
 
 When enabled, `ExtExecutor` is used instead of `PhpExecutor`.
@@ -135,6 +141,35 @@ notify_admins($payload);    // Send notifications
 ?>
 ```
 
+### tokio_early_hints()
+
+Send HTTP 103 Early Hints to preload resources before the main response.
+
+```php
+<?php
+// Send early hints immediately (browser starts loading while PHP works)
+tokio_early_hints([
+    'Link: </style.css>; rel=preload; as=style',
+    'Link: </app.js>; rel=preload; as=script',
+    'Link: <https://cdn.example.com>; rel=preconnect',
+]);
+
+// Heavy work (browser already loading CSS/JS!)
+$data = fetch_from_database();
+$html = render_template($data);
+
+// Final response
+echo $html;
+?>
+```
+
+**Parameters:**
+- `array $headers` - Array of header strings (max 16 headers)
+
+**Returns:** `bool` - `true` on success, `false` if no handler is configured.
+
+**Note:** Full HTTP 103 streaming support is infrastructure-ready but pending server handler changes. Currently returns `false` (callback not set). See roadmap for full implementation.
+
 ### tokio_async_call()
 
 Placeholder for future async PHP-to-Rust calls (not yet implemented).
@@ -158,13 +193,10 @@ echo $_SERVER['TOKIO_WORKER_ID'];           // Current worker ID
 
 // Server build version with git commit hash
 echo $_SERVER['TOKIO_SERVER_BUILD_VERSION']; // "0.1.0 (abc12345)" or "0.1.0 (abc12345-dirty)"
-
-// Heartbeat (internal, used by tokio_request_heartbeat())
-echo $_SERVER['TOKIO_HEARTBEAT_CTX'];       // Hex pointer to context
-echo $_SERVER['TOKIO_HEARTBEAT_MAX_SECS'];  // Max extension (= REQUEST_TIMEOUT)
-echo $_SERVER['TOKIO_HEARTBEAT_CALLBACK'];  // Hex pointer to callback
 ?>
 ```
+
+**Note:** Heartbeat functionality uses the bridge library's TLS context instead of `$_SERVER` variables. See [Bridge Architecture](#bridge-architecture) for details.
 
 ## C API Reference
 
@@ -292,8 +324,12 @@ USE_EXT=1 docker compose up -d
 
 ```
 ext/
-├── tokio_sapi.h      # Header file with API declarations
-├── tokio_sapi.c      # Implementation (~900 lines)
+├── bridge/
+│   ├── bridge.h      # Bridge API declarations
+│   ├── bridge.c      # Bridge implementation (TLS context)
+│   └── Makefile      # Build libtokio_bridge.so
+├── tokio_sapi.h      # Extension header with API declarations
+├── tokio_sapi.c      # Extension implementation (~1000 lines)
 └── config.m4         # phpize configuration
 ```
 
@@ -303,9 +339,15 @@ The extension is built automatically in the Docker image:
 
 ```dockerfile
 # In Dockerfile
-RUN cd /app/ext && \
-    phpize84 && \
-    ./configure --with-php-config=/usr/bin/php-config84 && \
+
+# 1. Build bridge library first
+WORKDIR /app/ext/bridge
+RUN make && make install
+
+# 2. Build PHP extension
+WORKDIR /app/ext
+RUN phpize && \
+    ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && \
     make && \
     make install
 ```
@@ -362,25 +404,67 @@ fn set_server_vars(vars: &[(&str, &str)]) {
 }
 ```
 
-## Thread Safety
+## Bridge Architecture
 
-The extension uses C11 `__thread` for thread-local storage (not PHP module globals):
+The extension uses a shared library (`libtokio_bridge.so`) to solve TLS (Thread-Local Storage) isolation between Rust and PHP:
 
-```c
-// Thread-local request context
-static __thread tokio_request_context *tls_request_ctx = NULL;
-static __thread uint64_t tls_request_id = 0;
-
-// Heartbeat context for request timeout extension
-static __thread void *tls_heartbeat_ctx = NULL;
-static __thread uint64_t tls_heartbeat_max_secs = 0;
-static __thread tokio_heartbeat_fn_t tls_heartbeat_callback = NULL;
-
-// Cached superglobal array pointers (avoids repeated lookups)
-static __thread zval *cached_superglobal_arrs[6] = {NULL};
+```
+┌─────────────────────────────────────────────────────────┐
+│                    tokio_php (Rust binary)              │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │              libtokio_bridge.so                  │   │
+│  │                                                  │   │
+│  │  __thread bridge_ctx;   // Shared TLS           │   │
+│  │  - request_id, worker_id                        │   │
+│  │  - finish_request state                         │   │
+│  │  - early_hints callback                         │   │
+│  │  - heartbeat callback                           │   │
+│  │                                                  │   │
+│  └─────────────────────────────────────────────────┘   │
+│        ↑                              ↑                 │
+│        │                              │                 │
+│   Rust FFI                     PHP Extension            │
+│   (dlopen)                     (dlopen via PHP)         │
+└─────────────────────────────────────────────────────────┘
 ```
 
-PHP ZTS (TSRM) handles superglobal isolation between threads. Using `__thread` instead of PHP module globals ensures proper thread-local storage when called from external (Rust) worker threads.
+**Why a shared library?**
+
+Without the shared library, Rust (statically linked) and PHP extension (dynamically loaded) have separate TLS storage. This means:
+- Rust can't read values set by PHP
+- PHP can't access callbacks set by Rust
+
+The shared library provides a single TLS context that both can access.
+
+### Bridge Files
+
+```
+ext/
+├── bridge/
+│   ├── bridge.h      # Public API
+│   ├── bridge.c      # Implementation
+│   └── Makefile      # Build libtokio_bridge.so
+├── tokio_sapi.c      # PHP extension (uses bridge)
+├── tokio_sapi.h
+└── config.m4
+```
+
+## Thread Safety
+
+The extension uses the bridge library for shared thread-local storage:
+
+```c
+// Bridge provides shared TLS context (ext/bridge/bridge.c)
+static __thread tokio_bridge_ctx_t *tls_ctx = NULL;
+
+// tokio_sapi.c uses bridge for finish_request, heartbeat, early_hints
+tokio_bridge_mark_finished(offset, headers, code);
+tokio_bridge_send_heartbeat(secs);
+tokio_bridge_send_early_hints(headers, count);
+```
+
+PHP ZTS (TSRM) handles superglobal isolation between threads. The bridge library ensures proper thread-local storage when called from external (Rust) worker threads.
 
 ## Debugging
 
@@ -410,13 +494,26 @@ With `PROFILE=1`, FFI timing is included:
 
 ```bash
 curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep FFI
-
-# X-Profile-FFI-Request-Init-Us: 5
-# X-Profile-FFI-Clear-Us: 1
-# X-Profile-FFI-Server-Us: 45
-# X-Profile-FFI-Get-Us: 1
-# X-Profile-FFI-Build-Request-Us: 2
 ```
+
+**Available FFI profile headers:**
+
+| Header | Description |
+|--------|-------------|
+| `X-Profile-FFI-Request-Init-Us` | Request initialization time |
+| `X-Profile-FFI-Clear-Us` | Superglobals clear time |
+| `X-Profile-FFI-Server-Us` | $_SERVER set time |
+| `X-Profile-FFI-Server-Count` | $_SERVER variable count |
+| `X-Profile-FFI-Get-Us` | $_GET set time |
+| `X-Profile-FFI-Get-Count` | $_GET variable count |
+| `X-Profile-FFI-Post-Us` | $_POST set time |
+| `X-Profile-FFI-Post-Count` | $_POST variable count |
+| `X-Profile-FFI-Cookie-Us` | $_COOKIE set time |
+| `X-Profile-FFI-Cookie-Count` | $_COOKIE variable count |
+| `X-Profile-FFI-Files-Us` | $_FILES set time |
+| `X-Profile-FFI-Files-Count` | $_FILES count |
+| `X-Profile-FFI-Build-Request-Us` | $_REQUEST build time |
+| `X-Profile-FFI-Init-Eval-Us` | Init eval time |
 
 ## Limitations
 
@@ -426,10 +523,11 @@ curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep FFI
 
 ## Future Plans
 
-1. **Async PHP-to-Rust calls**: Enable PHP to call async Rust functions
-2. **Session handler**: Implement `$_SESSION` via shared memory
-3. **Output streaming**: Direct output capture without stdout redirect
-4. **Performance optimization**: Reduce FFI overhead further
+1. **HTTP 103 Early Hints streaming**: Full server handler integration with `tokio::select!` for real-time hint delivery (infrastructure ready via bridge)
+2. **Async PHP-to-Rust calls**: Enable PHP to call async Rust functions
+3. **Session handler**: Implement `$_SESSION` via shared memory
+4. **Output streaming**: Direct output capture without stdout redirect
+5. **Performance optimization**: Reduce bridge overhead further
 
 ## See Also
 

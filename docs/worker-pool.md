@@ -249,6 +249,7 @@ Requests can extend their timeout deadline using `tokio_request_heartbeat()`:
 
 ```rust
 // src/executor/common.rs
+#[repr(C)]
 pub struct HeartbeatContext {
     start: Instant,
     deadline_ms: AtomicU64,
@@ -268,7 +269,9 @@ impl HeartbeatContext {
 }
 ```
 
-See [Request Heartbeat](request-heartbeat.md) for PHP usage.
+PHP access to heartbeat is via the bridge library (`libtokio_bridge.so`) which solves TLS isolation between Rust and PHP.
+
+See [Request Heartbeat](request-heartbeat.md) for PHP usage and bridge architecture.
 
 ### Request Distribution
 
@@ -318,7 +321,7 @@ See [Graceful Shutdown](graceful-shutdown.md) for Kubernetes integration.
 
 - [Configuration](configuration.md) - `PHP_WORKERS`, `QUEUE_CAPACITY` environment variables
 - [Request Heartbeat](request-heartbeat.md) - Timeout extension mechanism
-- [Configuration](configuration.md#request_timeout) - `REQUEST_TIMEOUT` setting
+- [tokio_sapi Extension](tokio-sapi-extension.md) - PHP functions and bridge architecture
 - [Graceful Shutdown](graceful-shutdown.md) - Kubernetes and deployment guide
 - [Architecture](architecture.md) - System design overview
 - [Internal Server](internal-server.md) - Metrics and health endpoints

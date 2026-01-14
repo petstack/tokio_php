@@ -347,7 +347,7 @@ docker compose logs tokio_php | grep -i "error\|Loaded"
 
 Expected output (JSON format):
 ```json
-{"msg":"Error pages directory: \"/var/www/html/errors","level":"info","type":"app",...}
+{"msg":"Error pages directory: \"/var/www/html/errors\"","level":"info","type":"app",...}
 {"msg":"Loaded 3 error pages: [404, 503, 500]","level":"info","type":"app",...}
 ```
 
@@ -357,7 +357,7 @@ docker compose logs tokio_php | jq -r 'select(.msg | contains("error") or contai
 ```
 
 ```
-Error pages directory: "/var/www/html/errors
+Error pages directory: "/var/www/html/errors"
 Loaded 3 error pages: [404, 503, 500]
 ```
 
@@ -365,4 +365,5 @@ Loaded 3 error pages: [404, 503, 500]
 
 - [Middleware](middleware.md) - Middleware system overview
 - [Configuration](configuration.md) - Environment variables reference
+- [Logging](logging.md) - Log format and filtering
 - [Symfony Error Pages](https://symfony.com/doc/current/controller/error_pages.html) - Symfony's approach to error pages

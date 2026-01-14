@@ -268,6 +268,7 @@ set_exception_handler(function (Throwable $e) {
 ## See Also
 
 - [Configuration](configuration.md) - ACCESS_LOG environment variable
+- [Logging](logging.md) - Log format with trace context
 - [Middleware](middleware.md) - Access logging middleware
 - [Profiling](profiling.md) - Request timing with trace context
 - [W3C Trace Context Specification](https://www.w3.org/TR/trace-context/)

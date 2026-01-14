@@ -21,22 +21,23 @@ High-performance async PHP server written in Rust. Uses Tokio for async I/O and 
 - **Graceful Shutdown** - Connection draining for zero-downtime deployments
 - **Custom Error Pages** - HTML error pages for 4xx/5xx responses
 - **Prometheus Metrics** - Built-in `/health` and `/metrics` endpoints
+- **Background Processing** - `tokio_finish_request()` for async tasks
 
 ## Quick Start
 
 ```bash
 # Pull the image
-docker pull diolektor/tokio_php:php8.4-alpine3.23
+docker pull diolektor/tokio_php:php8.5-alpine3.23
 
 # Run with default settings
-docker run -d -p 8080:8080 -v $(pwd)/www:/var/www/html diolektor/tokio_php:php8.4-alpine3.23
+docker run -d -p 8080:8080 -v $(pwd)/www:/var/www/html diolektor/tokio_php:php8.5-alpine3.23
 
 # Run with custom configuration
 docker run -d -p 8080:8080 \
   -e PHP_WORKERS=8 \
   -e INDEX_FILE=index.php \
   -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:php8.4-alpine3.23
+  diolektor/tokio_php:php8.5-alpine3.23
 ```
 
 ## Available Tags
@@ -115,9 +116,12 @@ All tags are multi-arch (`amd64` + `arm64`).
 docker run -d -p 8080:8080 \
   -e INDEX_FILE=index.php \
   -e DOCUMENT_ROOT=/var/www/html/public \
+  -e PHP_WORKERS=1 \
   -v $(pwd):/var/www/html \
-  diolektor/tokio_php:php8.4-alpine3.23
+  diolektor/tokio_php:php8.5-alpine3.23
 ```
+
+**Note:** Use `PHP_WORKERS=1` in development mode to avoid thread-safety issues with framework cache compilation.
 
 ### Production with Metrics
 
@@ -126,9 +130,11 @@ docker run -d -p 8080:8080 -p 9090:9090 \
   -e PHP_WORKERS=16 \
   -e QUEUE_CAPACITY=1000 \
   -e INTERNAL_ADDR=0.0.0.0:9090 \
+  -e ACCESS_LOG=1 \
+  -e RATE_LIMIT=100 \
   -e DRAIN_TIMEOUT_SECS=60 \
-  -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:php8.4-alpine3.23
+  -v $(pwd)/www:/var/www/html:ro \
+  diolektor/tokio_php:php8.5-alpine3.23
 ```
 
 ### With HTTPS
@@ -140,7 +146,7 @@ docker run -d -p 8443:8443 \
   -e TLS_KEY=/certs/key.pem \
   -v $(pwd)/www:/var/www/html \
   -v $(pwd)/certs:/certs:ro \
-  diolektor/tokio_php:php8.4-alpine3.23
+  diolektor/tokio_php:php8.5-alpine3.23
 ```
 
 ### With Rate Limiting
@@ -150,7 +156,7 @@ docker run -d -p 8080:8080 \
   -e RATE_LIMIT=100 \
   -e RATE_WINDOW=60 \
   -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:php8.4-alpine3.23
+  diolektor/tokio_php:php8.5-alpine3.23
 ```
 
 ### Custom Error Pages
@@ -159,7 +165,7 @@ docker run -d -p 8080:8080 \
 docker run -d -p 8080:8080 \
   -e ERROR_PAGES_DIR=/var/www/html/errors \
   -v $(pwd)/www:/var/www/html \
-  diolektor/tokio_php:php8.4-alpine3.23
+  diolektor/tokio_php:php8.5-alpine3.23
 ```
 
 Create error pages: `errors/404.html`, `errors/500.html`, `errors/503.html`
@@ -171,10 +177,13 @@ Enable internal server with `INTERNAL_ADDR`:
 ```bash
 # Health check
 curl http://localhost:9090/health
-{"status":"ok","timestamp":1703361234,"active_connections":5}
+{"status":"ok","timestamp":1703361234,"active_connections":5,"total_requests":1000}
 
 # Prometheus metrics
 curl http://localhost:9090/metrics
+
+# Server configuration
+curl http://localhost:9090/config
 ```
 
 ### Available Metrics
@@ -184,10 +193,12 @@ curl http://localhost:9090/metrics
 - `tokio_php_response_time_avg_seconds` - Average response time
 - `tokio_php_active_connections` - Current connections
 - `tokio_php_pending_requests` - Queue size
+- `tokio_php_dropped_requests` - Requests dropped (queue full)
 - `tokio_php_requests_total{method}` - Requests by HTTP method
 - `tokio_php_responses_total{status}` - Responses by status code
 - `node_load1`, `node_load5`, `node_load15` - System load averages
 - `node_memory_*` - Memory statistics
+- `tokio_php_memory_usage_percent` - Memory usage percentage
 
 ## Profiling
 
@@ -202,8 +213,11 @@ curl -H "X-Profile: 1" http://localhost:8080/index.php -I
 Response headers include timing data:
 - `X-Profile-Total-Us` - Total request time (microseconds)
 - `X-Profile-Queue-Us` - Worker queue wait time
+- `X-Profile-PHP-Startup-Us` - PHP request startup time
 - `X-Profile-Script-Us` - PHP script execution time
+- `X-Profile-PHP-Shutdown-Us` - PHP request shutdown time
 - `X-Profile-TLS-Handshake-Us` - TLS handshake time (HTTPS only)
+- `X-Profile-TLS-Protocol` - TLS version (TLSv1_2, TLSv1_3)
 
 ## Kubernetes
 
@@ -214,7 +228,7 @@ spec:
   terminationGracePeriodSeconds: 35
   containers:
     - name: tokio-php
-      image: diolektor/tokio_php:php8.4-alpine3.23
+      image: diolektor/tokio_php:php8.5-alpine3.23
       ports:
         - containerPort: 8080
         - containerPort: 9090
@@ -244,7 +258,7 @@ spec:
 ```yaml
 services:
   app:
-    image: diolektor/tokio_php:php8.4-alpine3.23
+    image: diolektor/tokio_php:php8.5-alpine3.23
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -253,8 +267,75 @@ services:
       INDEX_FILE: index.php
       DOCUMENT_ROOT: /var/www/html/public
       INTERNAL_ADDR: 0.0.0.0:9090
+      ACCESS_LOG: 1
     volumes:
-      - ./:/var/www/html
+      - ./:/var/www/html:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+```
+
+## PHP Functions
+
+tokio_php provides special PHP functions via the `tokio_sapi` extension:
+
+### tokio_request_id(): string
+
+Returns the unique request ID for distributed tracing:
+
+```php
+<?php
+$requestId = tokio_request_id();
+// "65bdbab40000"
+```
+
+### tokio_worker_id(): int
+
+Returns the current worker thread ID:
+
+```php
+<?php
+$workerId = tokio_worker_id();
+// 0, 1, 2, ...
+```
+
+### tokio_server_info(): array
+
+Returns server information:
+
+```php
+<?php
+$info = tokio_server_info();
+// ['name' => 'tokio_php', 'version' => '0.1.0', 'build' => 'abc1234', 'php_sapi' => 'embed']
+```
+
+### tokio_request_heartbeat(int $time = 10): bool
+
+Extends the request timeout deadline for long-running scripts:
+
+```php
+<?php
+foreach ($large_dataset as $item) {
+    process_item($item);
+    set_time_limit(30);
+    tokio_request_heartbeat(30);  // Extend by 30 seconds
+}
+```
+
+### tokio_finish_request(): bool
+
+Sends response immediately and continues script execution in background (like `fastcgi_finish_request()`):
+
+```php
+<?php
+echo "Response sent to user";
+tokio_finish_request();  // Client gets response NOW
+
+// Background work (client doesn't wait):
+send_email($user);
+log_to_database($data);
 ```
 
 ## Supported PHP Features
@@ -263,6 +344,29 @@ services:
 - OPcache with JIT (tracing mode)
 - Preloading support via `opcache.preload`
 - All standard PHP extensions
+- W3C Trace Context: `$_SERVER['TRACE_ID']`, `$_SERVER['SPAN_ID']`
+- Build version: `$_SERVER['TOKIO_SERVER_BUILD_VERSION']`
+
+## Image Contents
+
+The image includes:
+
+| Component | Path |
+|-----------|------|
+| Server binary | `/usr/local/bin/tokio_php` |
+| Bridge library | `/usr/local/lib/libtokio_bridge.so` |
+| PHP extension | `/usr/local/lib/php/extensions/no-debug-zts-{API}/tokio_sapi.so` |
+
+PHP extension directory varies by version:
+- PHP 8.4: `no-debug-zts-20240826`
+- PHP 8.5: `no-debug-zts-20250925`
+
+## Security
+
+- Runs as non-root user (`www-data`, UID 82)
+- Read-only volumes supported
+- TLS 1.3 with strong cipher suites
+- Rate limiting for abuse prevention
 
 ## Links
 

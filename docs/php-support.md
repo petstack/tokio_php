@@ -131,12 +131,14 @@ For advanced users who want to use their own PHP build, binary-only images are a
 docker create --name tmp diolektor/tokio_php:php8.5-bin
 docker cp tmp:/tokio_php ./tokio_php
 docker cp tmp:/tokio_sapi.so ./tokio_sapi.so
+docker cp tmp:/libtokio_bridge.so ./libtokio_bridge.so
 docker rm tmp
 ```
 
 Contents:
 - `/tokio_php` — the server binary
 - `/tokio_sapi.so` — PHP extension for ExtExecutor
+- `/libtokio_bridge.so` — shared library for Rust-PHP communication (required)
 
 Use these when:
 - Building a custom Docker image with specific PHP extensions
@@ -172,6 +174,10 @@ RUN apk del .build-deps
 # Copy tokio_php binaries
 COPY --from=diolektor/tokio_php:php8.4-bin /tokio_php /usr/local/bin/
 COPY --from=diolektor/tokio_php:php8.4-bin /tokio_sapi.so /tmp/
+COPY --from=diolektor/tokio_php:php8.4-bin /libtokio_bridge.so /usr/local/lib/
+
+# Install tokio_bridge shared library
+RUN ldconfig 2>/dev/null || echo "/usr/local/lib" >> /etc/ld-musl-x86_64.path
 
 # Install tokio_sapi extension
 RUN EXT_DIR=$(php-config --extension-dir) && \
@@ -200,6 +206,7 @@ Official PHP image helper scripts:
 | PHP 8.4/8.5 ZTS | Thread-safe PHP with embed SAPI |
 | OPcache | Bytecode caching and JIT |
 | tokio_sapi extension | FFI superglobals for ExtExecutor |
+| libtokio_bridge | Shared library for Rust-PHP communication |
 | tokio_php binary | The Rust server |
 | Common extensions | curl, mbstring, openssl, zlib, etc. |
 
@@ -330,6 +337,8 @@ Custom extension providing:
 - `tokio_worker_id()` — current worker thread ID
 - `tokio_server_info()` — server configuration including build version with git hash
 - `tokio_request_heartbeat(int $time = 10)` — extend request timeout
+- `tokio_finish_request()` — send response immediately, continue script in background
+- `tokio_early_hints(array $headers)` — send HTTP 103 Early Hints (infrastructure ready)
 - `$_SERVER['TOKIO_SERVER_BUILD_VERSION']` — build version string (e.g., `"0.1.0 (abc12345)"`)
 
 See [tokio_sapi Extension](tokio-sapi-extension.md) for details.

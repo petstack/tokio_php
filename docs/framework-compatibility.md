@@ -172,3 +172,10 @@ This is not specific to tokio_php. The same issues occur with:
 - **ReactPHP** - Event loop, same file race conditions
 
 The solution is always the same: single worker for development, pre-warmed cache for production.
+
+## See Also
+
+- [Configuration](configuration.md) - PHP_WORKERS and other environment variables
+- [Single Entry Point](single-entry-point.md) - INDEX_FILE configuration for frameworks
+- [Worker Pool](worker-pool.md) - Worker thread management details
+- [Architecture](architecture.md) - System design overview

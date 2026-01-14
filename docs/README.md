@@ -14,6 +14,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 |---------|------------------------------------------------------------|
 | [PHP Support](php-support.md) | PHP 8.5/8.4, ZTS, embed SAPI, extensions                   |
 | [Architecture](architecture.md) | System design, components, request flow                    |
+| [Docker](docker.md) | Dockerfiles, compose, build targets, deployment            |
 | [HTTP/2 & TLS](http2-tls.md) | HTTP/1.1, HTTP/2, HTTPS with TLS 1.3                       |
 | [HTTP Methods](http-methods.md) | GET, POST, PUT, PATCH, DELETE, OPTIONS, QUERY              |
 | [Middleware](middleware.md) | Rate limiting, compression, logging, error pages           |
@@ -81,6 +82,8 @@ docker compose logs -f
 tokio_php/
 ├── src/
 │   ├── main.rs              # Entry point, runtime init
+│   ├── lib.rs               # Library entry point
+│   ├── bridge.rs            # Bridge FFI bindings (libtokio_bridge)
 │   ├── server/              # HTTP server (Hyper)
 │   │   ├── mod.rs           # Server core
 │   │   ├── config.rs        # Server configuration
@@ -113,12 +116,19 @@ tokio_php/
 │   ├── trace_context.rs     # W3C Trace Context
 │   ├── profiler.rs          # Request timing
 │   └── types.rs             # Request/Response types
-├── ext/                     # tokio_sapi PHP extension
+├── ext/                     # PHP extensions
+│   ├── bridge/              # libtokio_bridge.so (Rust ↔ PHP TLS)
+│   │   ├── tokio_bridge.h   # Public API header
+│   │   ├── tokio_bridge.c   # Thread-local storage implementation
+│   │   └── Makefile         # Build rules
+│   ├── tokio_sapi.c         # tokio_sapi PHP extension
+│   └── tokio_sapi.h         # Extension headers
 ├── docs/                    # Documentation
 ├── www/                     # Document root
 │   └── errors/              # Custom error pages
 ├── certs/                   # TLS certificates
-├── Dockerfile               # Multi-stage build
+├── Dockerfile               # Development build (with tests)
+├── Dockerfile.release       # Release build (minimal, dist target)
 ├── docker-compose.yml       # Service definitions
 └── LICENSE                  # AGPL-3.0
 ```

@@ -257,4 +257,5 @@ Both:
 
 - [Configuration](configuration.md) - Environment variables reference
 - [Architecture](architecture.md) - System design overview
+- [Framework Compatibility](framework-compatibility.md) - Laravel, Symfony setup and caveats
 - [Static Caching](static-caching.md) - Cache headers for static files (normal mode)

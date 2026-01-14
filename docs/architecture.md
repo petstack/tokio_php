@@ -53,6 +53,8 @@ tokio_php is a high-performance async web server that executes PHP scripts using
 ```
 src/
 ├── main.rs              # Entry point, runtime initialization
+├── lib.rs               # Library entry point
+├── bridge.rs            # Bridge FFI bindings (libtokio_bridge)
 ├── types.rs             # ScriptRequest/ScriptResponse
 ├── profiler.rs          # Request timing profiler
 ├── trace_context.rs     # W3C Trace Context (distributed tracing)
@@ -170,12 +172,16 @@ Multi-threaded worker pool using PHP 8.5/8.4 ZTS (Thread Safe):
 Worker lifecycle per request:
 1. Receive `ScriptRequest` from queue
 2. `php_request_startup()` - initialize request state
-3. Set superglobals via FFI or `zend_eval_string`
-4. Execute PHP script via `php_execute_script()` or `zend_eval_string`
-5. Capture output via memfd redirect
-6. Capture headers via SAPI `header_handler`
-7. `php_request_shutdown()` - cleanup
-8. Send `ScriptResponse` back
+3. `bridge::init_ctx()` - initialize bridge TLS context
+4. Set heartbeat callback via `bridge::set_heartbeat()`
+5. Set superglobals via FFI or `zend_eval_string`
+6. Execute PHP script via `php_execute_script()` or `zend_eval_string`
+7. Capture output via memfd redirect
+8. Capture headers via SAPI `header_handler`
+9. `php_request_shutdown()` - cleanup
+10. Check `bridge::get_finish_info()` for early response
+11. `bridge::destroy_ctx()` - cleanup bridge context
+12. Send `ScriptResponse` back
 
 ## Request Flow
 
@@ -231,11 +237,15 @@ Client Request
 ┌─────────────────────────────────────────────────────┐
 │                    PHP Worker                       │
 │  1. php_request_startup()                          │
-│  2. Set superglobals (FFI or eval)                 │
-│  3. Set $_SERVER[TRACE_ID], $_SERVER[SPAN_ID]      │
-│  4. Execute script                                 │
-│  5. Capture output + headers                       │
+│  2. Init bridge context (request_id, worker_id)   │
+│  3. Set superglobals (FFI or eval)                 │
+│  4. Set $_SERVER[TRACE_ID], $_SERVER[SPAN_ID]      │
+│  5. Execute script                                 │
+│     - tokio_finish_request() → response sent      │
+│     - tokio_request_heartbeat() → extend timeout  │
 │  6. php_request_shutdown()                         │
+│  7. Finalize: check bridge finish state           │
+│  8. Destroy bridge context                        │
 └──────────────────────────┬──────────────────────────┘
                            │
                            ▼
@@ -314,7 +324,7 @@ Selection priority in `main.rs`:
 
 ## Request Heartbeat
 
-Long-running PHP scripts can extend their timeout deadline:
+Long-running PHP scripts can extend their timeout deadline via the bridge:
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
@@ -325,19 +335,24 @@ Long-running PHP scripts can extend their timeout deadline:
 │  max_extension_secs: u64│ = REQUEST_TIMEOUT                   │
 └───────────────────────────────────────────────────────────────┘
          │
-         │ Shared between async runtime and PHP worker
+         │ Pointer + callback registered in bridge TLS
          │
          ▼
-┌─────────────────┐     tokio_request_heartbeat(30)     ┌─────────────────┐
-│  Async Runtime  │ ◄───────────────────────────────────│   PHP Worker    │
-│                 │     Atomically extends deadline     │                 │
-│  Sleeps until   │                                     │  Long-running   │
-│  deadline or    │                                     │  script calls   │
-│  response ready │                                     │  heartbeat()    │
+┌─────────────────┐                                     ┌─────────────────┐
+│  Async Runtime  │                                     │   PHP Worker    │
+│                 │                                     │                 │
+│  Sleeps until   │     ┌──────────────────────┐        │  Long-running   │
+│  deadline or    │◄────│  libtokio_bridge.so  │◄───────│  script calls   │
+│  response ready │     │                      │        │  heartbeat(30)  │
+│                 │     │  __thread ctx:       │        │                 │
+│  Callback sets  │     │  - heartbeat_ctx     │        │  Bridge invokes │
+│  AtomicU64      │     │  - heartbeat_callback│        │  callback via   │
+│  deadline_ms    │     └──────────────────────┘        │  shared TLS     │
 └─────────────────┘                                     └─────────────────┘
 ```
 
 Uses `Instant`-based timing (not SystemTime) for minimal syscall overhead.
+Bridge provides shared TLS context accessible from both Rust and PHP.
 
 ## Distributed Tracing
 
@@ -395,6 +410,48 @@ traceparent: 00-{trace_id}-{parent_span}-01     traceparent: 00-{trace_id}-{new_
 - **Shared**: OPcache bytecode, JIT compiled code, interned strings
 - **Per-thread (TSRM)**: Request state, superglobals, Zend execution state
 
+## Bridge Architecture
+
+The bridge (`libtokio_bridge.so`) solves TLS (Thread-Local Storage) isolation between Rust and PHP:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      tokio_php (Rust)                           │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                  libtokio_bridge.so                       │  │
+│  │                                                           │  │
+│  │  static __thread tokio_bridge_ctx_t *tls_ctx;            │  │
+│  │                                                           │  │
+│  │  Context per request:                                    │  │
+│  │  - request_id, worker_id                                 │  │
+│  │  - is_finished, output_offset, response_code             │  │
+│  │  - heartbeat_ctx, heartbeat_callback                     │  │
+│  │  - hints_ctx, hints_callback (HTTP 103)                  │  │
+│  │                                                           │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│         ↑                                     ↑                 │
+│         │                                     │                 │
+│    Rust FFI                           PHP Extension            │
+│  (src/bridge.rs)                    (ext/tokio_sapi.c)         │
+│                                                                 │
+│  - bridge::init_ctx()              - tokio_finish_request()    │
+│  - bridge::set_heartbeat()         - tokio_request_heartbeat() │
+│  - bridge::get_finish_info()       - tokio_early_hints()       │
+│  - bridge::destroy_ctx()                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why a shared library?**
+
+Without the bridge, Rust (statically linked) and PHP extension (dynamically loaded by libphp.so) have separate TLS storage:
+- Rust cannot read values set by PHP (`tokio_finish_request()`)
+- PHP cannot invoke callbacks registered by Rust (`heartbeat`)
+
+The shared library provides a single TLS context accessible to both.
+
+See [tokio_sapi Extension](tokio-sapi-extension.md#bridge-architecture) for implementation details.
+
 ## Key Technical Decisions
 
 ### SAPI Name Override
@@ -439,8 +496,10 @@ HeartbeatContext uses `Instant` instead of `SystemTime`:
 
 ## See Also
 
+- [Docker](docker.md) - Dockerfiles, build targets, deployment
 - [Middleware](middleware.md) - Middleware system details
 - [Internal Server](internal-server.md) - Health checks and metrics
 - [Worker Pool](worker-pool.md) - PHP worker pool configuration
 - [Distributed Tracing](distributed-tracing.md) - W3C Trace Context
 - [Request Heartbeat](request-heartbeat.md) - Timeout extension mechanism
+- [tokio_sapi Extension](tokio-sapi-extension.md) - Bridge architecture and PHP functions

@@ -50,21 +50,31 @@ $result = fibonacci(30);
 
 ## Configuration
 
-### Current Dockerfile Settings
+### Default Settings (php.ini)
 
-```dockerfile
-# Configure OPcache + JIT + Preloading
-RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.interned_strings_buffer=16" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.max_accelerated_files=10000" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.revalidate_freq=0" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.jit_buffer_size=64M" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.jit=tracing" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.preload=/var/www/html/preload.php" >> /usr/local/etc/php/conf.d/opcache.ini && \
-    echo "opcache.preload_user=www-data" >> /usr/local/etc/php/conf.d/opcache.ini
+OPcache is configured via `php.ini` mounted in docker-compose:
+
+```ini
+[opcache]
+opcache.enable = 1
+opcache.enable_cli = 1
+opcache.memory_consumption = 128
+opcache.interned_strings_buffer = 16
+opcache.max_accelerated_files = 10000
+opcache.validate_timestamps = 0
+opcache.revalidate_freq = 0
+opcache.jit_buffer_size = 64M
+opcache.jit = tracing
+
+; Preloading - uncomment for frameworks (Laravel, Symfony)
+; opcache.preload = /var/www/html/preload.php
+; opcache.preload_user = www-data
+```
+
+Mount in docker-compose.yml:
+```yaml
+volumes:
+  - ./php.ini:/usr/local/etc/php/conf.d/tokio_php.ini:ro
 ```
 
 ### Configuration Options
@@ -277,6 +287,7 @@ If you see "Unable to reattach to base address" errors, increase shared memory l
 
 - [OPcache Internals](opcache-internals.md) - Deep dive into OPcache data structures
 - [Architecture](architecture.md) - tokio_php system overview
+- [tokio_sapi Extension](tokio-sapi-extension.md) - PHP extension and SAPI integration
 - [Worker Pool](worker-pool.md) - PHP worker management
 - [Profiling](profiling.md) - Performance measurement
 - [Configuration](configuration.md) - All environment variables

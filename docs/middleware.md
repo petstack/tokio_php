@@ -5,10 +5,13 @@ tokio_php uses a middleware system for cross-cutting concerns like rate limiting
 ## Architecture
 
 ```
-Request → Rate Limit → Access Log → Handler → Error Pages → Static Cache → Compression → Response
-           (-100)       (-90)                     (90)          (50)          (100)
-              ↓           ↓                         ↑             ↑              ↑
-          (early)     (early)                    (late)        (late)        (late)
+Request path (low priority first):
+Request → Rate Limit → Access Log → Static Cache → Error Pages → Compression → Handler
+             (-100)       (-90)         (50)          (90)         (100)
+
+Response path (high priority first, reverse order):
+Handler → Compression → Error Pages → Static Cache → Access Log → Rate Limit → Response
+             (100)          (90)          (50)         (-90)        (-100)
 ```
 
 Middleware is ordered by priority:
@@ -236,14 +239,14 @@ pub struct Context {
     pub parent_span_id: Option<String>, // Parent span (if propagated)
     pub request_id: String,         // Short ID for logs
 
+    // Timing
+    pub started_at: Instant,
+
     // Request metadata
-    pub http_version: String,
+    pub http_version: HttpVersion,  // HTTP/1.0, HTTP/1.1, HTTP/2.0
     pub profiling: bool,
     pub accepts_html: bool,
     pub accepts_brotli: bool,
-
-    // Timing
-    pub started_at: Instant,
 
     // Private fields with accessor methods:
     // - response_headers: HashMap<String, String>
@@ -351,11 +354,12 @@ See [Configuration](configuration.md) for full environment variable reference.
 
 ## See Also
 
+- [Architecture](architecture.md) - System design overview
 - [Rate Limiting](rate-limiting.md) - Detailed rate limiting documentation
 - [Compression](compression.md) - Brotli compression settings
 - [Error Pages](error-pages.md) - Custom error page setup
 - [Static Caching](static-caching.md) - Static file caching
-- [Configuration](configuration.md#access_log) - Access log settings
+- [Logging](logging.md) - Access log format
 - [Distributed Tracing](distributed-tracing.md) - W3C Trace Context
 - [Profiling](profiling.md) - Request timing headers
 - [Configuration](configuration.md) - All environment variables

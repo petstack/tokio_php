@@ -247,9 +247,23 @@ $session->save();
 
 ## Implementation Details
 
-### Eval-based Injection (Default)
+### FFI-based Injection (Default, USE_EXT=1)
 
-Superglobals are injected via `zend_eval_string()`:
+With the tokio_sapi extension (default), superglobals are set via FFI batch API:
+
+```c
+// Single C call sets all $_SERVER variables
+tokio_sapi_set_server_vars_batch(buffer, len, count);
+```
+
+FFI is **48% faster** for real applications because:
+- Native `php_execute_script()` execution
+- Batch API reduces FFI call overhead
+- Full OPcache/JIT optimization
+
+### Eval-based Injection (USE_EXT=0)
+
+Legacy mode injects superglobals via `zend_eval_string()`:
 
 ```php
 $_GET = ['name' => 'John'];
@@ -260,17 +274,7 @@ $_FILES = [];
 $_REQUEST = array_merge($_GET, $_POST);
 ```
 
-This is fast (~1-7µs) and reliable.
-
-### FFI-based Injection (USE_EXT=1)
-
-With the tokio_sapi extension, superglobals are set via FFI:
-
-```c
-php_register_variable_safe("name", "John", strlen("John"), track_vars_array);
-```
-
-FFI is ~2% slower but allows incremental updates without regenerating all superglobals.
+This is simpler but slower for complex applications.
 
 ## Headers and Responses
 
@@ -309,6 +313,6 @@ All HTTP status codes (200, 301, 302, 404, 500, etc.) are supported.
 - [HTTP Methods](http-methods.md) - GET, POST, PUT, PATCH, DELETE, OPTIONS, QUERY
 - [Configuration](configuration.md) - Environment variables reference
 - [Distributed Tracing](distributed-tracing.md) - W3C Trace Context support
-- [Request Heartbeat](request-heartbeat.md) - TOKIO_HEARTBEAT_* variables
+- [Request Heartbeat](request-heartbeat.md) - Timeout extension via `tokio_request_heartbeat()`
 - [tokio_sapi Extension](tokio-sapi-extension.md) - PHP extension functions
 - [Architecture](architecture.md) - Request processing overview

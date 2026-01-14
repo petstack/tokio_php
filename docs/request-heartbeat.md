@@ -326,9 +326,12 @@ foreach ($chunks as $chunk) {
 
 $info = [
     'function_exists' => function_exists('tokio_request_heartbeat'),
-    'timeout_configured' => !empty($_SERVER['TOKIO_HEARTBEAT_CTX']),
-    'max_extension' => $_SERVER['TOKIO_HEARTBEAT_MAX_SECS'] ?? 'N/A',
+    'server_info' => function_exists('tokio_server_info') ? tokio_server_info() : [],
 ];
+
+// Test heartbeat availability
+$test_result = tokio_request_heartbeat(1);
+$info['heartbeat_available'] = $test_result;
 
 header('Content-Type: application/json');
 echo json_encode($info);
@@ -407,22 +410,29 @@ function generate_report_async(): string
 
 ### Heartbeat Returns False
 
+Common reasons:
+
+1. **`REQUEST_TIMEOUT=off`** — Timeout is disabled, heartbeat not needed
+2. **`$time <= 0`** — Invalid extension value
+3. **`$time > REQUEST_TIMEOUT`** — Extension exceeds configured limit
+
 ```php
 <?php
 
-// Debug heartbeat issues
-$debug = [
-    'heartbeat_ctx' => $_SERVER['TOKIO_HEARTBEAT_CTX'] ?? null,
-    'max_secs' => $_SERVER['TOKIO_HEARTBEAT_MAX_SECS'] ?? null,
-    'callback' => $_SERVER['TOKIO_HEARTBEAT_CALLBACK'] ?? null,
-];
+// Check why heartbeat returns false
+$result = tokio_request_heartbeat(60);
 
-if (!$debug['heartbeat_ctx']) {
-    echo "Heartbeat not configured. Check REQUEST_TIMEOUT setting.\n";
-} elseif (!$debug['max_secs'] || $debug['max_secs'] === '0') {
-    echo "Timeout is disabled (REQUEST_TIMEOUT=off).\n";
-} else {
-    echo "Heartbeat available. Max extension: {$debug['max_secs']} seconds.\n";
+if (!$result) {
+    // Check if function exists
+    if (!function_exists('tokio_request_heartbeat')) {
+        echo "tokio_sapi extension not loaded.\n";
+    } else {
+        // Likely causes:
+        // - REQUEST_TIMEOUT=off (no timeout configured)
+        // - Value too large (exceeds REQUEST_TIMEOUT limit)
+        // - Value <= 0
+        echo "Heartbeat failed. Check REQUEST_TIMEOUT setting.\n";
+    }
 }
 ```
 
@@ -473,15 +483,28 @@ tokio_request_heartbeat(60);
 
 ### Implementation
 
-The heartbeat mechanism uses three `$_SERVER` variables set by Rust:
+The heartbeat mechanism uses the bridge library (`libtokio_bridge.so`) for communication between PHP and Rust:
 
-| Variable | Description |
-|----------|-------------|
-| `TOKIO_HEARTBEAT_CTX` | Hex pointer to HeartbeatContext struct |
-| `TOKIO_HEARTBEAT_MAX_SECS` | Maximum allowed extension (= REQUEST_TIMEOUT) |
-| `TOKIO_HEARTBEAT_CALLBACK` | Hex pointer to Rust callback function |
+```
+PHP Script                    Bridge (TLS)                 Rust Runtime
+     │                             │                             │
+     │ tokio_request_heartbeat(30) │                             │
+     │────────────────────────────►│                             │
+     │                             │ tokio_bridge_send_heartbeat │
+     │                             │────────────────────────────►│
+     │                             │                             │ Update AtomicU64
+     │                             │                             │ deadline_ms
+     │                             │◄────────────────────────────│
+     │◄────────────────────────────│ return success/failure      │
+     │                             │                             │
+```
 
-The PHP function reads these values and calls the Rust callback via FFI, which atomically updates the deadline in the async loop.
+1. **Rust** registers heartbeat context and callback in bridge TLS at request start
+2. **PHP** calls `tokio_request_heartbeat()` which invokes `tokio_bridge_send_heartbeat()`
+3. **Bridge** invokes the Rust callback, which atomically updates the deadline
+4. **Rust** async loop checks deadline and returns 504 if exceeded
+
+See [Bridge Architecture](architecture.md#bridge-architecture) for details.
 
 ### HeartbeatContext Internals
 

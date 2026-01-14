@@ -281,21 +281,23 @@ OPcache already does the heavy lifting:
 
 ### Optimizations Without Architecture Changes
 
-Current OPcache settings in tokio_php (see Dockerfile):
+Current OPcache settings in tokio_php (see `php.ini`):
 
 ```ini
 ; Current tokio_php configuration
-opcache.enable=1
-opcache.enable_cli=1
-opcache.memory_consumption=128
-opcache.interned_strings_buffer=16
-opcache.max_accelerated_files=10000
-opcache.validate_timestamps=0
-opcache.revalidate_freq=0
-opcache.jit=tracing
-opcache.jit_buffer_size=64M
-opcache.preload=/var/www/html/preload.php
-opcache.preload_user=www-data
+opcache.enable = 1
+opcache.enable_cli = 1
+opcache.memory_consumption = 128
+opcache.interned_strings_buffer = 16
+opcache.max_accelerated_files = 10000
+opcache.validate_timestamps = 0
+opcache.revalidate_freq = 0
+opcache.jit = tracing
+opcache.jit_buffer_size = 64M
+
+; Preloading - uncomment for frameworks
+; opcache.preload = /var/www/html/preload.php
+; opcache.preload_user = www-data
 ```
 
 For larger projects, increase values:
@@ -343,6 +345,7 @@ if (isset($status['jit'])) {
 
 ## See Also
 
+- [OPcache & JIT](opcache-jit.md) - Practical OPcache configuration
 - [Architecture](architecture.md) - tokio_php architecture overview
 - [Worker Pool](worker-pool.md) - PHP worker management
 - [Configuration](configuration.md) - All environment variables

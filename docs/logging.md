@@ -418,4 +418,5 @@ Log::info("Order 123 created by user 456 for $99.99");  // Hard to parse
 
 - [Distributed Tracing](distributed-tracing.md) — W3C Trace Context support
 - [Configuration](configuration.md) — Environment variables reference
+- [Internal Server](internal-server.md) — Metrics endpoint
 - [Profiling](profiling.md) — Request timing headers

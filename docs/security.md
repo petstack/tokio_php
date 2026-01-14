@@ -61,14 +61,15 @@ COPY --chown=www-data:www-data www/ /var/www/html/
 
 ## OPcache Preloading
 
-Preload script runs as `www-data`:
+When enabled, preload script runs as `www-data`:
 
 ```ini
+; Uncomment for frameworks (Laravel, Symfony)
 opcache.preload=/var/www/html/preload.php
 opcache.preload_user=www-data
 ```
 
-This ensures preloaded classes have correct ownership context.
+This ensures preloaded classes have correct ownership context. See [OPcache & JIT](opcache-jit.md) for configuration details.
 
 ## Network Security
 
@@ -434,8 +435,10 @@ If you discover a security vulnerability, please report it responsibly:
 
 ## See Also
 
+- [Docker](docker.md) - Docker security, resource limits, read-only volumes
 - [Configuration](configuration.md) - Environment variables reference
 - [HTTP/2 & TLS](http2-tls.md) - TLS configuration details
 - [Rate Limiting](rate-limiting.md) - Abuse prevention
+- [Logging](logging.md) - Access logs and audit trail
 - [Graceful Shutdown](graceful-shutdown.md) - Zero-downtime deployments
 - [Architecture](architecture.md) - System design overview

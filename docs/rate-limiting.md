@@ -390,8 +390,8 @@ RATE_WINDOW=30 docker compose up -d
 ## See Also
 
 - [Configuration](configuration.md) - RATE_LIMIT and RATE_WINDOW environment variables
+- [Security](security.md) - Security best practices
 - [Middleware](middleware.md) - Middleware system overview
 - [Internal Server](internal-server.md) - Prometheus metrics for monitoring 429 responses
-- [Health Checks](health-checks.md) - Server health monitoring
 - [Worker Pool](worker-pool.md) - Queue capacity and worker configuration
 - [Architecture](architecture.md) - System design overview

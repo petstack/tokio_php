@@ -160,25 +160,25 @@ X-Profile-PHP-Shutdown-Us: 52
 |-------------|--------------|----------|
 | Queue-Us | Workers overloaded | Increase PHP_WORKERS |
 | PHP-Startup-Us | Extensions loading | Reduce loaded extensions |
-| Superglobals-Us | Eval overhead | Use USE_EXT=1 (FFI mode) |
+| Superglobals-Us | Eval overhead (USE_EXT=0) | Use default FFI mode (USE_EXT=1) |
 | Script-Us | Slow PHP code | Optimize code, enable OPcache/JIT |
 | Output-Us | Large output | Reduce output size |
 | TLS-Handshake-Us | TLS overhead | Use keep-alive connections |
 
-### Comparing Eval vs FFI Mode
+### Comparing FFI vs Eval Mode
 
 ```bash
-# Eval-based (default)
-X-Profile-Superglobals-Us: 236
-
-# FFI-based (USE_EXT=1) - shows individual timing
+# FFI-based (default, USE_EXT=1) - shows individual timing
 X-Profile-FFI-Server-Us: 45
 X-Profile-FFI-Server-Count: 25
 X-Profile-FFI-Get-Us: 1
 X-Profile-FFI-Get-Count: 2
+
+# Eval-based (USE_EXT=0)
+X-Profile-Superglobals-Us: 236
 ```
 
-FFI mode provides granular timing for each superglobal, useful for debugging.
+FFI mode (default) provides granular timing for each superglobal, useful for debugging.
 
 ## Benchmarking
 
@@ -270,11 +270,12 @@ impl Timer {
 3. **Compare consistently** - Profile same endpoint multiple times
 4. **Watch queue time** - High queue time indicates worker bottleneck
 5. **Check TLS impact** - First request has handshake, subsequent don't
-6. **Use FFI mode** - `USE_EXT=1` provides detailed superglobal timing
+6. **FFI mode is default** - `USE_EXT=1` provides detailed superglobal timing
 
 ## See Also
 
 - [Configuration](configuration.md) - PROFILE environment variable
+- [tokio_sapi Extension](tokio-sapi-extension.md) - FFI profiling details
 - [Internal Server](internal-server.md) - Prometheus metrics for monitoring
 - [Worker Pool](worker-pool.md) - Queue and worker configuration
 - [HTTP/2 & TLS](http2-tls.md) - TLS configuration

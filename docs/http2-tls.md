@@ -55,18 +55,32 @@ curl -k https://localhost:8443/protocol.php
 
 | Variable | Description |
 |----------|-------------|
-| `TLS_CERT` | Path to PEM certificate file |
-| `TLS_KEY` | Path to PEM private key file |
+| `TLS_CERT` | Path to PEM certificate file (inside container) |
+| `TLS_KEY` | Path to PEM private key file (inside container) |
+| `TLS_CERT_FILE` | Docker secrets: host path to certificate (default: `./certs/cert.pem`) |
+| `TLS_KEY_FILE` | Docker secrets: host path to private key (default: `./certs/key.pem`) |
 
-### Using Custom Certificates
+### Using Docker Secrets (Recommended)
+
+Docker secrets provide secure certificate handling:
+
+```bash
+# Use default paths (./certs/cert.pem, ./certs/key.pem)
+docker compose --profile tls up -d
+
+# Custom certificate paths
+TLS_CERT_FILE=/path/to/cert.pem TLS_KEY_FILE=/path/to/key.pem docker compose --profile tls up -d
+```
+
+### Using Custom Certificates (Non-Docker)
 
 ```bash
 # Generate self-signed certificate (development)
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
   -days 365 -nodes -subj "/CN=localhost"
 
-# Start with custom certificates
-TLS_CERT=/path/to/cert.pem TLS_KEY=/path/to/key.pem docker compose up -d
+# Start with custom certificates (direct path, non-Docker)
+TLS_CERT=/path/to/cert.pem TLS_KEY=/path/to/key.pem ./tokio_php
 ```
 
 ### Development Certificates Setup
@@ -91,10 +105,15 @@ certs/
 
 ## Docker Services
 
-| Service | Port | Protocol | Profile |
-|---------|------|----------|---------|
-| `tokio_php` | 8080 | HTTP/1.1, HTTP/2 h2c | default |
-| `tokio_php_tls` | 8443 | HTTPS + HTTP/2 | tls |
+| Service | Main Port | Protocol (Main) | Internal Port | Profile |
+|---------|-----------|-----------------|---------------|---------|
+| `tokio_php` | 8080 | HTTP/1.1, HTTP/2 h2c | 9090 (HTTP) | default |
+| `tokio_php_tls` | 8443 | HTTPS + HTTP/2 | 9090 (HTTP) | tls |
+
+- **Main port**: Application traffic with protocol support as listed
+- **Internal port**: Health checks and metrics — always plain HTTP (no TLS)
+
+**Note:** Run only one service at a time (`tokio_php` OR `tokio_php_tls`) to avoid port 9090 conflict.
 
 ## Implementation Details
 
@@ -157,11 +176,12 @@ TLS handshake is a one-time cost per connection. With keep-alive connections, su
 
 ## Limitations
 
-- HTTP/3 (QUIC) is not yet implemented ([h3 crate is experimental](https://github.com/hyperium/h3))
-- HTTP 103 Early Hints is not yet implemented ([next version of hyper](https://github.com/hyperium/h2/pull/865))
+- **HTTP/3 (QUIC)**: Not yet implemented ([h3 crate is experimental](https://github.com/hyperium/h3))
+- **HTTP 103 Early Hints**: Infrastructure ready via bridge (`tokio_early_hints()` PHP function exists), but full streaming support pending server handler changes. See [tokio_sapi Extension](tokio-sapi-extension.md#tokio_early_hints) for current status.
 
 ## See Also
 
 - [Configuration](configuration.md) - TLS_CERT and TLS_KEY environment variables
 - [Profiling](profiling.md) - TLS handshake timing metrics
 - [Architecture](architecture.md) - Protocol detection implementation
+- [tokio_sapi Extension](tokio-sapi-extension.md) - Early Hints PHP function

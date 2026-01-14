@@ -4,8 +4,8 @@ tokio_php supports all standard HTTP methods, enabling you to build RESTful APIs
 
 ## Supported Methods
 
-| Method | Request Body | `php://input` | `$_POST` | Description |
-|--------|--------------|---------------|----------|-------------|
+| Method | Request Body | `php://input` | `$_POST`* | Description |
+|--------|--------------|---------------|-----------|-------------|
 | GET | No | — | — | Retrieve resource |
 | HEAD | No | — | — | Get headers only |
 | POST | Yes | ✓ | ✓ | Create resource |
@@ -14,6 +14,8 @@ tokio_php supports all standard HTTP methods, enabling you to build RESTful APIs
 | DELETE | Optional | ✓ | — | Delete resource |
 | OPTIONS | Optional | ✓ | — | Get allowed methods |
 | QUERY | Yes | ✓ | ✓ | Safe search with body |
+
+*`$_POST` is populated for any method with `application/x-www-form-urlencoded` or `multipart/form-data` body. Typically only POST and QUERY use these content types; other methods use JSON via `php://input`.
 
 ## Reading Request Body
 

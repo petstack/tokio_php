@@ -320,5 +320,6 @@ register_shutdown_function(function() use ($start) {
 ## See Also
 
 - [Configuration](configuration.md) - Environment variables reference
+- [Worker Pool](worker-pool.md) - PHP worker threads and queue
 - [Internal Server](internal-server.md) - Monitoring active connections
 - [Kubernetes Graceful Shutdown](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination)

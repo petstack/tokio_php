@@ -121,13 +121,52 @@ tokio_php is **2.5x faster** than nginx + PHP-FPM:
 
 See [docs/architecture.md](docs/architecture.md#comparison-with-php-fpm) for detailed comparison.
 
+### Bridge Library (libtokio_bridge.so)
+
+Located in `ext/bridge/` directory. Shared library providing thread-local storage (TLS) for Rust ↔ PHP communication:
+
+```
+┌─────────────────┐     libtokio_bridge.so      ┌─────────────────┐
+│   tokio_php     │◄──────────────────────────►│   tokio_sapi    │
+│  (Rust binary)  │     Thread-Local Storage    │ (PHP extension) │
+└─────────────────┘                             └─────────────────┘
+```
+
+**Purpose:**
+- Shares request context between Rust and PHP without FFI overhead
+- Stores request ID, worker ID, heartbeat context, finish flag
+- Thread-safe via `__thread` storage class
+
+**Key files:**
+- `ext/bridge/tokio_bridge.h` - Public API header
+- `ext/bridge/tokio_bridge.c` - TLS implementation
+- `ext/bridge/Makefile` - Build rules
+
+**Build:**
+```bash
+cd ext/bridge
+make            # Build libtokio_bridge.so
+make install    # Install to /usr/local/lib
+```
+
 ### tokio_sapi PHP Extension
 
-Located in `ext/` directory. Provides:
+Located in `ext/` directory. **Depends on libtokio_bridge.so.**
+
+Provides:
 - PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_request_heartbeat()`, `tokio_finish_request()`
 - Build version tracking: `$_SERVER['TOKIO_SERVER_BUILD_VERSION']` and `tokio_server_info()['build']`
 - C API for FFI superglobals optimization (no eval overhead)
 - Built as both shared library (.so) and static library (.a)
+
+**Build order (important):**
+```bash
+# 1. Build bridge library first
+cd ext/bridge && make && make install
+
+# 2. Build PHP extension (links against libtokio_bridge)
+cd ext && phpize && ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && make
+```
 
 #### tokio_request_heartbeat(int $time = 10): bool
 
@@ -201,6 +240,40 @@ sleep(10);  // This doesn't delay the response
 - Single-threaded Tokio runtime (PHP workers handle blocking work)
 - OPcache settings in Dockerfile: `opcache.jit=tracing`, `opcache.validate_timestamps=0`
 - Preloading enabled via `opcache.preload` for framework optimization
+
+### Docker Image Contents
+
+Runtime image includes three main components:
+
+| Component | Path | Description |
+|-----------|------|-------------|
+| Server binary | `/usr/local/bin/tokio_php` | Main Rust binary |
+| Bridge library | `/usr/local/lib/libtokio_bridge.so` | Rust ↔ PHP TLS |
+| PHP extension | `/usr/local/lib/php/extensions/no-debug-zts-{API}/tokio_sapi.so` | PHP functions |
+
+PHP extension directory varies by version:
+- PHP 8.4: `no-debug-zts-20240826`
+- PHP 8.5: `no-debug-zts-20250925`
+
+### Dockerfile.release
+
+Minimal release build with two targets:
+
+```bash
+# Runtime image (default)
+docker build -f Dockerfile.release --build-arg PHP_VERSION=8.4 -t tokio_php .
+
+# Binary extraction (dist target)
+docker build -f Dockerfile.release --target dist --output type=local,dest=./dist .
+```
+
+Dist output structure:
+```
+./dist/
+├── usr/local/bin/tokio_php
+├── usr/local/lib/libtokio_bridge.so
+└── usr/local/lib/php/extensions/no-debug-zts-{API}/tokio_sapi.so
+```
 
 ### OPcache Preloading
 

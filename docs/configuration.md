@@ -24,8 +24,11 @@ tokio_php is configured via environment variables.
 | `PROFILE` | `0` | Enable request profiling |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
+| `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate |
+| `TLS_KEY_FILE` | `./certs/key.pem` | Docker secrets: host path to private key |
 | `RUST_LOG` | `tokio_php=info` | Log level |
 | `SERVICE_NAME` | `tokio_php` | Service name in structured logs |
+| `PHP_VERSION` | `8.5` | Docker build: PHP version (8.4 or 8.5) |
 
 ## Detailed Configuration
 
@@ -531,7 +534,33 @@ TLS_KEY=/certs/key.pem
 
 Both variables must be set for TLS to be enabled.
 
+**Docker Secrets:**
+
+For Docker deployments, use `TLS_CERT_FILE` and `TLS_KEY_FILE` to specify host paths:
+
+```bash
+# Use default paths (./certs/cert.pem, ./certs/key.pem)
+docker compose --profile tls up -d
+
+# Custom certificate paths
+TLS_CERT_FILE=/path/to/cert.pem TLS_KEY_FILE=/path/to/key.pem docker compose --profile tls up -d
+```
+
 See [HTTP/2 & TLS](http2-tls.md) for certificate setup and protocol configuration.
+
+### PHP_VERSION
+
+Docker build argument for PHP version selection.
+
+```bash
+# PHP 8.5 (default)
+docker compose build
+
+# PHP 8.4
+PHP_VERSION=8.4 docker compose build
+```
+
+Supported versions: `8.4`, `8.5`
 
 ### RUST_LOG
 
@@ -629,13 +658,17 @@ docker compose up -d
 ```yaml
 services:
   tokio_php:
-    build: .
+    build:
+      context: .
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.5}
     ports:
       - "8080:8080"
       - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
       - RUST_LOG=${RUST_LOG:-tokio_php=info}
+      - SERVICE_NAME=${SERVICE_NAME:-tokio_php}
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
       - USE_EXT=${USE_EXT:-1}  # Recommended: 2x faster
@@ -645,6 +678,7 @@ services:
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - INTERNAL_ADDR=0.0.0.0:9090
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
+      - DRAIN_TIMEOUT_SECS=${DRAIN_TIMEOUT_SECS:-30}
       - ACCESS_LOG=${ACCESS_LOG:-0}
       - RATE_LIMIT=${RATE_LIMIT:-0}
       - RATE_WINDOW=${RATE_WINDOW:-60}
@@ -740,6 +774,7 @@ curl -H "X-Profile: 1" http://localhost:8080/index.php
 
 ## See Also
 
+- [Docker](docker.md) - Environment variables in Docker Compose
 - [Architecture](architecture.md) - System design and components
 - [Middleware](middleware.md) - Middleware system overview
 - [Internal Server](internal-server.md) - Health checks and Prometheus metrics
@@ -747,6 +782,7 @@ curl -H "X-Profile: 1" http://localhost:8080/index.php
 - [Profiling](profiling.md) - Request timing analysis
 - [Compression](compression.md) - Brotli compression settings
 - [Superglobals](superglobals.md) - PHP superglobals support
+- [tokio_sapi Extension](tokio-sapi-extension.md) - ExtExecutor PHP functions
 
 ---
 
