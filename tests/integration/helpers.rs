@@ -10,6 +10,7 @@ pub struct TestServer {
     pub client: Client,
 }
 
+#[allow(dead_code)]
 impl TestServer {
     /// Create a new TestServer with default or env-configured URLs
     pub fn new() -> Self {

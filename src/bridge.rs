@@ -19,9 +19,11 @@
 //! // Initialize context for a request
 //! bridge::init_ctx(request_id, worker_id);
 //!
-//! // Set callbacks before PHP execution
-//! bridge::set_hints_callback(channel_ptr, hints_callback);
-//! bridge::set_heartbeat(heartbeat_ctx, max_secs, heartbeat_callback);
+//! // Set callbacks before PHP execution (unsafe - raw pointers)
+//! unsafe {
+//!     bridge::set_hints_callback(channel_ptr, hints_callback);
+//!     bridge::set_heartbeat(heartbeat_ctx, max_secs, heartbeat_callback);
+//! }
 //!
 //! // ... execute PHP ...
 //!
@@ -105,11 +107,13 @@ pub fn has_ctx() -> bool {
 /// Set the Early Hints callback.
 ///
 /// The callback will be invoked when PHP calls `tokio_early_hints()`.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer to an `EarlyHintsChannel` created via `Arc::as_ptr`.
 #[inline]
-pub fn set_hints_callback(ctx: *mut c_void, callback: EarlyHintsCallback) {
-    unsafe {
-        tokio_bridge_set_hints_callback(ctx, callback);
-    }
+pub unsafe fn set_hints_callback(ctx: *mut c_void, callback: EarlyHintsCallback) {
+    tokio_bridge_set_hints_callback(ctx, callback);
 }
 
 /// Check if `tokio_finish_request()` was called.
@@ -139,11 +143,13 @@ pub fn get_finished_response_code() -> u16 {
 /// Set the heartbeat callback.
 ///
 /// The callback will be invoked when PHP calls `tokio_request_heartbeat()`.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer to a `HeartbeatContext` created via `Arc::as_ptr`.
 #[inline]
-pub fn set_heartbeat(ctx: *mut c_void, max_secs: u64, callback: HeartbeatCallback) {
-    unsafe {
-        tokio_bridge_set_heartbeat(ctx, max_secs, callback);
-    }
+pub unsafe fn set_heartbeat(ctx: *mut c_void, max_secs: u64, callback: HeartbeatCallback) {
+    tokio_bridge_set_heartbeat(ctx, max_secs, callback);
 }
 
 // =============================================================================
@@ -174,6 +180,13 @@ impl EarlyHintsChannel {
     ///
     /// This function is called from C when PHP calls `tokio_early_hints()`.
     /// It converts the C string array to Rust strings and sends them through the channel.
+    ///
+    /// # Safety
+    ///
+    /// This is an FFI callback. The caller (C code) must ensure:
+    /// - `ctx` is a valid pointer from `Arc::as_ptr`
+    /// - `headers` points to `count` valid C strings
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn callback(ctx: *mut c_void, headers: *const *const c_char, count: usize) {
         if ctx.is_null() || headers.is_null() || count == 0 {
             return;

@@ -263,15 +263,15 @@ fn execute_script_with_ffi(
     let phase_start = Instant::now();
     let (buf_len, count) = COOKIE_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
-        pack_into_buffer(
-            &mut buf,
-            request.cookies.iter().map(|(k, v)| (k, v)),
-            &[],
-        )
+        pack_into_buffer(&mut buf, request.cookies.iter().map(|(k, v)| (k, v)), &[])
     });
     if count > 0 {
         COOKIE_BUFFER.with(|buf| unsafe {
-            tokio_sapi_set_cookie_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+            tokio_sapi_set_cookie_vars_batch(
+                buf.borrow().as_ptr() as *const c_char,
+                buf_len,
+                count,
+            );
         });
     }
     if profiling {
@@ -538,11 +538,14 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     // Set up heartbeat callback via bridge
                     if let Some(ref ctx) = heartbeat_ctx {
                         let ctx_ptr = Arc::as_ptr(ctx) as *mut c_void;
-                        bridge::set_heartbeat(
-                            ctx_ptr,
-                            ctx.max_extension(),
-                            tokio_php_heartbeat,
-                        );
+                        // SAFETY: ctx_ptr is valid for the duration of request processing
+                        unsafe {
+                            bridge::set_heartbeat(
+                                ctx_ptr,
+                                ctx.max_extension(),
+                                tokio_php_heartbeat,
+                            );
+                        }
                     }
 
                     // Initialize tokio_sapi request context (for headers, etc.)

@@ -323,7 +323,6 @@ unsafe extern "C" fn custom_read_post(buffer: *mut c_char, count_bytes: usize) -
 static SAPI_NAME: &[u8] = b"cli-server\0";
 static SAPI_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-
 // =============================================================================
 // Public API
 // =============================================================================
