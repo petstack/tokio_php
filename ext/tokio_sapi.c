@@ -9,6 +9,7 @@
  */
 
 #include "tokio_sapi.h"
+#include "bridge/bridge.h"  /* Shared bridge for Rust <-> PHP communication */
 #include <stdlib.h>
 #include <unistd.h>  /* STDOUT_FILENO, lseek */
 
@@ -30,11 +31,9 @@ static __thread uint64_t tls_heartbeat_max_secs = 0;
 typedef int64_t (*tokio_heartbeat_fn_t)(void *ctx, uint64_t secs);
 static __thread tokio_heartbeat_fn_t tls_heartbeat_callback = NULL;
 
-/* Finish request state (analog of fastcgi_finish_request) */
-static __thread int tls_request_finished = 0;
-static __thread size_t tls_finished_output_offset = 0;
-static __thread int tls_finished_header_count = 0;
-static __thread int tls_finished_response_code = 200;
+/* Finish request state now uses tokio_bridge shared library
+ * to solve TLS isolation between static lib and dynamic extension.
+ * See ext/bridge/bridge.h for details. */
 
 /* Get or create thread-local request context */
 static tokio_request_context* get_request_context(void)
@@ -793,11 +792,7 @@ void tokio_sapi_request_shutdown(void)
     tls_heartbeat_max_secs = 0;
     tls_heartbeat_callback = NULL;
 
-    /* Reset finish request state */
-    tls_request_finished = 0;
-    tls_finished_output_offset = 0;
-    tls_finished_header_count = 0;
-    tls_finished_response_code = 200;
+    /* Bridge context is destroyed by Rust after reading finish state */
 }
 
 /* ============================================================================
@@ -937,6 +932,8 @@ PHP_FUNCTION(tokio_async_call)
  *
  * Can be called multiple times to keep extending the deadline.
  * Other PHP limits (set_time_limit, max_execution_time) still apply.
+ *
+ * Uses tokio_bridge shared library for direct Rust <-> PHP communication.
  */
 PHP_FUNCTION(tokio_request_heartbeat)
 {
@@ -947,57 +944,13 @@ PHP_FUNCTION(tokio_request_heartbeat)
         Z_PARAM_LONG(time)
     ZEND_PARSE_PARAMETERS_END();
 
-    /* Get heartbeat info from $_SERVER (set by Rust via superglobals)
-     * This is necessary because the extension (.so) and static library (.a)
-     * have separate TLS storage when loaded dynamically. */
-    zval *server_arr = zend_hash_str_find(&EG(symbol_table), "_SERVER", sizeof("_SERVER")-1);
-    if (!server_arr || Z_TYPE_P(server_arr) != IS_ARRAY) {
-        RETURN_FALSE;
-    }
-
-    /* Get context pointer from $_SERVER['TOKIO_HEARTBEAT_CTX'] */
-    zval *ctx_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_HEARTBEAT_CTX", sizeof("TOKIO_HEARTBEAT_CTX")-1);
-    if (!ctx_val || Z_TYPE_P(ctx_val) != IS_STRING) {
-        RETURN_FALSE;
-    }
-    void *ctx = (void*)strtoull(Z_STRVAL_P(ctx_val), NULL, 16);
-    if (ctx == NULL) {
-        RETURN_FALSE;
-    }
-
-    /* Get max_secs from $_SERVER['TOKIO_HEARTBEAT_MAX_SECS'] */
-    zval *max_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_HEARTBEAT_MAX_SECS", sizeof("TOKIO_HEARTBEAT_MAX_SECS")-1);
-    if (!max_val || Z_TYPE_P(max_val) != IS_STRING) {
-        RETURN_FALSE;
-    }
-    uint64_t max_secs = strtoull(Z_STRVAL_P(max_val), NULL, 10);
-    if (max_secs == 0) {
-        RETURN_FALSE;
-    }
-
-    /* Get callback pointer from $_SERVER['TOKIO_HEARTBEAT_CALLBACK'] */
-    zval *cb_val = zend_hash_str_find(Z_ARRVAL_P(server_arr), "TOKIO_HEARTBEAT_CALLBACK", sizeof("TOKIO_HEARTBEAT_CALLBACK")-1);
-    if (!cb_val || Z_TYPE_P(cb_val) != IS_STRING) {
-        RETURN_FALSE;
-    }
-    tokio_heartbeat_fn_t callback = (tokio_heartbeat_fn_t)strtoull(Z_STRVAL_P(cb_val), NULL, 16);
-    if (callback == NULL) {
-        RETURN_FALSE;
-    }
-
     /* Validate time parameter */
     if (time <= 0) {
         RETURN_FALSE;
     }
 
-    /* Check against max extension limit */
-    if ((uint64_t)time > max_secs) {
-        RETURN_FALSE;
-    }
-
-    /* Call Rust callback to update deadline */
-    int64_t result = callback(ctx, (uint64_t)time);
-
+    /* Use bridge for direct communication with Rust */
+    int result = tokio_bridge_send_heartbeat((uint64_t)time);
     RETURN_BOOL(result != 0);
 }
 
@@ -1016,13 +969,15 @@ PHP_FUNCTION(tokio_request_heartbeat)
  *   send_email($user);
  *   log_to_database($analytics);
  *   sleep(5);  // User doesn't wait for this!
+ *
+ * Uses tokio_bridge shared library for direct Rust <-> PHP communication.
  */
 PHP_FUNCTION(tokio_finish_request)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
     /* Already finished? Return true (idempotent) */
-    if (tls_request_finished) {
+    if (tokio_bridge_is_finished()) {
         RETURN_TRUE;
     }
 
@@ -1058,19 +1013,9 @@ PHP_FUNCTION(tokio_finish_request)
         response_code = SG(sapi_headers).http_response_code;
     }
 
-    /* 4. Add signal header BEFORE flushing (after flush, headers are "sent")
-     * Format: "X-Tokio-Finish: <output_offset>:<header_count>:<status_code>"
-     * header_count+1 because we're adding this header
-     *
-     * Note: We use zend_eval_string("header(...)") instead of sapi_header_op()
-     * because sapi_header_op() from C triggers "headers already sent" error
-     * while PHP's header() function works correctly with output buffering. */
-    char php_code[192];
-    snprintf(php_code, sizeof(php_code),
-             "header('X-Tokio-Finish: %zu:%d:%d');",
-             total_output_offset, header_count + 1, response_code);
-
-    zend_eval_string(php_code, NULL, "tokio_finish_request");
+    /* 4. Mark finished via bridge (Rust can read this directly)
+     * No more header hacks needed! */
+    tokio_bridge_mark_finished(total_output_offset, header_count, response_code);
 
     /* 5. Now flush all output buffers to stdout */
     while (php_output_get_level() > 0) {
@@ -1080,13 +1025,7 @@ PHP_FUNCTION(tokio_finish_request)
     /* 6. Force flush stdout */
     fflush(stdout);
 
-    /* 7. Store in TLS for idempotency and C API */
-    tls_finished_output_offset = total_output_offset;
-    tls_finished_header_count = header_count + 1;
-    tls_finished_response_code = response_code;
-    tls_request_finished = 1;
-
-    /* 8. Start a new output buffer for any post-finish output (will be discarded) */
+    /* 7. Start a new output buffer for any post-finish output (will be discarded) */
     php_output_start_default();
 
     RETURN_TRUE;
@@ -1094,30 +1033,96 @@ PHP_FUNCTION(tokio_finish_request)
 
 /* ============================================================================
  * Finish Request C API (called from Rust)
+ * Now delegates to tokio_bridge shared library.
  * ============================================================================ */
 
 /* Check if tokio_finish_request() was called */
 int tokio_sapi_is_request_finished(void)
 {
-    return tls_request_finished;
+    return tokio_bridge_is_finished();
 }
 
 /* Get the byte offset where output should be truncated */
 size_t tokio_sapi_get_finished_offset(void)
 {
-    return tls_finished_output_offset;
+    return tokio_bridge_get_finished_offset();
 }
 
 /* Get header count at finish time */
 int tokio_sapi_get_finished_header_count(void)
 {
-    return tls_finished_header_count;
+    return tokio_bridge_get_finished_header_count();
 }
 
 /* Get response code at finish time */
 int tokio_sapi_get_finished_response_code(void)
 {
-    return tls_finished_response_code;
+    return tokio_bridge_get_finished_response_code();
+}
+
+/* tokio_early_hints(array $headers): bool - send HTTP 103 Early Hints
+ *
+ * Sends HTTP 103 Early Hints to the client before the main response.
+ * This allows the browser to start preloading resources while the server
+ * is still generating the response.
+ *
+ * Example:
+ *   tokio_early_hints([
+ *       'Link: </style.css>; rel=preload; as=style',
+ *       'Link: </app.js>; rel=preload; as=script',
+ *   ]);
+ *   // Browser starts loading CSS/JS while PHP generates response
+ *   $html = render_page();
+ *   echo $html;
+ *
+ * Uses tokio_bridge shared library for direct Rust <-> PHP communication.
+ */
+PHP_FUNCTION(tokio_early_hints)
+{
+    zval *headers_array;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ARRAY(headers_array)
+    ZEND_PARSE_PARAMETERS_END();
+
+    HashTable *ht = Z_ARRVAL_P(headers_array);
+    size_t count = zend_hash_num_elements(ht);
+
+    if (count == 0) {
+        RETURN_FALSE;
+    }
+
+    /* Limit to prevent abuse */
+    if (count > TOKIO_BRIDGE_MAX_EARLY_HINTS) {
+        count = TOKIO_BRIDGE_MAX_EARLY_HINTS;
+    }
+
+    /* Collect headers into a C array */
+    const char **headers = emalloc(sizeof(char*) * count);
+    if (headers == NULL) {
+        RETURN_FALSE;
+    }
+
+    size_t i = 0;
+    zval *entry;
+
+    ZEND_HASH_FOREACH_VAL(ht, entry) {
+        if (i >= count) break;
+        if (Z_TYPE_P(entry) == IS_STRING) {
+            headers[i++] = Z_STRVAL_P(entry);
+        }
+    } ZEND_HASH_FOREACH_END();
+
+    if (i == 0) {
+        efree(headers);
+        RETURN_FALSE;
+    }
+
+    /* Send via bridge to Rust */
+    int result = tokio_bridge_send_early_hints(headers, i);
+
+    efree(headers);
+    RETURN_BOOL(result != 0);
 }
 
 /* ============================================================================
@@ -1145,6 +1150,10 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_finish_request, 0, 0, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_early_hints, 0, 1, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO(0, headers, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
 /* ============================================================================
  * PHP Extension registration
  * ============================================================================ */
@@ -1156,6 +1165,7 @@ static const zend_function_entry tokio_sapi_functions[] = {
     PHP_FE(tokio_async_call, arginfo_tokio_async_call)
     PHP_FE(tokio_request_heartbeat, arginfo_tokio_request_heartbeat)
     PHP_FE(tokio_finish_request, arginfo_tokio_finish_request)
+    PHP_FE(tokio_early_hints, arginfo_tokio_early_hints)
     PHP_FE_END
 };
 

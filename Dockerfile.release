@@ -6,7 +6,10 @@
 #
 # Targets:
 #   (default) - Full runtime image with PHP, OPcache, JIT
-#   dist      - Binary distribution (tokio_php + tokio_sapi.so)
+#   dist      - Binary distribution with proper directory structure:
+#               ./usr/local/bin/tokio_php
+#               ./usr/local/lib/libtokio_bridge.so
+#               ./usr/local/lib/php/extensions/no-debug-zts-{PHP_API}/tokio_sapi.so
 #
 # Usage:
 #   # Build runtime image
@@ -15,7 +18,7 @@
 #     --build-arg ALPINE_VERSION=3.23 \
 #     -t tokio_php:php8.4-alpine3.23 .
 #
-#   # Extract binaries to ./dist/
+#   # Extract binaries to ./dist/ (preserves directory structure)
 #   docker build -f Dockerfile.release \
 #     --build-arg PHP_VERSION=8.4 \
 #     --build-arg ALPINE_VERSION=3.23 \
@@ -56,11 +59,19 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# Build tokio_sapi PHP extension
+# Copy extension source files
 COPY ext ./ext
+
+# Build tokio_bridge shared library first (shared TLS for Rust <-> PHP)
+WORKDIR /app/ext/bridge
+RUN make && \
+    make install && \
+    ldconfig 2>/dev/null || true
+
+# Build tokio_sapi PHP extension
 WORKDIR /app/ext
 RUN phpize && \
-    ./configure --enable-tokio_sapi && \
+    ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && \
     make && \
     make install
 
@@ -83,15 +94,27 @@ COPY build.rs ./
 RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
 
 # =============================================================================
-# Distribution stage - extract binaries only
+# Distribution stage - extract binaries with proper directory structure
 # =============================================================================
+FROM alpine:${ALPINE_VERSION} AS dist-prepare
+
+# Copy extension directory path from builder
+COPY --from=builder /tmp/php_ext_dir /tmp/php_ext_dir
+
+# Copy all binaries to staging area
+COPY --from=builder /app/target/release/tokio_php /staging/usr/local/bin/tokio_php
+COPY --from=builder /usr/local/lib/libtokio_bridge.so /staging/usr/local/lib/libtokio_bridge.so
+COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
+
+# Place extension in correct PHP version-specific directory
+RUN EXT_DIR=$(cat /tmp/php_ext_dir) && \
+    mkdir -p "/staging${EXT_DIR}" && \
+    cp /tmp/tokio_sapi.so "/staging${EXT_DIR}/tokio_sapi.so"
+
+# Final dist stage with proper structure
 FROM scratch AS dist
 
-# Binary
-COPY --from=builder /app/target/release/tokio_php /tokio_php
-
-# PHP extension
-COPY --from=builder /app/ext/modules/tokio_sapi.so /tokio_sapi.so
+COPY --from=dist-prepare /staging/ /
 
 # =============================================================================
 # Minimal runtime stage (default)
@@ -102,6 +125,10 @@ FROM php:${PHP_VERSION}-zts-alpine${ALPINE_VERSION}
 
 # Minimal runtime dependencies
 RUN apk add --no-cache libgcc
+
+# Copy tokio_bridge shared library (required by both tokio_php binary and PHP extension)
+COPY --from=builder /usr/local/lib/libtokio_bridge.so /usr/local/lib/libtokio_bridge.so
+RUN ldconfig 2>/dev/null || echo "/usr/local/lib" >> /etc/ld-musl-x86_64.path
 
 # Copy extension
 COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so

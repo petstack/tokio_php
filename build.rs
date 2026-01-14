@@ -76,6 +76,10 @@ fn main() {
     // Link against php embed library
     println!("cargo:rustc-link-lib=dylib=php");
 
+    // Link against tokio_bridge shared library (required for Rust <-> PHP communication)
+    // This provides shared TLS context for Early Hints, finish_request, heartbeat, etc.
+    println!("cargo:rustc-link-lib=dylib=tokio_bridge");
+
     // Link against tokio_sapi static library (if available)
     // This provides the extension functions for direct superglobal access
     println!("cargo:rustc-link-lib=static=tokio_sapi");

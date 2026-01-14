@@ -41,6 +41,7 @@ pub const BUILD_VERSION: &str = env!("BUILD_VERSION");
 /// Full version string: "0.1.0 (abc12345)" or "0.1.0 (abc12345-dirty)"
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("BUILD_VERSION"), ")");
 
+pub mod bridge;
 pub mod config;
 pub mod core;
 pub mod executor;

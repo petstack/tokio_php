@@ -25,6 +25,7 @@ use super::common::{
 };
 use super::sapi;
 use super::{ExecutorError, ScriptExecutor};
+use crate::bridge;
 use crate::profiler::ProfileData;
 use crate::types::{ScriptRequest, ScriptResponse};
 
@@ -38,15 +39,10 @@ extern "C" {
 }
 
 // tokio_sapi extension functions (from static library)
+// Note: Finish request API moved to bridge module (src/bridge.rs)
 extern "C" {
     fn tokio_sapi_request_init(request_id: u64) -> c_int;
     fn tokio_sapi_request_shutdown();
-
-    // Finish request API (analog of fastcgi_finish_request)
-    fn tokio_sapi_is_request_finished() -> c_int;
-    fn tokio_sapi_get_finished_offset() -> usize;
-    fn tokio_sapi_get_finished_header_count() -> c_int;
-    fn tokio_sapi_get_finished_response_code() -> c_int;
 
     fn tokio_sapi_set_files_var(
         field: *const c_char,
@@ -183,13 +179,6 @@ struct ExtExecutionTiming {
 // =============================================================================
 // Script Execution (using FFI for superglobals - no eval overhead!)
 // =============================================================================
-
-/// Heartbeat info for passing via $_SERVER (used by worker loop)
-struct HeartbeatInfo {
-    ctx_hex: String,
-    max_secs: String,
-    callback_hex: String,
-}
 
 /// Execute PHP script using FFI for superglobals.
 ///
@@ -392,34 +381,21 @@ fn finalize_execution(
     let mut all_headers = sapi::get_captured_headers();
 
     // Check if tokio_finish_request() was called (fastcgi_finish_request analog)
-    // The PHP extension signals this via X-Tokio-Finish header because
-    // static lib and dynamic extension have separate TLS storage.
-    // Format: "X-Tokio-Finish: <output_offset>:<ignored>:<status_code>"
-    // Note: The position of X-Tokio-Finish in the header list tells us how many
-    // headers were set before finish_request() was called.
+    // Now using bridge for direct communication - no more header hacks!
     let (headers, status): (Vec<(String, String)>, u16) = {
-        let finish_header_pos = all_headers
-            .iter()
-            .position(|(name, _)| name.eq_ignore_ascii_case("X-Tokio-Finish"));
-
-        if let Some(pos) = finish_header_pos {
-            // Parse the finish header value
-            let finish_value = all_headers[pos].1.clone();
-            let parts: Vec<&str> = finish_value.split(':').collect();
-
-            let output_offset: usize = parts.first().and_then(|s| s.parse().ok()).unwrap_or(body.len());
-            let status_code: u16 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
-
+        if let Some(finish_info) = bridge::get_finish_info() {
             // Truncate body to the finished offset
-            if output_offset < body.len() {
-                body.truncate(output_offset);
+            if finish_info.output_offset < body.len() {
+                body.truncate(finish_info.output_offset);
             }
 
-            // Keep only headers that came BEFORE X-Tokio-Finish (position = count)
-            // Then remove X-Tokio-Finish itself
-            all_headers.truncate(pos);
+            // Keep only headers that were set before finish_request()
+            let header_count = finish_info.header_count as usize;
+            if header_count < all_headers.len() {
+                all_headers.truncate(header_count);
+            }
 
-            (all_headers, status_code)
+            (all_headers, finish_info.response_code)
         } else {
             // Normal case: no finish_request called
             let status = sapi::get_captured_status();
@@ -534,29 +510,8 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     Cow::Borrowed(crate::VERSION),
                 ));
 
-                // Add heartbeat info to server_vars
-                let heartbeat_info = heartbeat_ctx.as_ref().map(|ctx| {
-                    let ctx_ptr = Arc::as_ptr(ctx) as *mut c_void;
-                    HeartbeatInfo {
-                        ctx_hex: format!("{:x}", ctx_ptr as usize),
-                        max_secs: ctx.max_extension().to_string(),
-                        callback_hex: format!("{:x}", tokio_php_heartbeat as usize),
-                    }
-                });
-                if let Some(ref hb) = heartbeat_info {
-                    extended_server_vars.push((
-                        Cow::Borrowed("TOKIO_HEARTBEAT_CTX"),
-                        Cow::Owned(hb.ctx_hex.clone()),
-                    ));
-                    extended_server_vars.push((
-                        Cow::Borrowed("TOKIO_HEARTBEAT_MAX_SECS"),
-                        Cow::Owned(hb.max_secs.clone()),
-                    ));
-                    extended_server_vars.push((
-                        Cow::Borrowed("TOKIO_HEARTBEAT_CALLBACK"),
-                        Cow::Owned(hb.callback_hex.clone()),
-                    ));
-                }
+                // Heartbeat info is now set via bridge (not via $_SERVER)
+                // See bridge::set_heartbeat() call after php_request_startup()
 
                 // Set request data for SAPI callbacks (before php_request_startup)
                 // Note: cookies param is not used (read_cookies callback not called by embed SAPI)
@@ -576,8 +531,21 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 };
 
                 let result = if startup_ok {
-                    // Initialize tokio_sapi request context
+                    // Initialize bridge context (shared TLS for Rust <-> PHP)
                     let req_init_start = Instant::now();
+                    bridge::init_ctx(request_id, id as u64);
+
+                    // Set up heartbeat callback via bridge
+                    if let Some(ref ctx) = heartbeat_ctx {
+                        let ctx_ptr = Arc::as_ptr(ctx) as *mut c_void;
+                        bridge::set_heartbeat(
+                            ctx_ptr,
+                            ctx.max_extension(),
+                            tokio_php_heartbeat,
+                        );
+                    }
+
+                    // Initialize tokio_sapi request context (for headers, etc.)
                     unsafe {
                         tokio_sapi_request_init(request_id);
                     }
@@ -592,7 +560,9 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                         Ok((capture, mut timing)) => {
                             // Add request_init timing
                             timing.ffi_request_init_us = ffi_request_init_us;
-                            // Shutdown tokio_sapi and PHP request
+
+                            // Shutdown tokio_sapi and PHP request FIRST
+                            // This flushes PHP's output buffers to our memfd capture
                             let shutdown_start = Instant::now();
                             unsafe {
                                 tokio_sapi_request_shutdown();
@@ -605,15 +575,21 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                                 0
                             };
 
-                            // Finalize and build response
-                            finalize_execution(
+                            // Finalize and build response (reads finish state from bridge)
+                            // Must be called AFTER php_request_shutdown but BEFORE bridge::destroy_ctx
+                            let response = finalize_execution(
                                 capture,
                                 timing,
                                 profiling,
                                 queue_wait_us,
                                 php_startup_us,
                                 php_shutdown_us,
-                            )
+                            );
+
+                            // Destroy bridge context after reading finish state
+                            bridge::destroy_ctx();
+
+                            response
                         }
                         Err(e) => {
                             unsafe {
@@ -621,6 +597,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                                 php_request_shutdown(ptr::null_mut());
                             }
                             sapi::clear_request_data();
+                            bridge::destroy_ctx();
                             Err(e)
                         }
                     }

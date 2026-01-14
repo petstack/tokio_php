@@ -35,11 +35,19 @@ RUN apk add --no-cache \
 # Create working directory
 WORKDIR /app
 
-# Build tokio_sapi PHP extension as shared library
+# Copy extension source files
 COPY ext ./ext
+
+# Build tokio_bridge shared library first (shared TLS for Rust <-> PHP)
+WORKDIR /app/ext/bridge
+RUN make && \
+    make install && \
+    ldconfig 2>/dev/null || true
+
+# Build tokio_sapi PHP extension as shared library
 WORKDIR /app/ext
 RUN phpize && \
-    ./configure --enable-tokio_sapi && \
+    ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && \
     make && \
     make install
 
@@ -47,7 +55,7 @@ RUN phpize && \
 RUN php-config --extension-dir > /tmp/php_ext_dir
 
 # Also build as static library for linking with Rust
-RUN cc -c -fPIC -I. -I/usr/local/include/php -I/usr/local/include/php/main \
+RUN cc -c -fPIC -I. -I./bridge -I/usr/local/include/php -I/usr/local/include/php/main \
     -I/usr/local/include/php/TSRM -I/usr/local/include/php/Zend \
     -I/usr/local/include/php/ext -DHAVE_CONFIG_H -o tokio_sapi_static.o tokio_sapi.c && \
     ar rcs libtokio_sapi.a tokio_sapi_static.o && \
@@ -79,6 +87,10 @@ RUN apk add --no-cache libgcc curl && \
 
 # Copy extension directory path from builder
 COPY --from=builder /tmp/php_ext_dir /tmp/php_ext_dir
+
+# Copy tokio_bridge shared library (required by both tokio_php binary and PHP extension)
+COPY --from=builder /usr/local/lib/libtokio_bridge.so /usr/local/lib/libtokio_bridge.so
+RUN ldconfig 2>/dev/null || echo "/usr/local/lib" >> /etc/ld-musl-x86_64.path
 
 # Copy tokio_sapi extension from builder to correct PHP extensions directory
 # Uses dynamic path detection to support PHP 8.4 and 8.5
