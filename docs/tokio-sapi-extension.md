@@ -80,6 +80,61 @@ if ($success) {
 
 **Returns:** `bool` - `true` on success, `false` if timeout disabled or value exceeds limit.
 
+### tokio_finish_request()
+
+Sends the response to the client immediately, but continues executing the script in the background. Analog of `fastcgi_finish_request()` in PHP-FPM.
+
+```php
+<?php
+// Send response to client
+echo "Your request is being processed!\n";
+header("X-Status: accepted");
+
+// Client receives response NOW
+tokio_finish_request();
+
+// Everything below runs in background (client doesn't wait):
+sleep(5);                          // Slow operation
+send_email($user, $notification);  // Send notification
+log_to_database($analytics);       // Log analytics
+cleanup_temp_files();              // Cleanup
+?>
+```
+
+**Use cases:**
+- Webhook handlers that need to respond quickly (within timeout)
+- Sending emails/notifications after response
+- Background logging and analytics
+- Cleanup operations
+- Any slow task that shouldn't block the response
+
+**Behavior:**
+- All output buffers are flushed to capture the response body
+- Headers set before `tokio_finish_request()` are included
+- Headers set after are **NOT** sent to client
+- Output after `tokio_finish_request()` is **NOT** sent to client
+- Script continues executing until completion
+- The function is idempotent (calling multiple times has no effect)
+
+**Returns:** `bool` - Always returns `true`.
+
+**Example: Webhook Handler**
+
+```php
+<?php
+// Respond to webhook within 5 seconds (required by many services)
+http_response_code(200);
+echo json_encode(['status' => 'accepted']);
+
+tokio_finish_request();  // Webhook service gets 200 OK immediately
+
+// Process webhook payload in background (may take minutes)
+$payload = json_decode(file_get_contents('php://input'), true);
+process_webhook($payload);  // Slow processing
+notify_admins($payload);    // Send notifications
+?>
+```
+
 ### tokio_async_call()
 
 Placeholder for future async PHP-to-Rust calls (not yet implemented).

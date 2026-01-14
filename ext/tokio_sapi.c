@@ -10,6 +10,7 @@
 
 #include "tokio_sapi.h"
 #include <stdlib.h>
+#include <unistd.h>  /* STDOUT_FILENO, lseek */
 
 /* ============================================================================
  * Thread-local request context (NOT using PHP module globals)
@@ -28,6 +29,12 @@ static __thread uint64_t tls_heartbeat_max_secs = 0;
 /* Forward declaration for heartbeat callback type */
 typedef int64_t (*tokio_heartbeat_fn_t)(void *ctx, uint64_t secs);
 static __thread tokio_heartbeat_fn_t tls_heartbeat_callback = NULL;
+
+/* Finish request state (analog of fastcgi_finish_request) */
+static __thread int tls_request_finished = 0;
+static __thread size_t tls_finished_output_offset = 0;
+static __thread int tls_finished_header_count = 0;
+static __thread int tls_finished_response_code = 200;
 
 /* Get or create thread-local request context */
 static tokio_request_context* get_request_context(void)
@@ -785,6 +792,12 @@ void tokio_sapi_request_shutdown(void)
     tls_heartbeat_ctx = NULL;
     tls_heartbeat_max_secs = 0;
     tls_heartbeat_callback = NULL;
+
+    /* Reset finish request state */
+    tls_request_finished = 0;
+    tls_finished_output_offset = 0;
+    tls_finished_header_count = 0;
+    tls_finished_response_code = 200;
 }
 
 /* ============================================================================
@@ -988,6 +1001,125 @@ PHP_FUNCTION(tokio_request_heartbeat)
     RETURN_BOOL(result != 0);
 }
 
+/* tokio_finish_request(): bool - send response to client, continue script execution
+ *
+ * Analog of fastcgi_finish_request(). After calling:
+ * - Response body (so far) is marked for sending to client
+ * - HTTP headers (so far) are captured for response
+ * - Script continues executing (for cleanup, logging, etc.)
+ * - Any further output is NOT sent to client
+ *
+ * Use case:
+ *   echo "Response to user";
+ *   tokio_finish_request();  // User gets response NOW
+ *   // Do slow cleanup without keeping user waiting:
+ *   send_email($user);
+ *   log_to_database($analytics);
+ *   sleep(5);  // User doesn't wait for this!
+ */
+PHP_FUNCTION(tokio_finish_request)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    /* Already finished? Return true (idempotent) */
+    if (tls_request_finished) {
+        RETURN_TRUE;
+    }
+
+    /* 1. Get current output position BEFORE flush (what's already been written to stdout) */
+    off_t current_pos = lseek(STDOUT_FILENO, 0, SEEK_CUR);
+    if (current_pos < 0) {
+        current_pos = 0;
+    }
+
+    /* 2. Calculate total output: already written + buffered content
+     * php_output_get_contents gives us what's in output buffers */
+    size_t buffered_len = 0;
+    int level = php_output_get_level();
+    if (level > 0) {
+        zval contents;
+        if (php_output_get_contents(&contents) == SUCCESS && Z_TYPE(contents) == IS_STRING) {
+            buffered_len = Z_STRLEN(contents);
+            zval_ptr_dtor(&contents);
+        }
+    }
+
+    size_t total_output_offset = (size_t)current_pos + buffered_len;
+
+    /* 3. Capture current header count and response code */
+    tokio_request_context *ctx = tls_request_ctx;
+    int header_count;
+    int response_code;
+    if (ctx) {
+        header_count = ctx->header_count;
+        response_code = ctx->http_response_code;
+    } else {
+        header_count = 0;
+        response_code = SG(sapi_headers).http_response_code;
+    }
+
+    /* 4. Add signal header BEFORE flushing (after flush, headers are "sent")
+     * Format: "X-Tokio-Finish: <output_offset>:<header_count>:<status_code>"
+     * header_count+1 because we're adding this header
+     *
+     * Note: We use zend_eval_string("header(...)") instead of sapi_header_op()
+     * because sapi_header_op() from C triggers "headers already sent" error
+     * while PHP's header() function works correctly with output buffering. */
+    char php_code[192];
+    snprintf(php_code, sizeof(php_code),
+             "header('X-Tokio-Finish: %zu:%d:%d');",
+             total_output_offset, header_count + 1, response_code);
+
+    zend_eval_string(php_code, NULL, "tokio_finish_request");
+
+    /* 5. Now flush all output buffers to stdout */
+    while (php_output_get_level() > 0) {
+        php_output_end();
+    }
+
+    /* 6. Force flush stdout */
+    fflush(stdout);
+
+    /* 7. Store in TLS for idempotency and C API */
+    tls_finished_output_offset = total_output_offset;
+    tls_finished_header_count = header_count + 1;
+    tls_finished_response_code = response_code;
+    tls_request_finished = 1;
+
+    /* 8. Start a new output buffer for any post-finish output (will be discarded) */
+    php_output_start_default();
+
+    RETURN_TRUE;
+}
+
+/* ============================================================================
+ * Finish Request C API (called from Rust)
+ * ============================================================================ */
+
+/* Check if tokio_finish_request() was called */
+int tokio_sapi_is_request_finished(void)
+{
+    return tls_request_finished;
+}
+
+/* Get the byte offset where output should be truncated */
+size_t tokio_sapi_get_finished_offset(void)
+{
+    return tls_finished_output_offset;
+}
+
+/* Get header count at finish time */
+int tokio_sapi_get_finished_header_count(void)
+{
+    return tls_finished_header_count;
+}
+
+/* Get response code at finish time */
+int tokio_sapi_get_finished_response_code(void)
+{
+    return tls_finished_response_code;
+}
+
 /* ============================================================================
  * Arginfo for PHP 8+ (fixes "Missing arginfo" warnings)
  * ============================================================================ */
@@ -1010,6 +1142,9 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_request_heartbeat, 0, 0, _
     ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, time, IS_LONG, 0, "10")
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_finish_request, 0, 0, _IS_BOOL, 0)
+ZEND_END_ARG_INFO()
+
 /* ============================================================================
  * PHP Extension registration
  * ============================================================================ */
@@ -1020,6 +1155,7 @@ static const zend_function_entry tokio_sapi_functions[] = {
     PHP_FE(tokio_server_info, arginfo_tokio_server_info)
     PHP_FE(tokio_async_call, arginfo_tokio_async_call)
     PHP_FE(tokio_request_heartbeat, arginfo_tokio_request_heartbeat)
+    PHP_FE(tokio_finish_request, arginfo_tokio_finish_request)
     PHP_FE_END
 };
 

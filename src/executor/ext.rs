@@ -42,6 +42,12 @@ extern "C" {
     fn tokio_sapi_request_init(request_id: u64) -> c_int;
     fn tokio_sapi_request_shutdown();
 
+    // Finish request API (analog of fastcgi_finish_request)
+    fn tokio_sapi_is_request_finished() -> c_int;
+    fn tokio_sapi_get_finished_offset() -> usize;
+    fn tokio_sapi_get_finished_header_count() -> c_int;
+    fn tokio_sapi_get_finished_response_code() -> c_int;
+
     fn tokio_sapi_set_files_var(
         field: *const c_char,
         field_len: usize,
@@ -375,7 +381,7 @@ fn finalize_execution(
 ) -> Result<ScriptResponse, String> {
     // Restore stdout and read output
     let restore_start = Instant::now();
-    let body = capture.finalize();
+    let mut body = capture.finalize();
     let stdout_restore_us = if profiling {
         restore_start.elapsed().as_micros() as u64
     } else {
@@ -383,8 +389,45 @@ fn finalize_execution(
     };
 
     // Get headers from SAPI
-    let mut headers = sapi::get_captured_headers();
-    let status = sapi::get_captured_status();
+    let mut all_headers = sapi::get_captured_headers();
+
+    // Check if tokio_finish_request() was called (fastcgi_finish_request analog)
+    // The PHP extension signals this via X-Tokio-Finish header because
+    // static lib and dynamic extension have separate TLS storage.
+    // Format: "X-Tokio-Finish: <output_offset>:<ignored>:<status_code>"
+    // Note: The position of X-Tokio-Finish in the header list tells us how many
+    // headers were set before finish_request() was called.
+    let (headers, status): (Vec<(String, String)>, u16) = {
+        let finish_header_pos = all_headers
+            .iter()
+            .position(|(name, _)| name.eq_ignore_ascii_case("X-Tokio-Finish"));
+
+        if let Some(pos) = finish_header_pos {
+            // Parse the finish header value
+            let finish_value = all_headers[pos].1.clone();
+            let parts: Vec<&str> = finish_value.split(':').collect();
+
+            let output_offset: usize = parts.first().and_then(|s| s.parse().ok()).unwrap_or(body.len());
+            let status_code: u16 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
+
+            // Truncate body to the finished offset
+            if output_offset < body.len() {
+                body.truncate(output_offset);
+            }
+
+            // Keep only headers that came BEFORE X-Tokio-Finish (position = count)
+            // Then remove X-Tokio-Finish itself
+            all_headers.truncate(pos);
+
+            (all_headers, status_code)
+        } else {
+            // Normal case: no finish_request called
+            let status = sapi::get_captured_status();
+            (all_headers, status)
+        }
+    };
+
+    let mut headers = headers;
     if status != 200 {
         headers.insert(0, ("Status".to_string(), status.to_string()));
     }

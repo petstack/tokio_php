@@ -190,4 +190,24 @@ void tokio_sapi_set_heartbeat_ctx(void *ctx, uint64_t max_secs, tokio_heartbeat_
 void* tokio_sapi_get_heartbeat_ctx(void);
 uint64_t tokio_sapi_get_heartbeat_max_secs(void);
 
+/* ============================================================================
+ * Finish Request API (analog of fastcgi_finish_request)
+ *
+ * Allows sending response to client before script completes.
+ * After tokio_finish_request():
+ * - Response is marked ready for client
+ * - Script continues executing (cleanup, logging, etc.)
+ * - Additional output is captured but NOT sent to client
+ * ============================================================================ */
+
+/* Check if tokio_finish_request() was called */
+int tokio_sapi_is_request_finished(void);
+
+/* Get the byte offset where output should be truncated */
+size_t tokio_sapi_get_finished_offset(void);
+
+/* Get headers captured at finish time (before any post-finish headers) */
+int tokio_sapi_get_finished_header_count(void);
+int tokio_sapi_get_finished_response_code(void);
+
 #endif /* TOKIO_SAPI_H */

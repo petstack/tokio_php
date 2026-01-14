@@ -124,7 +124,7 @@ See [docs/architecture.md](docs/architecture.md#comparison-with-php-fpm) for det
 ### tokio_sapi PHP Extension
 
 Located in `ext/` directory. Provides:
-- PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_request_heartbeat()`
+- PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_request_heartbeat()`, `tokio_finish_request()`
 - Build version tracking: `$_SERVER['TOKIO_SERVER_BUILD_VERSION']` and `tokio_server_info()['build']`
 - C API for FFI superglobals optimization (no eval overhead)
 - Built as both shared library (.so) and static library (.a)
@@ -151,6 +151,32 @@ Returns `false` if:
 - `$time > REQUEST_TIMEOUT` limit (e.g., if `REQUEST_TIMEOUT=5m`, max is 300)
 
 **Note**: Also call `set_time_limit()` to extend PHP's internal timeout.
+
+#### tokio_finish_request(): bool
+
+Sends the response to the client immediately and continues executing the script in the background. Analog of `fastcgi_finish_request()` in PHP-FPM.
+
+```php
+<?php
+echo "Response sent to user\n";
+header("X-Status: accepted");
+
+tokio_finish_request();  // Client gets response NOW
+
+// Background work (client doesn't wait):
+send_email($user);
+log_to_database($data);
+sleep(10);  // This doesn't delay the response
+```
+
+**Behavior:**
+- Output before `tokio_finish_request()` is sent to client
+- Output after is discarded
+- Headers set before are included; headers set after are excluded
+- Script continues executing until completion
+- Idempotent (multiple calls have no effect)
+
+**Use cases:** Webhooks, async notifications, background logging, cleanup tasks.
 
 ### PHP Worker Pool
 
