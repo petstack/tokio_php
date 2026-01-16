@@ -34,6 +34,39 @@ pub fn empty_stub_response() -> Response<Full<Bytes>> {
         .unwrap()
 }
 
+/// Build stub response with profiling headers.
+#[inline]
+pub fn stub_response_with_profile(
+    total_us: u64,
+    http_version: &str,
+    tls_handshake_us: u64,
+    tls_protocol: &str,
+    tls_alpn: &str,
+) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", DEFAULT_CONTENT_TYPE)
+        .header("Server", "tokio_php/0.1.0")
+        .header("Content-Length", "0")
+        // Profile headers
+        .header("X-Profile-Total-Us", total_us.to_string())
+        .header("X-Profile-HTTP-Version", http_version)
+        .header("X-Profile-Executor", "stub");
+
+    // TLS headers (only if TLS was used)
+    if tls_handshake_us > 0 {
+        builder = builder.header("X-Profile-TLS-Handshake-Us", tls_handshake_us.to_string());
+    }
+    if !tls_protocol.is_empty() {
+        builder = builder.header("X-Profile-TLS-Protocol", tls_protocol);
+    }
+    if !tls_alpn.is_empty() {
+        builder = builder.header("X-Profile-TLS-ALPN", tls_alpn);
+    }
+
+    builder.body(Full::new(EMPTY_BODY.clone())).unwrap()
+}
+
 /// Create a Not Found response with empty body (for error page injection).
 #[inline]
 pub fn not_found_response() -> Response<Full<Bytes>> {

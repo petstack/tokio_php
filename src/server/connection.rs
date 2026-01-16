@@ -337,7 +337,8 @@ use super::error_pages::{accepts_html, status_reason_phrase, ErrorPages};
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
     accepts_brotli, empty_stub_response, from_script_response, not_found_response,
-    serve_static_file, BAD_REQUEST_BODY, EMPTY_BODY, METHOD_NOT_ALLOWED_BODY,
+    serve_static_file, stub_response_with_profile, BAD_REQUEST_BODY, EMPTY_BODY,
+    METHOD_NOT_ALLOWED_BODY,
 };
 use super::routing::{is_direct_index_access, is_php_uri, resolve_file_path};
 use crate::executor::ScriptExecutor;
@@ -809,6 +810,20 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         // Fast path for stub mode only
         if self.is_stub_mode && is_php_uri(uri_path) {
+            if profiling_enabled {
+                let total_us = parse_start.elapsed().as_micros() as u64;
+                let (tls_handshake_us, tls_protocol, tls_alpn) = match &tls_info {
+                    Some(tls) => (tls.handshake_us, tls.protocol.as_str(), tls.alpn.as_str()),
+                    None => (0, "", ""),
+                };
+                return stub_response_with_profile(
+                    total_us,
+                    http_version,
+                    tls_handshake_us,
+                    tls_protocol,
+                    tls_alpn,
+                );
+            }
             return empty_stub_response();
         }
 
