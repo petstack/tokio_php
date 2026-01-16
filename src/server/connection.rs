@@ -543,14 +543,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let trace_ctx = TraceContext::from_headers(req.headers());
 
         // Use trace_id as request_id for correlation, or fall back to X-Request-ID
-        let request_id = req
+        // Zero-allocation when no X-Request-ID header (common case)
+        let request_id_from_header: Option<String> = req
             .headers()
             .get(&*X_REQUEST_ID)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                format!("{}-{}", &trace_ctx.trace_id[..12], &trace_ctx.span_id[..4])
-            });
+            .map(|s| s.to_owned());
+        let request_id: &str = request_id_from_header
+            .as_deref()
+            .unwrap_or_else(|| trace_ctx.short_id());
 
         // Check rate limit (per-IP)
         if let Some(ref limiter) = self.rate_limiter {
@@ -701,10 +702,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .headers_mut()
             .insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
 
-        // Add W3C Trace Context header to response
+        // Add W3C Trace Context header to response (zero-allocation)
         response.headers_mut().insert(
             TRACEPARENT.clone(),
-            trace_ctx.to_traceparent().parse().unwrap(),
+            trace_ctx.traceparent().parse().unwrap(),
         );
 
         // Access logging (optimized: stack-allocated timestamp, no heap alloc for IP)
@@ -732,8 +733,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 referer_log.as_deref(),
                 xff_log.as_deref(),
                 tls_protocol_log.as_deref(),
-                Some(&trace_ctx.trace_id),
-                Some(&trace_ctx.span_id),
+                Some(trace_ctx.trace_id()),
+                Some(trace_ctx.span_id()),
             );
         }
 
@@ -1140,20 +1141,21 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         }
 
         // W3C Trace Context for distributed tracing
+        // Note: still need to_owned() for PHP $_SERVER vars (different lifetime)
         server_vars.push((
             server_var_keys::HTTP_TRACEPARENT,
-            Cow::Owned(trace_ctx.to_traceparent()),
+            Cow::Owned(trace_ctx.traceparent().to_owned()),
         ));
         server_vars.push((
             server_var_keys::TRACE_ID,
-            Cow::Owned(trace_ctx.trace_id.clone()),
+            Cow::Owned(trace_ctx.trace_id().to_owned()),
         ));
         server_vars.push((
             server_var_keys::SPAN_ID,
-            Cow::Owned(trace_ctx.span_id.clone()),
+            Cow::Owned(trace_ctx.span_id().to_owned()),
         ));
-        if let Some(ref parent) = trace_ctx.parent_span_id {
-            server_vars.push((server_var_keys::PARENT_SPAN_ID, Cow::Owned(parent.clone())));
+        if let Some(parent) = trace_ctx.parent_span_id() {
+            server_vars.push((server_var_keys::PARENT_SPAN_ID, Cow::Owned(parent.to_owned())));
         }
 
         // Set CONTENT_LENGTH for requests with body
