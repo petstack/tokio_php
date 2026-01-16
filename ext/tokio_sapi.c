@@ -254,6 +254,11 @@ static zval* get_cached_superglobal(int track_var)
  */
 static void set_nested_array_value(zval *arr, const char *key, size_t key_len, const char *val, size_t val_len)
 {
+    /* Validate input */
+    if (arr == NULL || Z_TYPE_P(arr) != IS_ARRAY || key == NULL || key_len == 0) {
+        return;
+    }
+
     /* Find first bracket */
     const char *bracket = memchr(key, '[', key_len);
 
@@ -282,13 +287,17 @@ static void set_nested_array_value(zval *arr, const char *key, size_t key_len, c
         zval new_arr;
         array_init(&new_arr);
         current = zend_hash_str_update(Z_ARRVAL_P(arr), key, base_len, &new_arr);
+        if (current == NULL) {
+            /* Hash update failed - bail out to prevent SIGSEGV */
+            return;
+        }
     }
 
     /* Parse remaining brackets */
     const char *ptr = bracket;
     const char *end = key + key_len;
 
-    while (ptr < end && *ptr == '[') {
+    while (ptr < end && *ptr == '[' && current != NULL) {
         ptr++; /* Skip '[' */
 
         /* Find closing bracket */
@@ -340,6 +349,7 @@ static void set_nested_array_value(zval *arr, const char *key, size_t key_len, c
                         zval new_arr;
                         array_init(&new_arr);
                         next_arr = zend_hash_index_update(Z_ARRVAL_P(current), idx, &new_arr);
+                        if (next_arr == NULL) break;  /* Hash update failed */
                     }
                 } else {
                     next_arr = zend_hash_str_find(Z_ARRVAL_P(current), ptr, index_len);
@@ -347,6 +357,7 @@ static void set_nested_array_value(zval *arr, const char *key, size_t key_len, c
                         zval new_arr;
                         array_init(&new_arr);
                         next_arr = zend_hash_str_update(Z_ARRVAL_P(current), ptr, index_len, &new_arr);
+                        if (next_arr == NULL) break;  /* Hash update failed */
                     }
                 }
                 current = next_arr;
@@ -367,10 +378,12 @@ static void set_nested_array_value(zval *arr, const char *key, size_t key_len, c
         ptr = next;
     }
 
-    /* If we get here with remaining value (malformed brackets), set as last element */
-    zval zval_val;
-    ZVAL_STRINGL(&zval_val, val, val_len);
-    zend_hash_next_index_insert(Z_ARRVAL_P(current), &zval_val);
+    /* If we get here with remaining value (malformed brackets or NULL current), set as last element */
+    if (current != NULL && Z_TYPE_P(current) == IS_ARRAY) {
+        zval zval_val;
+        ZVAL_STRINGL(&zval_val, val, val_len);
+        zend_hash_next_index_insert(Z_ARRVAL_P(current), &zval_val);
+    }
 }
 
 /* Batch set superglobal from packed buffer:
@@ -791,6 +804,11 @@ void tokio_sapi_request_shutdown(void)
     tls_heartbeat_ctx = NULL;
     tls_heartbeat_max_secs = 0;
     tls_heartbeat_callback = NULL;
+
+    /* CRITICAL: Reset superglobal cache to prevent use-after-free
+     * After php_request_shutdown(), PHP's symbol table is destroyed
+     * and cached pointers become dangling. */
+    reset_superglobal_cache();
 
     /* Bridge context is destroyed by Rust after reading finish state */
 }
