@@ -55,13 +55,13 @@ curl http://localhost:8080/
 ### Build from Source
 
 ```bash
-# Build and run (PHP 8.5 default)
+# Build and run (PHP 8.4 default)
 docker compose build
 docker compose up -d
 
-# Build with PHP 8.4
-PHP_VERSION=8.4 docker compose build
-PHP_VERSION=8.4 docker compose up -d
+# Build with PHP 8.5
+PHP_VERSION=8.5 docker compose build
+PHP_VERSION=8.5 docker compose up -d
 
 # With TLS/HTTPS
 docker compose --profile tls up -d
@@ -128,7 +128,8 @@ tokio_php/
 │   └── errors/              # Custom error pages
 ├── certs/                   # TLS certificates
 ├── Dockerfile               # Development build (with tests)
-├── Dockerfile.release       # Release build (minimal, dist target)
+├── Dockerfile.release       # Release build (minimal, Alpine)
+├── Dockerfile.debian        # Debian Bookworm build (glibc)
 ├── docker-compose.yml       # Service definitions
 └── LICENSE                  # AGPL-3.0
 ```

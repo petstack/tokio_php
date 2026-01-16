@@ -358,7 +358,7 @@ The image includes:
 | PHP extension | `/usr/local/lib/php/extensions/no-debug-zts-{API}/tokio_sapi.so` |
 
 PHP extension directory varies by version:
-- PHP 8.4: `no-debug-zts-20240826`
+- PHP 8.4: `no-debug-zts-20240924`
 - PHP 8.5: `no-debug-zts-20250925`
 
 ## Security

@@ -41,20 +41,20 @@ curl http://localhost:8080/
 git clone https://github.com/petstack/tokio_php.git
 cd tokio_php
 
-# Build and run (PHP 8.5 default)
+# Build and run (PHP 8.4 default)
 docker compose build
 docker compose up -d
 
-# Build with PHP 8.4
-PHP_VERSION=8.4 docker compose build
-PHP_VERSION=8.4 docker compose up -d
+# Build with PHP 8.5
+PHP_VERSION=8.5 docker compose build
+PHP_VERSION=8.5 docker compose up -d
 ```
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PHP_VERSION` | `8.5` | PHP version (8.4 or 8.5) |
+| `PHP_VERSION` | `8.4` | PHP version (8.4 or 8.5) |
 | `PHP_WORKERS` | `0` | Worker count (0 = auto-detect CPU cores) |
 | `QUEUE_CAPACITY` | `0` | Max pending requests (0 = workers × 100) |
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
@@ -129,6 +129,7 @@ tokio_request_id();            // int - unique request ID
 tokio_worker_id();             // int - worker thread ID (0..N-1)
 tokio_server_info();           // array - server info including 'build' with git hash
 tokio_request_heartbeat(30);   // bool - extend request timeout by N seconds
+tokio_finish_request();        // bool - send response immediately, continue in background
 
 $_SERVER['TOKIO_SERVER_BUILD_VERSION']; // "0.1.0 (abc12345)"
 ```
@@ -186,10 +187,11 @@ wrk -t4 -c100 -d10s http://localhost:8080/index.php
 
 | Tag | Description |
 |-----|-------------|
-| `latest`, `php8.5` | PHP 8.5 (default, multi-arch) |
-| `php8.4` | PHP 8.4 (multi-arch) |
-| `php8.5-bin` | Binaries only for custom PHP builds |
-| `php8.4-bin` | Binaries only for custom PHP builds |
+| `latest` | PHP 8.5 on Alpine (default, multi-arch) |
+| `php8.5`, `php8.5-alpine3.23` | PHP 8.5 on Alpine 3.23 |
+| `php8.4`, `php8.4-alpine3.23` | PHP 8.4 on Alpine 3.23 |
+
+For binary extraction, use `--target dist` with `Dockerfile.release` or `Dockerfile.debian`.
 
 ## Links
 

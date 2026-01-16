@@ -4,12 +4,13 @@ This document covers Docker setup for development and production deployments.
 
 ## Dockerfiles
 
-tokio_php provides two Dockerfiles for different use cases:
+tokio_php provides three Dockerfiles for different use cases:
 
-| File | Purpose | Use Case |
-|------|---------|----------|
-| `Dockerfile` | Development and production | Full runtime image with tests |
-| `Dockerfile.release` | Minimal release builds | Production images, binary extraction |
+| File | Base | Use Case |
+|------|------|----------|
+| `Dockerfile` | Alpine | Development and production (full runtime with tests) |
+| `Dockerfile.release` | Alpine | Minimal release builds, binary extraction |
+| `Dockerfile.debian` | Debian Bookworm | glibc-based builds, better compatibility |
 
 ## Quick Start
 
@@ -118,12 +119,12 @@ Output structure:
 │           ├── libtokio_bridge.so     # Shared library
 │           └── php/
 │               └── extensions/
-│                   └── no-debug-zts-20240826/   # PHP 8.4 API version
+│                   └── no-debug-zts-20240924/   # PHP 8.4 API version
 │                       └── tokio_sapi.so        # PHP extension
 ```
 
 PHP extension directory varies by version:
-- PHP 8.4: `no-debug-zts-20240826`
+- PHP 8.4: `no-debug-zts-20240924`
 - PHP 8.5: `no-debug-zts-20250925`
 
 ### Build Args
@@ -132,6 +133,43 @@ PHP extension directory varies by version:
 |-----|---------|-------------|
 | `PHP_VERSION` | `8.4` | PHP version (8.4 or 8.5) |
 | `ALPINE_VERSION` | `3.23` | Alpine Linux version |
+
+## Dockerfile.debian (Debian Bookworm)
+
+glibc-based build for environments requiring Debian compatibility:
+
+```bash
+# Runtime image
+docker build -f Dockerfile.debian \
+  --build-arg PHP_VERSION=8.4 \
+  -t tokio_php:php8.4-bookworm .
+
+# Binary extraction
+docker build -f Dockerfile.debian \
+  --build-arg PHP_VERSION=8.4 \
+  --target dist \
+  --output type=local,dest=./dist-debian .
+```
+
+### Build Args
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `PHP_VERSION` | `8.4` | PHP version (8.4 or 8.5) |
+
+### Image Size Comparison
+
+| Base | Compressed | Uncompressed |
+|------|------------|--------------|
+| Alpine | ~53MB | ~209MB |
+| Debian Bookworm | ~182MB | ~759MB |
+
+### When to Use Debian
+
+- **glibc compatibility**: Some PHP extensions require glibc (not musl)
+- **Debugging**: Standard tools like gdb, valgrind work better
+- **Production policy**: Organization requires Debian-based images
+- **Native extensions**: Extensions with C dependencies may need glibc
 
 ## docker-compose.yml
 

@@ -1,0 +1,161 @@
+# Build for Debian Bookworm
+#
+# Build args:
+#   PHP_VERSION: 8.4 or 8.5
+#
+# Targets:
+#   (default) - Full runtime image with PHP, OPcache, JIT
+#   dist      - Binary distribution with proper directory structure
+#
+# Usage:
+#   # Build runtime image
+#   docker build -f Dockerfile.debian \
+#     --build-arg PHP_VERSION=8.4 \
+#     -t tokio_php:php8.4-bookworm .
+#
+#   # Extract binaries to ./dist-debian/
+#   docker build -f Dockerfile.debian \
+#     --build-arg PHP_VERSION=8.4 \
+#     --target dist \
+#     --output type=local,dest=./dist-debian .
+
+ARG PHP_VERSION=8.4
+
+# =============================================================================
+# Builder stage
+# =============================================================================
+FROM php:${PHP_VERSION}-zts-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    pkg-config \
+    clang \
+    llvm \
+    make \
+    g++ \
+    autoconf \
+    automake \
+    libtool \
+    # Libraries required by PHP
+    libreadline-dev \
+    libncurses-dev \
+    libcurl4-openssl-dev \
+    libonig-dev \
+    libsqlite3-dev \
+    libargon2-dev \
+    libxml2-dev \
+    zlib1g-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust via rustup (Debian's rustc is too old for Cargo.lock v4)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /app
+
+# Copy extension source files
+COPY ext ./ext
+
+# Build tokio_bridge shared library first (shared TLS for Rust <-> PHP)
+WORKDIR /app/ext/bridge
+RUN make && \
+    make install && \
+    ldconfig
+
+# Build tokio_sapi PHP extension
+WORKDIR /app/ext
+RUN phpize && \
+    ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && \
+    make && \
+    make install
+
+# Save extension directory path
+RUN php-config --extension-dir > /tmp/php_ext_dir
+
+# Build static library for Rust linking
+RUN cc -c -fPIC -I. -I/usr/local/include/php -I/usr/local/include/php/main \
+    -I/usr/local/include/php/TSRM -I/usr/local/include/php/Zend \
+    -I/usr/local/include/php/ext -DHAVE_CONFIG_H -o tokio_sapi_static.o tokio_sapi.c && \
+    ar rcs libtokio_sapi.a tokio_sapi_static.o && \
+    cp libtokio_sapi.a /usr/local/lib/
+
+# Build Rust binary
+WORKDIR /app
+COPY Cargo.toml Cargo.lock* ./
+COPY src ./src
+COPY build.rs ./
+
+RUN cargo build --release
+
+# =============================================================================
+# Distribution stage - extract binaries with proper directory structure
+# =============================================================================
+FROM debian:bookworm-slim AS dist-prepare
+
+# Copy extension directory path from builder
+COPY --from=builder /tmp/php_ext_dir /tmp/php_ext_dir
+
+# Copy all binaries to staging area
+COPY --from=builder /app/target/release/tokio_php /staging/usr/local/bin/tokio_php
+COPY --from=builder /usr/local/lib/libtokio_bridge.so /staging/usr/local/lib/libtokio_bridge.so
+COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
+
+# Place extension in correct PHP version-specific directory
+RUN EXT_DIR=$(cat /tmp/php_ext_dir) && \
+    mkdir -p "/staging${EXT_DIR}" && \
+    cp /tmp/tokio_sapi.so "/staging${EXT_DIR}/tokio_sapi.so"
+
+# Final dist stage with proper structure
+FROM scratch AS dist
+
+COPY --from=dist-prepare /staging/ /
+
+# =============================================================================
+# Minimal runtime stage (default)
+# =============================================================================
+ARG PHP_VERSION
+FROM php:${PHP_VERSION}-zts-bookworm
+
+# Minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4 \
+    libonig5 \
+    libxml2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy tokio_bridge shared library
+COPY --from=builder /usr/local/lib/libtokio_bridge.so /usr/local/lib/libtokio_bridge.so
+RUN ldconfig
+
+# Copy extension
+COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
+RUN EXT_DIR=$(php-config --extension-dir) && \
+    cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
+    rm /tmp/tokio_sapi.so && \
+    echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
+
+# Copy binary
+COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
+
+# Create document root directory
+RUN mkdir -p /var/www/html
+
+COPY www/welcome.php /var/www/html/index.php
+
+WORKDIR /var/www/html
+
+EXPOSE 8080
+
+# Labels
+ARG PHP_VERSION
+LABEL org.opencontainers.image.title="tokio_php"
+LABEL org.opencontainers.image.description="Async PHP web server in Rust"
+LABEL org.opencontainers.image.licenses="AGPL-3.0"
+LABEL org.opencontainers.image.source="https://github.com/aspect/tokio_php"
+LABEL org.opencontainers.image.base.name="debian:bookworm-slim"
+LABEL php.version="${PHP_VERSION}"
+
+CMD ["tokio_php"]

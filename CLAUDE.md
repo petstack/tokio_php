@@ -252,7 +252,7 @@ Runtime image includes three main components:
 | PHP extension | `/usr/local/lib/php/extensions/no-debug-zts-{API}/tokio_sapi.so` | PHP functions |
 
 PHP extension directory varies by version:
-- PHP 8.4: `no-debug-zts-20240826`
+- PHP 8.4: `no-debug-zts-20240924`
 - PHP 8.5: `no-debug-zts-20250925`
 
 ### Dockerfile.release
@@ -274,6 +274,29 @@ Dist output structure:
 ├── usr/local/lib/libtokio_bridge.so
 └── usr/local/lib/php/extensions/no-debug-zts-{API}/tokio_sapi.so
 ```
+
+### Dockerfile.debian
+
+Build for Debian Bookworm (glibc-based, larger but more compatible):
+
+```bash
+# Runtime image
+docker build -f Dockerfile.debian --build-arg PHP_VERSION=8.4 -t tokio_php:php8.4-bookworm .
+
+# Binary extraction
+docker build -f Dockerfile.debian --target dist --output type=local,dest=./dist-debian .
+```
+
+Image size comparison:
+| Base | Compressed | Uncompressed |
+|------|------------|--------------|
+| Alpine | 53MB | 209MB |
+| Debian Bookworm | 182MB | 759MB |
+
+Use Debian when:
+- Need glibc compatibility (some PHP extensions require glibc)
+- Debugging with standard tools (gdb, valgrind)
+- Production environments preferring Debian
 
 ### OPcache Preloading
 

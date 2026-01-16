@@ -421,24 +421,24 @@ The bridge (`libtokio_bridge.so`) solves TLS (Thread-Local Storage) isolation be
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                  libtokio_bridge.so                       │  │
 │  │                                                           │  │
-│  │  static __thread tokio_bridge_ctx_t *tls_ctx;            │  │
+│  │  static __thread tokio_bridge_ctx_t *tls_ctx;             │  │
 │  │                                                           │  │
-│  │  Context per request:                                    │  │
-│  │  - request_id, worker_id                                 │  │
-│  │  - is_finished, output_offset, response_code             │  │
-│  │  - heartbeat_ctx, heartbeat_callback                     │  │
-│  │  - hints_ctx, hints_callback (HTTP 103)                  │  │
+│  │  Context per request:                                     │  │
+│  │  - request_id, worker_id                                  │  │
+│  │  - is_finished, output_offset, response_code              │  │
+│  │  - heartbeat_ctx, heartbeat_callback                      │  │
+│  │  - hints_ctx, hints_callback (HTTP 103)                   │  │
 │  │                                                           │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │         ↑                                     ↑                 │
 │         │                                     │                 │
-│    Rust FFI                           PHP Extension            │
-│  (src/bridge.rs)                    (ext/tokio_sapi.c)         │
+│    Rust FFI                           PHP Extension             │
+│  (src/bridge.rs)                    (ext/tokio_sapi.c)          │
 │                                                                 │
-│  - bridge::init_ctx()              - tokio_finish_request()    │
-│  - bridge::set_heartbeat()         - tokio_request_heartbeat() │
-│  - bridge::get_finish_info()       - tokio_early_hints()       │
-│  - bridge::destroy_ctx()                                       │
+│  - bridge::init_ctx()              - tokio_finish_request()     │
+│  - bridge::set_heartbeat()         - tokio_request_heartbeat()  │
+│  - bridge::get_finish_info()       - tokio_early_hints()        │
+│  - bridge::destroy_ctx()                                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
