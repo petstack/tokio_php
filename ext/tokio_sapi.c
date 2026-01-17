@@ -972,6 +972,127 @@ PHP_FUNCTION(tokio_request_heartbeat)
     RETURN_BOOL(result != 0);
 }
 
+/* ============================================================================
+ * Helper functions for streaming early response
+ * ============================================================================ */
+
+/**
+ * Read current output from memfd (stdout).
+ * Returns allocated buffer that caller must free().
+ *
+ * @param len  Output: length of returned buffer
+ * @return     Allocated buffer with output, or NULL if empty/error
+ */
+static char* get_current_output(size_t *len)
+{
+    *len = 0;
+
+    /* 1. Flush libc buffers to ensure all data is in the fd */
+    fflush(stdout);
+
+    /* 2. Get current position (= amount written so far) */
+    off_t pos = lseek(STDOUT_FILENO, 0, SEEK_CUR);
+    if (pos <= 0) {
+        return NULL;
+    }
+
+    /* 3. Allocate buffer */
+    char *buf = (char*)malloc((size_t)pos);
+    if (buf == NULL) {
+        return NULL;
+    }
+
+    /* 4. Seek to beginning and read all data */
+    lseek(STDOUT_FILENO, 0, SEEK_SET);
+    ssize_t n = read(STDOUT_FILENO, buf, (size_t)pos);
+
+    /* 5. Seek back to end for further writes */
+    lseek(STDOUT_FILENO, 0, SEEK_END);
+
+    if (n <= 0) {
+        free(buf);
+        return NULL;
+    }
+
+    *len = (size_t)n;
+    return buf;
+}
+
+/**
+ * Serialize headers into a buffer for callback.
+ * Format: name\0value\0name\0value\0...
+ *
+ * Headers are captured via Rust's SAPI header_handler callback into
+ * the bridge TLS (tokio_bridge_add_header). This function reads from
+ * the bridge to serialize headers for the finish_request callback.
+ *
+ * @param len    Output: total length of buffer
+ * @param count  Output: number of header pairs
+ * @return       Allocated buffer, or NULL if no headers
+ */
+static char* serialize_sapi_headers(size_t *len, int *count)
+{
+    *len = 0;
+    *count = 0;
+
+    int num_headers = tokio_bridge_get_header_count();
+
+    if (num_headers == 0) {
+        return NULL;
+    }
+
+    /* First pass: calculate buffer size */
+    size_t total_len = 0;
+    for (int i = 0; i < num_headers; i++) {
+        const char *name = NULL;
+        const char *value = NULL;
+        if (tokio_bridge_get_header(i, &name, &value) && name && value) {
+            /* name + \0 + value + \0 */
+            total_len += strlen(name) + 1 + strlen(value) + 1;
+        }
+    }
+
+    if (total_len == 0) {
+        return NULL;
+    }
+
+    /* Allocate buffer */
+    char *buf = (char*)malloc(total_len);
+    if (buf == NULL) {
+        return NULL;
+    }
+
+    /* Second pass: serialize headers */
+    char *ptr = buf;
+    int header_count = 0;
+
+    for (int i = 0; i < num_headers; i++) {
+        const char *name = NULL;
+        const char *value = NULL;
+        if (!tokio_bridge_get_header(i, &name, &value) || !name || !value) {
+            continue;
+        }
+
+        /* Copy name */
+        size_t name_len = strlen(name);
+        memcpy(ptr, name, name_len);
+        ptr += name_len;
+        *ptr++ = '\0';
+
+        /* Copy value */
+        size_t value_len = strlen(value);
+        memcpy(ptr, value, value_len);
+        ptr += value_len;
+        *ptr++ = '\0';
+
+        header_count++;
+    }
+
+    *len = ptr - buf;
+    *count = header_count;
+    return buf;
+}
+
 /* tokio_finish_request(): bool - send response to client, continue script execution
  *
  * Analog of fastcgi_finish_request(). After calling:
@@ -989,6 +1110,7 @@ PHP_FUNCTION(tokio_request_heartbeat)
  *   sleep(5);  // User doesn't wait for this!
  *
  * Uses tokio_bridge shared library for direct Rust <-> PHP communication.
+ * With streaming mode, triggers callback to send response immediately.
  */
 PHP_FUNCTION(tokio_finish_request)
 {
@@ -999,54 +1121,52 @@ PHP_FUNCTION(tokio_finish_request)
         RETURN_TRUE;
     }
 
-    /* 1. Get current output position BEFORE flush (what's already been written to stdout) */
-    off_t current_pos = lseek(STDOUT_FILENO, 0, SEEK_CUR);
-    if (current_pos < 0) {
-        current_pos = 0;
-    }
-
-    /* 2. Calculate total output: already written + buffered content
-     * php_output_get_contents gives us what's in output buffers */
-    size_t buffered_len = 0;
-    int level = php_output_get_level();
-    if (level > 0) {
-        zval contents;
-        if (php_output_get_contents(&contents) == SUCCESS && Z_TYPE(contents) == IS_STRING) {
-            buffered_len = Z_STRLEN(contents);
-            zval_ptr_dtor(&contents);
-        }
-    }
-
-    size_t total_output_offset = (size_t)current_pos + buffered_len;
-
-    /* 3. Capture current header count and response code */
-    tokio_request_context *ctx = tls_request_ctx;
-    int header_count;
-    int response_code;
-    if (ctx) {
-        header_count = ctx->header_count;
-        response_code = ctx->http_response_code;
-    } else {
-        header_count = 0;
-        response_code = SG(sapi_headers).http_response_code;
-    }
-
-    /* 4. Mark finished via bridge (Rust can read this directly)
-     * No more header hacks needed! */
-    tokio_bridge_mark_finished(total_output_offset, header_count, response_code);
-
-    /* 5. Now flush all output buffers to stdout */
+    /* 1. Flush all PHP output buffers to stdout (memfd) */
     while (php_output_get_level() > 0) {
         php_output_end();
     }
 
-    /* 6. Force flush stdout */
+    /* 2. Force flush libc buffers */
     fflush(stdout);
 
-    /* 7. Start a new output buffer for any post-finish output (will be discarded) */
+    /* 3. Read current output from memfd */
+    size_t body_len = 0;
+    char *body = get_current_output(&body_len);
+
+    /* 4. Get response code */
+    int response_code = SG(sapi_headers).http_response_code;
+    if (response_code == 0) {
+        response_code = 200;
+    }
+
+    /* 5. Serialize headers */
+    size_t headers_len = 0;
+    int header_count = 0;
+    char *headers = serialize_sapi_headers(&headers_len, &header_count);
+
+    /* 6. Trigger callback to Rust (sends response immediately if callback is set)
+     * This also marks the request as finished */
+    int result = tokio_bridge_trigger_finish(
+        body,
+        body_len,
+        headers,
+        headers_len,
+        header_count,
+        response_code
+    );
+
+    /* 7. Free temporary buffers */
+    if (body) {
+        free(body);
+    }
+    if (headers) {
+        free(headers);
+    }
+
+    /* 8. Start a new output buffer for any post-finish output (will be discarded) */
     php_output_start_default();
 
-    RETURN_TRUE;
+    RETURN_BOOL(result != 0);
 }
 
 /* ============================================================================

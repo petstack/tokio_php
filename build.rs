@@ -70,8 +70,12 @@ fn main() {
 
     // Add common paths for different PHP installations
     println!("cargo:rustc-link-search=native=/usr/lib");
+    println!("cargo:rustc-link-search=native=/lib");
     println!("cargo:rustc-link-search=native=/usr/lib/php84");
     println!("cargo:rustc-link-search=native=/usr/local/lib"); // Official PHP images
+
+    // Debug: Print library search paths
+    eprintln!("build.rs: Adding library search paths: /usr/lib, /lib, /usr/lib/php84, /usr/local/lib");
 
     // Link against php embed library
     println!("cargo:rustc-link-lib=dylib=php");

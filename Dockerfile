@@ -42,13 +42,22 @@ COPY ext ./ext
 WORKDIR /app/ext/bridge
 RUN make && \
     make install && \
-    ldconfig 2>/dev/null || true
+    ls -la /usr/local/lib/libtokio_bridge.so && \
+    cp /usr/local/lib/libtokio_bridge.so /usr/lib/ && \
+    cp /usr/local/lib/libtokio_bridge.so /lib/ && \
+    # Set up musl library path for both x86_64 and aarch64
+    ldconfig 2>/dev/null || { \
+        ARCH=$(uname -m); \
+        echo "/usr/local/lib" >> /etc/ld-musl-${ARCH}.path 2>/dev/null || \
+        echo "/usr/local/lib" >> /etc/ld-musl-aarch64.path 2>/dev/null || \
+        echo "/usr/local/lib" >> /etc/ld-musl-x86_64.path 2>/dev/null || true; \
+    }
 
 # Build tokio_sapi PHP extension as shared library
 WORKDIR /app/ext
 RUN phpize && \
-    ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && \
-    make && \
+    ./configure --enable-tokio_sapi && \
+    make EXTRA_LDFLAGS="/usr/local/lib/libtokio_bridge.so" && \
     make install
 
 # Save extension directory path for runtime stage
@@ -69,12 +78,26 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY build.rs ./
 
+# Set library paths for linking with tokio_bridge
+ENV LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib:$LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib:$LD_LIBRARY_PATH
+ENV RUSTFLAGS="-C target-feature=-crt-static -L/usr/local/lib -L/usr/lib -L/lib"
+
+# Verify tokio_bridge library exists in expected locations
+RUN echo "=== Library locations ===" && \
+    ls -la /usr/local/lib/libtokio_bridge.so && \
+    ls -la /usr/lib/libtokio_bridge.so && \
+    ls -la /lib/libtokio_bridge.so && \
+    echo "=== ld-musl paths ===" && \
+    cat /etc/ld-musl-*.path 2>/dev/null || echo "No ld-musl path files"
+
 # Run unit tests before building (fail fast if tests don't pass)
 # Note: --bin tokio_php excludes integration tests which require running server
-RUN cargo test --no-default-features --release --bin tokio_php
+# Note: php feature required for tokio_bridge FFI bindings
+RUN cargo test --release --bin tokio_php
 
 # Build the application
-RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
+RUN cargo build --release
 
 # Runtime stage - use same ZTS image
 ARG PHP_VERSION=8.4

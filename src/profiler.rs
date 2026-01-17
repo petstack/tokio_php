@@ -71,6 +71,9 @@ pub struct ProfileData {
 
     // === Response building (server.rs) ===
     pub response_build_us: u64, // Build HTTP response
+
+    // === Streaming early response ===
+    pub early_finish: bool, // True if response was sent via tokio_finish_request()
 }
 
 impl ProfileData {

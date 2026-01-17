@@ -29,6 +29,8 @@ extern "C" {
 #define TOKIO_BRIDGE_VERSION "0.1.0"
 #define TOKIO_BRIDGE_MAX_EARLY_HINTS 16
 #define TOKIO_BRIDGE_MAX_HINT_LEN 512
+#define TOKIO_BRIDGE_MAX_HEADERS 128
+#define TOKIO_BRIDGE_MAX_HEADER_LEN 8192
 
 /* ============================================================================
  * Callback types
@@ -56,9 +58,41 @@ typedef void (*tokio_early_hints_callback_t)(
  */
 typedef int64_t (*tokio_heartbeat_callback_t)(void *ctx, uint64_t secs);
 
+/**
+ * Callback for finish request signal (streaming early response)
+ *
+ * Called when PHP invokes tokio_finish_request() to send response immediately
+ * while continuing script execution in the background.
+ *
+ * @param ctx          Opaque context pointer (Rust channel sender)
+ * @param body         Response body bytes (output before finish_request)
+ * @param body_len     Length of body in bytes
+ * @param headers      Serialized headers buffer (name\0value\0name\0value\0...)
+ * @param headers_len  Total length of headers buffer
+ * @param header_count Number of header pairs
+ * @param status_code  HTTP response status code
+ */
+typedef void (*tokio_finish_callback_t)(
+    void *ctx,
+    const char *body,
+    size_t body_len,
+    const char *headers,
+    size_t headers_len,
+    int header_count,
+    int status_code
+);
+
 /* ============================================================================
  * Bridge context structure
  * ============================================================================ */
+
+/**
+ * Header entry for captured HTTP headers
+ */
+typedef struct tokio_bridge_header {
+    char *name;
+    char *value;
+} tokio_bridge_header_t;
 
 /**
  * Thread-local request context shared between Rust and PHP
@@ -71,8 +105,12 @@ typedef struct tokio_bridge_ctx {
     /* Finish request state (fastcgi_finish_request analog) */
     int is_finished;
     size_t output_offset;
-    int header_count;
+    int finished_header_count;  /* Header count at finish time */
     int response_code;
+
+    /* Captured headers storage (shared between Rust SAPI and PHP) */
+    tokio_bridge_header_t headers[TOKIO_BRIDGE_MAX_HEADERS];
+    int header_count;
 
     /* Early Hints callback and context */
     void *hints_ctx;
@@ -82,6 +120,10 @@ typedef struct tokio_bridge_ctx {
     void *heartbeat_ctx;
     uint64_t heartbeat_max_secs;
     tokio_heartbeat_callback_t heartbeat_callback;
+
+    /* Finish request callback (streaming early response) */
+    void *finish_ctx;
+    tokio_finish_callback_t finish_callback;
 
 } tokio_bridge_ctx_t;
 
@@ -169,6 +211,41 @@ int tokio_bridge_get_finished_header_count(void);
  */
 int tokio_bridge_get_finished_response_code(void);
 
+/**
+ * Set the finish request callback.
+ * Called from Rust before PHP execution to enable streaming early response.
+ *
+ * @param ctx      Opaque pointer to Rust channel sender (will be passed to callback)
+ * @param callback Function to call when PHP calls tokio_finish_request()
+ */
+void tokio_bridge_set_finish_callback(void *ctx, tokio_finish_callback_t callback);
+
+/**
+ * Trigger the finish callback with response data.
+ * Called from PHP's tokio_finish_request() function.
+ *
+ * This function:
+ * 1. Marks the request as finished (idempotent)
+ * 2. Invokes the Rust callback with body, headers, and status
+ * 3. Allows PHP to continue executing in background
+ *
+ * @param body         Response body bytes
+ * @param body_len     Length of body
+ * @param headers      Serialized headers (name\0value\0...)
+ * @param headers_len  Length of headers buffer
+ * @param header_count Number of header pairs
+ * @param status_code  HTTP response status code
+ * @return             1 on success, 0 if no callback or already finished
+ */
+int tokio_bridge_trigger_finish(
+    const char *body,
+    size_t body_len,
+    const char *headers,
+    size_t headers_len,
+    int header_count,
+    int status_code
+);
+
 /* ============================================================================
  * Heartbeat API
  * ============================================================================ */
@@ -200,6 +277,50 @@ int tokio_bridge_send_heartbeat(uint64_t secs);
  * Get the maximum heartbeat extension in seconds.
  */
 uint64_t tokio_bridge_get_heartbeat_max(void);
+
+/* ============================================================================
+ * Header Storage API (shared between Rust SAPI and PHP)
+ * ============================================================================ */
+
+/**
+ * Add a captured header to the bridge context.
+ * Called from Rust SAPI header_handler callback.
+ *
+ * @param name      Header name (e.g., "Content-Type")
+ * @param name_len  Length of name
+ * @param value     Header value (e.g., "text/html")
+ * @param value_len Length of value
+ * @param replace   If true, replace existing header with same name
+ * @return          1 on success, 0 if storage is full or ctx is NULL
+ */
+int tokio_bridge_add_header(
+    const char *name,
+    size_t name_len,
+    const char *value,
+    size_t value_len,
+    int replace
+);
+
+/**
+ * Get the number of captured headers.
+ */
+int tokio_bridge_get_header_count(void);
+
+/**
+ * Get a captured header by index.
+ *
+ * @param index     Header index (0-based)
+ * @param name      Output: pointer to header name (do not free)
+ * @param value     Output: pointer to header value (do not free)
+ * @return          1 on success, 0 if index out of range
+ */
+int tokio_bridge_get_header(int index, const char **name, const char **value);
+
+/**
+ * Clear all captured headers.
+ * Called at request start.
+ */
+void tokio_bridge_clear_headers(void);
 
 #ifdef __cplusplus
 }

@@ -12,6 +12,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
+use crate::bridge::{FinishChannel, FinishData};
 use crate::executor::sapi;
 use crate::profiler::ProfileData;
 use crate::types::{ScriptRequest, ScriptResponse};
@@ -60,6 +61,8 @@ pub struct WorkerRequest {
     pub queued_at: Instant,
     /// Heartbeat context for timeout extension (shared with async side)
     pub heartbeat_ctx: Option<Arc<HeartbeatContext>>,
+    /// Finish channel for streaming early response (PHP calls tokio_finish_request)
+    pub finish_channel: Option<Arc<FinishChannel>>,
 }
 
 /// Handle to a worker thread
@@ -229,9 +232,13 @@ impl WorkerPool {
     ///
     /// Supports heartbeat mechanism: if timeout is configured, creates a HeartbeatContext
     /// that allows PHP scripts to extend the deadline via tokio_request_heartbeat().
+    ///
+    /// Supports streaming early response: if PHP calls `tokio_finish_request()`,
+    /// the response is returned immediately while PHP continues executing.
     pub async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
         let (response_tx, response_rx) = oneshot::channel();
         let timeout = request.timeout;
+        let profiling = request.profile;
 
         // Capture queued_at once - reused for both queue timing and HeartbeatContext
         let queued_at = Instant::now();
@@ -240,6 +247,10 @@ impl WorkerPool {
         let heartbeat_ctx =
             timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
 
+        // Create finish channel for streaming early response
+        let (finish_channel, mut finish_rx) = FinishChannel::new();
+        let finish_channel = Arc::new(finish_channel);
+
         // Use try_send to avoid blocking and detect queue full
         self.request_tx
             .try_send(WorkerRequest {
@@ -247,6 +258,7 @@ impl WorkerPool {
                 response_tx,
                 queued_at,
                 heartbeat_ctx: heartbeat_ctx.clone(),
+                finish_channel: Some(finish_channel.clone()),
             })
             .map_err(|e| match e {
                 mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
@@ -266,14 +278,24 @@ impl WorkerPool {
                     }
                     Some(remaining) => {
                         // Sleep for full remaining time (no 100ms polling overhead)
+                        // Also listen for early finish signal
                         tokio::select! {
                             biased;
+
+                            // Early finish signal from PHP
+                            Some(finish_data) = finish_rx.recv() => {
+                                return Ok(finish_data_to_response(finish_data, profiling));
+                            }
+
+                            // Normal completion
                             result = &mut response_rx => {
                                 return match result {
                                     Ok(r) => r,
                                     Err(_) => Err("Worker dropped response".to_string()),
                                 };
                             }
+
+                            // Timeout
                             _ = tokio::time::sleep(remaining) => {
                                 // Timeout reached, loop will check remaining() again
                                 // (in case heartbeat extended the deadline)
@@ -284,10 +306,23 @@ impl WorkerPool {
                 }
             }
         } else {
-            // No timeout configured - wait indefinitely
-            response_rx
-                .await
-                .map_err(|_| "Worker dropped response".to_string())?
+            // No timeout configured - wait for either early finish or normal completion
+            tokio::select! {
+                biased;
+
+                // Early finish signal from PHP
+                Some(finish_data) = finish_rx.recv() => {
+                    Ok(finish_data_to_response(finish_data, profiling))
+                }
+
+                // Normal completion
+                result = response_rx => {
+                    match result {
+                        Ok(r) => r,
+                        Err(_) => Err("Worker dropped response".to_string()),
+                    }
+                }
+            }
         }
     }
 
@@ -306,6 +341,24 @@ impl WorkerPool {
         for worker in self.workers.drain(..) {
             let _ = worker.handle.join();
         }
+    }
+}
+
+/// Convert FinishData from early finish callback to ScriptResponse
+fn finish_data_to_response(data: FinishData, profiling: bool) -> ScriptResponse {
+    use crate::profiler::ProfileData;
+
+    ScriptResponse {
+        body: String::from_utf8_lossy(&data.body).into_owned(),
+        headers: data.headers,
+        profile: if profiling {
+            Some(ProfileData {
+                early_finish: true,
+                ..Default::default()
+            })
+        } else {
+            None
+        },
     }
 }
 
@@ -737,9 +790,10 @@ pub fn worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 response_tx,
                 queued_at,
                 heartbeat_ctx: _,
+                finish_channel: _,
             }) => {
-                // Note: heartbeat_ctx is ignored here - it's only used in ExtExecutor
-                // which has the tokio_sapi extension for heartbeat support
+                // Note: heartbeat_ctx and finish_channel are ignored here - they're only used
+                // in ExtExecutor which has the tokio_sapi extension for heartbeat/finish support
                 let profiling = request.profile;
 
                 // Measure queue wait time

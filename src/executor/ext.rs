@@ -485,6 +485,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 response_tx,
                 queued_at,
                 heartbeat_ctx,
+                finish_channel,
             }) => {
                 let profiling = request.profile;
                 let request_id = next_request_id();
@@ -544,6 +545,19 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                                 ctx_ptr,
                                 ctx.max_extension(),
                                 tokio_php_heartbeat,
+                            );
+                        }
+                    }
+
+                    // Set up finish callback via bridge (streaming early response)
+                    if let Some(ref channel) = finish_channel {
+                        let channel_ptr = channel.as_ptr();
+                        // SAFETY: channel_ptr is valid for the duration of request processing
+                        // The channel Arc is kept alive by WorkerPool::execute()
+                        unsafe {
+                            bridge::set_finish_callback(
+                                channel_ptr,
+                                bridge::FinishChannel::callback,
                             );
                         }
                     }

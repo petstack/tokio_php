@@ -140,6 +140,20 @@ extern "C" {
     );
 }
 
+// Bridge library FFI - for shared header storage between Rust and PHP
+// Note: These are declared in the php link block but use the tokio_bridge library
+// The library is linked via build.rs when the php feature is enabled
+extern "C" {
+    fn tokio_bridge_add_header(
+        name: *const c_char,
+        name_len: usize,
+        value: *const c_char,
+        value_len: usize,
+        replace: c_int,
+    ) -> c_int;
+    fn tokio_bridge_clear_headers();
+}
+
 // =============================================================================
 // Request Data (set before php_request_startup)
 // =============================================================================
@@ -184,6 +198,7 @@ thread_local! {
 }
 
 /// Custom header handler - captures headers set via header()
+/// Stores headers in both Rust's CAPTURED_HEADERS and the bridge TLS (for PHP access)
 unsafe extern "C" fn custom_header_handler(
     sapi_header: *mut SapiHeader,
     op: SapiHeaderOp,
@@ -209,9 +224,11 @@ unsafe extern "C" fn custom_header_handler(
             if !header_ptr.is_null() {
                 if let Ok(header_str) = CStr::from_ptr(header_ptr).to_str() {
                     if let Some((name, value)) = header_str.split_once(':') {
-                        let name = name.trim().to_string();
-                        let value = value.trim().to_string();
+                        let name = name.trim();
+                        let value = value.trim();
+                        let replace = if op == SapiHeaderOp::Replace { 1 } else { 0 };
 
+                        // Store in Rust's thread-local (for normal request completion)
                         CAPTURED_HEADERS.with(|h| {
                             let mut headers = h.borrow_mut();
                             if op == SapiHeaderOp::Replace {
@@ -219,8 +236,17 @@ unsafe extern "C" fn custom_header_handler(
                                 let name_lower = name.to_lowercase();
                                 headers.retain(|(n, _)| n.to_lowercase() != name_lower);
                             }
-                            headers.push((name, value));
+                            headers.push((name.to_string(), value.to_string()));
                         });
+
+                        // Also store in bridge TLS (for PHP finish_request access)
+                        tokio_bridge_add_header(
+                            name.as_ptr() as *const c_char,
+                            name.len(),
+                            value.as_ptr() as *const c_char,
+                            value.len(),
+                            replace,
+                        );
                     }
                 }
             }
@@ -234,6 +260,7 @@ unsafe extern "C" fn custom_header_handler(
                         h.borrow_mut()
                             .retain(|(n, _)| n.to_lowercase() != name_lower);
                     });
+                    // Note: bridge doesn't support delete yet, but headers are cleared per request
                 }
             }
         }
@@ -386,6 +413,10 @@ pub fn shutdown() {
 pub fn clear_captured_headers() {
     CAPTURED_HEADERS.with(|h| h.borrow_mut().clear());
     CAPTURED_STATUS.with(|s| *s.borrow_mut() = 200);
+    // Also clear bridge TLS headers
+    unsafe {
+        tokio_bridge_clear_headers();
+    }
 }
 
 /// Get captured headers (call after request execution)

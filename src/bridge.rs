@@ -54,6 +54,19 @@ pub type EarlyHintsCallback =
 /// Callback type for heartbeat (request timeout extension).
 pub type HeartbeatCallback = extern "C" fn(ctx: *mut c_void, secs: u64) -> i64;
 
+/// Callback type for finish request signal (streaming response).
+///
+/// Called when PHP invokes `tokio_finish_request()` to send response immediately.
+pub type FinishCallback = extern "C" fn(
+    ctx: *mut c_void,
+    body: *const c_char,
+    body_len: usize,
+    headers: *const c_char,
+    headers_len: usize,
+    header_count: c_int,
+    status_code: c_int,
+);
+
 #[link(name = "tokio_bridge")]
 extern "C" {
     // Context lifecycle
@@ -72,6 +85,9 @@ extern "C" {
 
     // Heartbeat
     fn tokio_bridge_set_heartbeat(ctx: *mut c_void, max_secs: u64, callback: HeartbeatCallback);
+
+    // Finish request callback (streaming early response)
+    fn tokio_bridge_set_finish_callback(ctx: *mut c_void, callback: FinishCallback);
 }
 
 // =============================================================================
@@ -152,6 +168,20 @@ pub unsafe fn set_heartbeat(ctx: *mut c_void, max_secs: u64, callback: Heartbeat
     tokio_bridge_set_heartbeat(ctx, max_secs, callback);
 }
 
+/// Set the finish request callback.
+///
+/// The callback will be invoked when PHP calls `tokio_finish_request()`.
+/// This enables streaming early response - client receives response immediately
+/// while PHP continues background execution.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer to a `FinishChannel` created via `Arc::as_ptr`.
+#[inline]
+pub unsafe fn set_finish_callback(ctx: *mut c_void, callback: FinishCallback) {
+    tokio_bridge_set_finish_callback(ctx, callback);
+}
+
 // =============================================================================
 // Early Hints Channel
 // =============================================================================
@@ -222,6 +252,146 @@ impl Default for EarlyHintsChannel {
 }
 
 // =============================================================================
+// Finish Channel (Streaming Early Response)
+// =============================================================================
+
+/// Data sent through the finish channel when PHP calls `tokio_finish_request()`.
+#[derive(Debug, Clone)]
+pub struct FinishData {
+    /// Response body (output before finish_request).
+    pub body: bytes::Bytes,
+    /// Parsed HTTP headers (name, value pairs).
+    pub headers: Vec<(String, String)>,
+    /// HTTP response status code.
+    pub status_code: u16,
+}
+
+/// Channel for receiving finish signal from PHP.
+///
+/// When PHP calls `tokio_finish_request()`, the callback sends response data
+/// through this channel, allowing the HTTP handler to send the response immediately
+/// while PHP continues executing in the background.
+pub struct FinishChannel {
+    tx: mpsc::Sender<FinishData>,
+}
+
+impl FinishChannel {
+    /// Create a new finish channel.
+    ///
+    /// Returns the channel and a receiver. Capacity is 1 since only one
+    /// finish signal can be sent per request.
+    pub fn new() -> (Self, mpsc::Receiver<FinishData>) {
+        let (tx, rx) = mpsc::channel(1);
+        (Self { tx }, rx)
+    }
+
+    /// Get a raw pointer to this channel for passing to FFI.
+    pub fn as_ptr(self: &Arc<Self>) -> *mut c_void {
+        Arc::as_ptr(self) as *mut c_void
+    }
+
+    /// The FFI callback function that the bridge library invokes.
+    ///
+    /// Called from C when PHP calls `tokio_finish_request()`.
+    /// Parses the response data and sends it through the channel.
+    ///
+    /// # Safety
+    ///
+    /// This is an FFI callback. The caller (C code) must ensure:
+    /// - `ctx` is a valid pointer from `Arc::as_ptr`
+    /// - `body` points to `body_len` bytes (or is null if body_len is 0)
+    /// - `headers` points to `headers_len` bytes of serialized headers
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn callback(
+        ctx: *mut c_void,
+        body: *const c_char,
+        body_len: usize,
+        headers: *const c_char,
+        headers_len: usize,
+        header_count: c_int,
+        status_code: c_int,
+    ) {
+        if ctx.is_null() {
+            return;
+        }
+
+        // SAFETY: ctx was created from Arc::as_ptr and is still valid
+        let channel = unsafe { &*(ctx as *const FinishChannel) };
+
+        // Copy body bytes
+        let body_bytes = if body.is_null() || body_len == 0 {
+            bytes::Bytes::new()
+        } else {
+            let slice = unsafe { std::slice::from_raw_parts(body as *const u8, body_len) };
+            bytes::Bytes::copy_from_slice(slice)
+        };
+
+        // Parse headers from serialized buffer (name\0value\0name\0value\0...)
+        let headers_vec = parse_headers_buffer(headers, headers_len, header_count);
+
+        let data = FinishData {
+            body: body_bytes,
+            headers: headers_vec,
+            status_code: status_code as u16,
+        };
+
+        // Non-blocking send (if receiver dropped, that's OK)
+        let _ = channel.tx.try_send(data);
+    }
+}
+
+impl Default for FinishChannel {
+    fn default() -> Self {
+        Self::new().0
+    }
+}
+
+/// Parse headers from serialized buffer format: name\0value\0name\0value\0...
+fn parse_headers_buffer(
+    ptr: *const c_char,
+    len: usize,
+    count: c_int,
+) -> Vec<(String, String)> {
+    if ptr.is_null() || len == 0 || count <= 0 {
+        return Vec::new();
+    }
+
+    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
+    let mut result = Vec::with_capacity(count as usize);
+    let mut pos = 0;
+
+    for _ in 0..count {
+        if pos >= len {
+            break;
+        }
+
+        // Read name (until \0)
+        let name_start = pos;
+        while pos < len && bytes[pos] != 0 {
+            pos += 1;
+        }
+        let name = String::from_utf8_lossy(&bytes[name_start..pos]).into_owned();
+        pos += 1; // Skip \0
+
+        if pos >= len {
+            break;
+        }
+
+        // Read value (until \0)
+        let value_start = pos;
+        while pos < len && bytes[pos] != 0 {
+            pos += 1;
+        }
+        let value = String::from_utf8_lossy(&bytes[value_start..pos]).into_owned();
+        pos += 1; // Skip \0
+
+        result.push((name, value));
+    }
+
+    result
+}
+
+// =============================================================================
 // Finish Request Info
 // =============================================================================
 
@@ -263,5 +433,31 @@ mod tests {
         let arc = Arc::new(channel);
         let ptr = arc.as_ptr();
         assert!(!ptr.is_null());
+    }
+
+    #[test]
+    fn test_finish_channel_creation() {
+        let (channel, _rx) = FinishChannel::new();
+        let arc = Arc::new(channel);
+        let ptr = arc.as_ptr();
+        assert!(!ptr.is_null());
+    }
+
+    #[test]
+    fn test_parse_headers_buffer() {
+        // Test empty buffer
+        let result = parse_headers_buffer(std::ptr::null(), 0, 0);
+        assert!(result.is_empty());
+
+        // Test valid headers: "Content-Type\0text/html\0X-Test\0value\0"
+        let buffer = b"Content-Type\0text/html\0X-Test\0value\0";
+        let result = parse_headers_buffer(buffer.as_ptr() as *const c_char, buffer.len(), 2);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], ("Content-Type".to_string(), "text/html".to_string()));
+        assert_eq!(result[1], ("X-Test".to_string(), "value".to_string()));
+
+        // Test with wrong count (more than actual)
+        let result = parse_headers_buffer(buffer.as_ptr() as *const c_char, buffer.len(), 5);
+        assert_eq!(result.len(), 2); // Should only parse what's available
     }
 }
