@@ -359,6 +359,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 drain_timeout_secs: self.config.drain_timeout.as_secs().to_string(),
                 static_cache_ttl: format_optional_duration(&self.config.static_cache_ttl),
                 request_timeout: format_optional_duration(&self.config.request_timeout),
+                sse_timeout: format_optional_duration(&self.config.sse_timeout),
                 access_log: if self.access_log_enabled {
                     "1".to_string()
                 } else {

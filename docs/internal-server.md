@@ -59,6 +59,7 @@ curl http://localhost:9090/config
   "DRAIN_TIMEOUT_SECS": "30",
   "STATIC_CACHE_TTL": "1d",
   "REQUEST_TIMEOUT": "2m",
+  "SSE_TIMEOUT": "30m",
   "ACCESS_LOG": "0",
   "RATE_LIMIT": "0",
   "RATE_WINDOW": "60",
@@ -84,6 +85,7 @@ curl http://localhost:9090/config
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache TTL |
 | `REQUEST_TIMEOUT` | `2m` | Request timeout |
+| `SSE_TIMEOUT` | `30m` | SSE connection timeout |
 | `ACCESS_LOG` | `0` | Access logging (`0`/`1`) |
 | `RATE_LIMIT` | `0` | Rate limit per IP (`0` = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window (seconds) |

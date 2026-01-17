@@ -36,6 +36,7 @@ pub struct ServerConfigInfo {
     pub drain_timeout_secs: String,
     pub static_cache_ttl: String,
     pub request_timeout: String,
+    pub sse_timeout: String,
     pub access_log: String,
     pub rate_limit: String,
     pub rate_window: String,
