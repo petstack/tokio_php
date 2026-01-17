@@ -66,7 +66,6 @@ src/
 │   ├── connection.rs    # Connection handling, request processing
 │   ├── routing.rs       # URL routing, static files
 │   ├── internal.rs      # Internal server (/health, /metrics)
-│   ├── rate_limit.rs    # Per-IP rate limiting
 │   ├── access_log.rs    # Structured access logging
 │   ├── error_pages.rs   # Custom error pages cache
 │   ├── request/         # Request parsing
@@ -76,7 +75,8 @@ src/
 │   └── response/        # Response building
 │       ├── mod.rs       # Response builder
 │       ├── compression.rs # Brotli compression
-│       └── static_file.rs # Static file serving
+│       ├── static_file.rs # Static file serving
+│       └── streaming.rs # SSE streaming support
 │
 ├── middleware/          # Middleware system
 │   ├── mod.rs           # Middleware trait
@@ -378,6 +378,86 @@ traceparent: 00-{trace_id}-{parent_span}-01     traceparent: 00-{trace_id}-{new_
 - New `span_id` generated for this request
 - `X-Request-ID` derived from trace: `{trace_id[0:12]}-{span_id[0:4]}`
 
+## SSE Streaming
+
+Server-Sent Events (SSE) support allows PHP scripts to stream data to clients in real-time:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                         SSE Request Flow                              │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Client                    Server                      PHP Worker    │
+│    │                         │                              │        │
+│    │  GET /sse.php           │                              │        │
+│    │  Accept: text/event-    │                              │        │
+│    │  stream                 │                              │        │
+│    │ ───────────────────────►│                              │        │
+│    │                         │                              │        │
+│    │                         │  Create StreamingChannel     │        │
+│    │                         │  enable_streaming(ctx, cb)   │        │
+│    │                         │ ────────────────────────────►│        │
+│    │                         │                              │        │
+│    │  HTTP 200               │                              │        │
+│    │  Content-Type:          │                              │        │
+│    │  text/event-stream      │                              │        │
+│    │ ◄───────────────────────│                              │        │
+│    │                         │                              │        │
+│    │                         │          echo "data: ...\n\n";       │
+│    │                         │          flush();            │        │
+│    │                         │                              │        │
+│    │                         │  SAPI flush handler:         │        │
+│    │                         │  - Flush PHP output buffers  │        │
+│    │                         │  - Read new output from memfd│        │
+│    │                         │  - send_chunk(data)          │        │
+│    │                         │ ◄────────────────────────────│        │
+│    │  data: ...              │                              │        │
+│    │ ◄───────────────────────│                              │        │
+│    │                         │                              │        │
+│    │         ... repeat for each flush() ...                │        │
+│    │                         │                              │        │
+│    │                         │  Script ends                 │        │
+│    │                         │  end_stream()                │        │
+│    │                         │ ◄────────────────────────────│        │
+│    │  (connection closes)    │                              │        │
+│    │ ◄───────────────────────│                              │        │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+1. **Detection**: Server detects SSE request via `Accept: text/event-stream` header
+2. **Channel**: Creates `mpsc::channel` for streaming chunks
+3. **Bridge Setup**: Calls `bridge::enable_streaming()` with callback
+4. **Response**: Returns HTTP 200 with streaming body immediately
+5. **PHP flush()**: SAPI flush handler intercepts `flush()` calls:
+   - Flushes PHP output buffers to memfd
+   - Reads new data since last offset
+   - Sends chunk via bridge callback
+   - Callback pushes to mpsc channel
+6. **Streaming**: Hyper polls channel and sends frames to client
+7. **Cleanup**: `bridge::end_stream()` called when script ends
+
+### Usage in PHP
+
+```php
+<?php
+// Headers set automatically for SSE requests
+while ($hasData) {
+    $event = json_encode(['time' => date('H:i:s')]);
+    echo "data: $event\n\n";
+    flush();  // Standard PHP flush() - triggers streaming
+    sleep(1);
+}
+```
+
+Key points:
+- Standard `flush()` works via SAPI flush handler
+- No custom functions needed
+- Headers (`Content-Type: text/event-stream`) set automatically
+- Works with EventSource API in browsers
+
 ## Memory Model
 
 ```
@@ -427,7 +507,8 @@ The bridge (`libtokio_bridge.so`) solves TLS (Thread-Local Storage) isolation be
 │  │  - request_id, worker_id                                  │  │
 │  │  - is_finished, output_offset, response_code              │  │
 │  │  - heartbeat_ctx, heartbeat_callback                      │  │
-│  │  - hints_ctx, hints_callback (HTTP 103)                   │  │
+│  │  - finish_ctx, finish_callback (early response)           │  │
+│  │  - is_streaming, stream_ctx, stream_callback (SSE)        │  │
 │  │                                                           │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │         ↑                                     ↑                 │
@@ -502,4 +583,5 @@ HeartbeatContext uses `Instant` instead of `SystemTime`:
 - [Worker Pool](worker-pool.md) - PHP worker pool configuration
 - [Distributed Tracing](distributed-tracing.md) - W3C Trace Context
 - [Request Heartbeat](request-heartbeat.md) - Timeout extension mechanism
+- [SSE Streaming](sse-streaming.md) - Server-Sent Events support
 - [tokio_sapi Extension](tokio-sapi-extension.md) - Bridge architecture and PHP functions
