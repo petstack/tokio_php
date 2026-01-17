@@ -488,6 +488,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 heartbeat_ctx,
                 finish_channel,
                 streaming_channel,
+                explicit_sse,
             }) => {
                 let profiling = request.profile;
                 let request_id = next_request_id();
@@ -568,12 +569,23 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     if let Some(ref channel) = streaming_channel {
                         let channel_ptr = channel.as_ptr();
                         // SAFETY: channel_ptr is valid for the duration of request processing
-                        // The channel Arc is kept alive by WorkerPool::execute_streaming()
+                        // The channel Arc is kept alive by WorkerPool
                         unsafe {
-                            bridge::enable_streaming(
-                                channel_ptr,
-                                bridge::StreamingChannel::callback,
-                            );
+                            if explicit_sse {
+                                // Explicit SSE mode (client sent Accept: text/event-stream)
+                                // Enable streaming immediately
+                                bridge::enable_streaming(
+                                    channel_ptr,
+                                    bridge::StreamingChannel::callback,
+                                );
+                            } else {
+                                // Auto-detect mode: set callback but don't enable streaming yet
+                                // Streaming will be enabled when PHP sets Content-Type: text/event-stream
+                                bridge::set_stream_callback(
+                                    channel_ptr,
+                                    bridge::StreamingChannel::callback,
+                                );
+                            }
                         }
                     }
 
@@ -706,6 +718,13 @@ impl ExtPool {
         self.pool.execute_streaming(request, buffer_size)
     }
 
+    async fn execute_with_auto_sse_request(
+        &self,
+        request: ScriptRequest,
+    ) -> Result<crate::executor::common::ExecuteResult, String> {
+        self.pool.execute_with_auto_sse(request).await
+    }
+
     fn worker_count(&self) -> usize {
         self.pool.worker_count()
     }
@@ -763,6 +782,16 @@ impl ScriptExecutor for ExtExecutor {
     ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, ExecutorError> {
         self.pool
             .execute_streaming_request(request, buffer_size)
+            .map_err(ExecutorError::from)
+    }
+
+    async fn execute_with_auto_sse(
+        &self,
+        request: ScriptRequest,
+    ) -> Result<crate::executor::common::ExecuteResult, ExecutorError> {
+        self.pool
+            .execute_with_auto_sse_request(request)
+            .await
             .map_err(ExecutorError::from)
     }
 

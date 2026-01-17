@@ -19,6 +19,29 @@ use crate::profiler::ProfileData;
 use crate::types::{ScriptRequest, ScriptResponse};
 
 // =============================================================================
+// Execute Result Types
+// =============================================================================
+
+/// Buffer size for streaming channel in auto-detect mode.
+pub const AUTO_SSE_BUFFER_SIZE: usize = 32;
+
+/// Result of execute_with_auto_sse().
+///
+/// Can be either a normal response or a streaming response (when PHP
+/// dynamically enables SSE via Content-Type: text/event-stream header).
+pub enum ExecuteResult {
+    /// Normal response (no streaming).
+    Normal(ScriptResponse),
+    /// Streaming response (SSE auto-detected via Content-Type header).
+    /// Contains initial headers, status code, and receiver for stream chunks.
+    Streaming {
+        headers: Vec<(String, String)>,
+        status_code: u16,
+        receiver: tokio::sync::mpsc::Receiver<StreamChunk>,
+    },
+}
+
+// =============================================================================
 // FFI Bindings (shared)
 // =============================================================================
 
@@ -66,6 +89,10 @@ pub struct WorkerRequest {
     pub finish_channel: Option<Arc<FinishChannel>>,
     /// Streaming channel for SSE (PHP calls tokio_stream_flush)
     pub streaming_channel: Option<Arc<StreamingChannel>>,
+    /// True if client explicitly requested SSE (Accept: text/event-stream).
+    /// When true, streaming is enabled immediately. When false, streaming is
+    /// enabled dynamically when PHP sets Content-Type: text/event-stream.
+    pub explicit_sse: bool,
 }
 
 /// Handle to a worker thread
@@ -263,6 +290,7 @@ impl WorkerPool {
                 heartbeat_ctx: heartbeat_ctx.clone(),
                 finish_channel: Some(finish_channel.clone()),
                 streaming_channel: None, // Non-streaming request
+                explicit_sse: false,     // Not used since streaming_channel is None
             })
             .map_err(|e| match e {
                 mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
@@ -369,6 +397,7 @@ impl WorkerPool {
                 heartbeat_ctx,
                 finish_channel: None, // Streaming uses streaming_channel instead
                 streaming_channel: Some(streaming_channel),
+                explicit_sse: true, // Client explicitly requested SSE
             })
             .map_err(|e| match e {
                 mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
@@ -376,6 +405,154 @@ impl WorkerPool {
             })?;
 
         Ok(stream_rx)
+    }
+
+    /// Executes a request with automatic SSE detection.
+    ///
+    /// Similar to `execute()`, but also detects when PHP dynamically enables
+    /// SSE by setting `Content-Type: text/event-stream` header.
+    ///
+    /// Returns `ExecuteResult::Normal` for regular responses, or
+    /// `ExecuteResult::Streaming` when SSE is auto-detected.
+    pub async fn execute_with_auto_sse(&self, request: ScriptRequest) -> Result<ExecuteResult, String> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let timeout = request.timeout;
+        let profiling = request.profile;
+
+        let queued_at = Instant::now();
+
+        // Create heartbeat context
+        let heartbeat_ctx =
+            timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
+
+        // Create finish channel for streaming early response
+        let (finish_channel, mut finish_rx) = FinishChannel::new();
+        let finish_channel = Arc::new(finish_channel);
+
+        // Create streaming channel for auto-detect SSE
+        let (streaming_channel, mut stream_rx) = StreamingChannel::new(AUTO_SSE_BUFFER_SIZE);
+        let streaming_channel = Arc::new(streaming_channel);
+
+        // Send request to worker
+        self.request_tx
+            .try_send(WorkerRequest {
+                request,
+                response_tx,
+                queued_at,
+                heartbeat_ctx: heartbeat_ctx.clone(),
+                finish_channel: Some(finish_channel.clone()),
+                streaming_channel: Some(streaming_channel),
+                explicit_sse: false, // Auto-detect mode
+            })
+            .map_err(|e| match e {
+                mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
+                mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
+            })?;
+
+        // Wait for response, finish signal, or first stream chunk
+        if let Some(ctx) = heartbeat_ctx {
+            tokio::pin!(response_rx);
+
+            loop {
+                match ctx.remaining() {
+                    None => {
+                        return Err(REQUEST_TIMEOUT_ERROR.to_string());
+                    }
+                    Some(remaining) => {
+                        tokio::select! {
+                            biased;
+
+                            // First stream chunk = SSE auto-detected
+                            Some(first_chunk) = stream_rx.recv() => {
+                                // PHP enabled streaming via Content-Type header
+                                // Return streaming response with the first chunk already received
+                                // We need to create a new channel that includes the first chunk
+                                let (combined_tx, combined_rx) = tokio::sync::mpsc::channel(AUTO_SSE_BUFFER_SIZE);
+                                // Send first chunk
+                                let _ = combined_tx.try_send(first_chunk);
+                                // Spawn task to forward remaining chunks
+                                tokio::spawn(async move {
+                                    while let Some(chunk) = stream_rx.recv().await {
+                                        if combined_tx.send(chunk).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                });
+                                return Ok(ExecuteResult::Streaming {
+                                    headers: vec![
+                                        ("Content-Type".to_string(), "text/event-stream".to_string()),
+                                        ("Cache-Control".to_string(), "no-cache".to_string()),
+                                        ("Connection".to_string(), "keep-alive".to_string()),
+                                        ("X-Accel-Buffering".to_string(), "no".to_string()),
+                                    ],
+                                    status_code: 200,
+                                    receiver: combined_rx,
+                                });
+                            }
+
+                            // Early finish signal from PHP
+                            Some(finish_data) = finish_rx.recv() => {
+                                return Ok(ExecuteResult::Normal(finish_data_to_response(finish_data, profiling)));
+                            }
+
+                            // Normal completion
+                            result = &mut response_rx => {
+                                return match result {
+                                    Ok(r) => r.map(ExecuteResult::Normal),
+                                    Err(_) => Err("Worker dropped response".to_string()),
+                                };
+                            }
+
+                            // Timeout
+                            _ = tokio::time::sleep(remaining) => {
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // No timeout configured
+            tokio::select! {
+                biased;
+
+                // First stream chunk = SSE auto-detected
+                Some(first_chunk) = stream_rx.recv() => {
+                    let (combined_tx, combined_rx) = tokio::sync::mpsc::channel(AUTO_SSE_BUFFER_SIZE);
+                    let _ = combined_tx.try_send(first_chunk);
+                    tokio::spawn(async move {
+                        while let Some(chunk) = stream_rx.recv().await {
+                            if combined_tx.send(chunk).await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                    Ok(ExecuteResult::Streaming {
+                        headers: vec![
+                            ("Content-Type".to_string(), "text/event-stream".to_string()),
+                            ("Cache-Control".to_string(), "no-cache".to_string()),
+                            ("Connection".to_string(), "keep-alive".to_string()),
+                            ("X-Accel-Buffering".to_string(), "no".to_string()),
+                        ],
+                        status_code: 200,
+                        receiver: combined_rx,
+                    })
+                }
+
+                // Early finish signal from PHP
+                Some(finish_data) = finish_rx.recv() => {
+                    Ok(ExecuteResult::Normal(finish_data_to_response(finish_data, profiling)))
+                }
+
+                // Normal completion
+                result = response_rx => {
+                    match result {
+                        Ok(r) => r.map(ExecuteResult::Normal),
+                        Err(_) => Err("Worker dropped response".to_string()),
+                    }
+                }
+            }
+        }
     }
 
     /// Returns the queue capacity
@@ -844,9 +1021,10 @@ pub fn worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 heartbeat_ctx: _,
                 finish_channel: _,
                 streaming_channel: _,
+                explicit_sse: _,
             }) => {
-                // Note: heartbeat_ctx, finish_channel, and streaming_channel are ignored here -
-                // they're only used in ExtExecutor which has the tokio_sapi extension
+                // Note: heartbeat_ctx, finish_channel, streaming_channel, and explicit_sse
+                // are ignored here - they're only used in ExtExecutor with tokio_sapi extension
                 let profiling = request.profile;
 
                 // Measure queue wait time

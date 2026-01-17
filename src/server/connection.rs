@@ -342,7 +342,7 @@ use super::response::{
     FlexibleResponse, METHOD_NOT_ALLOWED_BODY,
 };
 use super::routing::{is_direct_index_access, is_php_uri, resolve_file_path};
-use crate::executor::{ScriptExecutor, DEFAULT_STREAM_BUFFER_SIZE};
+use crate::executor::{ExecuteResult, ScriptExecutor, DEFAULT_STREAM_BUFFER_SIZE};
 use crate::middleware::rate_limit::RateLimiter;
 use crate::types::{ScriptRequest, UploadedFile};
 
@@ -644,18 +644,18 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 // HEAD: return headers only, no body
                 if is_head {
                     let (parts, _) = resp.into_parts();
-                    resp = Response::from_parts(parts, Full::new(EMPTY_BODY.clone()));
+                    resp = full_to_flexible(Response::from_parts(parts, Full::new(EMPTY_BODY.clone())));
                 }
                 resp
             }
-            _ => Response::builder()
+            _ => full_to_flexible(Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .header(
                     header_names::CONTENT_TYPE.clone(),
                     header_values::TEXT_PLAIN.clone(),
                 )
                 .body(Full::new(METHOD_NOT_ALLOWED_BODY.clone()))
-                .unwrap(),
+                .unwrap()),
         };
 
         // Apply custom error page or default reason phrase for 4xx/5xx responses
@@ -675,7 +675,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             header_names::CONTENT_LENGTH.clone(),
                             error_html.len().to_string().parse().unwrap(),
                         );
-                        response = Response::from_parts(parts, Full::new(error_html.clone()));
+                        response = full_to_flexible(Response::from_parts(parts, Full::new(error_html.clone())));
                     } else {
                         // No custom page, use default reason phrase
                         let reason = status_reason_phrase(status);
@@ -688,7 +688,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             header_names::CONTENT_LENGTH.clone(),
                             reason.len().to_string().parse().unwrap(),
                         );
-                        response = Response::from_parts(parts, Full::new(Bytes::from(reason)));
+                        response = full_to_flexible(Response::from_parts(parts, Full::new(Bytes::from(reason))));
                     }
                 } else {
                     // Non-HTML client, use default reason phrase
@@ -702,7 +702,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                         header_names::CONTENT_LENGTH.clone(),
                         reason.len().to_string().parse().unwrap(),
                     );
-                    response = Response::from_parts(parts, Full::new(Bytes::from(reason)));
+                    response = full_to_flexible(Response::from_parts(parts, Full::new(Bytes::from(reason))));
                 }
             }
         }
@@ -754,7 +754,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             );
         }
 
-        Ok(full_to_flexible(response))
+        Ok(response)
     }
 
     async fn process_request(
@@ -763,7 +763,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
         trace_ctx: &TraceContext,
-    ) -> Response<Full<Bytes>> {
+    ) -> FlexibleResponse {
         // Capture request timestamp at the very start
         let request_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -791,7 +791,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         // Block direct access to index file in single entry point mode
         if is_direct_index_access(uri_path, self.index_file_name.as_ref()) {
-            return not_found_response();
+            return full_to_flexible(not_found_response());
         }
 
         // Check for profiling header
@@ -833,15 +833,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     Some(tls) => (tls.handshake_us, tls.protocol.as_str(), tls.alpn.as_str()),
                     None => (0, "", ""),
                 };
-                return stub_response_with_profile(
+                return full_to_flexible(stub_response_with_profile(
                     total_us,
                     http_version,
                     tls_handshake_us,
                     tls_protocol,
                     tls_alpn,
-                );
+                ));
             }
-            return empty_stub_response();
+            return full_to_flexible(empty_stub_response());
         }
 
         // Full processing path - extract headers before consuming body
@@ -929,14 +929,14 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             let body_bytes = match req.collect().await {
                 Ok(collected) => collected.to_bytes(),
                 Err(_) => {
-                    return Response::builder()
+                    return full_to_flexible(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .header(
                             header_names::CONTENT_TYPE.clone(),
                             header_values::TEXT_PLAIN.clone(),
                         )
                         .body(Full::new(BAD_REQUEST_BODY.clone()))
-                        .unwrap();
+                        .unwrap());
                 }
             };
             if profiling_enabled {
@@ -954,7 +954,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 match parse_multipart(&content_type_str, body_bytes).await {
                     Ok((params, uploaded_files)) => (params, uploaded_files),
                     Err(e) => {
-                        return Response::builder()
+                        return full_to_flexible(Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .header(
                                 header_names::CONTENT_TYPE.clone(),
@@ -964,7 +964,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                                 "Failed to parse multipart form: {}",
                                 e
                             ))))
-                            .unwrap();
+                            .unwrap());
                     }
                 }
             } else {
@@ -993,7 +993,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Check if file exists (sync - fast for stat syscall)
         let file_check_start = Instant::now();
         if !self.skip_file_check && !file_path.exists() {
-            return not_found_response();
+            return full_to_flexible(not_found_response());
         }
         if profiling_enabled {
             file_check_us = file_check_start.elapsed().as_micros() as u64;
@@ -1213,10 +1213,12 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
             // Track pending requests for metrics (guard ensures cleanup on cancel)
             let _pending_guard = RequestMetrics::pending_guard(&self.request_metrics);
-            let execute_result = self.executor.execute(script_request).await;
+
+            // Use execute_with_auto_sse for automatic SSE detection based on Content-Type header
+            let execute_result = self.executor.execute_with_auto_sse(script_request).await;
 
             let response = match execute_result {
-                Ok(mut resp) => {
+                Ok(ExecuteResult::Normal(mut resp)) => {
                     // Add parse breakdown to profile data if profiling
                     if profiling_enabled {
                         if let Some(ref mut profile) = resp.profile {
@@ -1238,24 +1240,33 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             profile.file_check_us = file_check_us;
                         }
                     }
-                    from_script_response(resp, profiling_enabled, use_brotli)
+                    full_to_flexible(from_script_response(resp, profiling_enabled, use_brotli))
+                }
+                Ok(ExecuteResult::Streaming { headers, status_code, receiver }) => {
+                    // PHP enabled SSE via Content-Type: text/event-stream header
+                    // Track SSE connection
+                    self.request_metrics.sse_connection_started();
+
+                    // Build streaming response with auto-detected SSE headers
+                    let response = streaming_response(status_code, headers, receiver);
+                    streaming_to_flexible(response)
                 }
                 Err(e) => {
                     if e.is_timeout() {
                         // Request timed out
                         warn!("Request timeout: {}", uri_path);
-                        Response::builder()
+                        full_to_flexible(Response::builder()
                             .status(StatusCode::GATEWAY_TIMEOUT)
                             .header(
                                 header_names::CONTENT_TYPE.clone(),
                                 header_values::TEXT_PLAIN.clone(),
                             )
                             .body(Full::new(Bytes::from_static(b"504 Gateway Timeout")))
-                            .unwrap()
+                            .unwrap())
                     } else if e.is_queue_full() {
                         // Queue is full - server overloaded
                         self.request_metrics.inc_dropped();
-                        Response::builder()
+                        full_to_flexible(Response::builder()
                             .status(StatusCode::SERVICE_UNAVAILABLE)
                             .header(
                                 header_names::CONTENT_TYPE.clone(),
@@ -1268,10 +1279,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             .body(Full::new(Bytes::from_static(
                                 b"503 Service Unavailable - Server overloaded",
                             )))
-                            .unwrap()
+                            .unwrap())
                     } else {
                         error!("Script execution error: {}", e);
-                        Response::builder()
+                        full_to_flexible(Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
                             .header(
                                 header_names::CONTENT_TYPE.clone(),
@@ -1281,7 +1292,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                                 "<h1>500 Internal Server Error</h1><pre>{}</pre>",
                                 e
                             ))))
-                            .unwrap()
+                            .unwrap())
                     }
                 }
             };
@@ -1293,14 +1304,14 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
             response
         } else {
-            serve_static_file(
+            full_to_flexible(serve_static_file(
                 file_path,
                 use_brotli,
                 &self.static_cache_ttl,
                 if_none_match.as_deref(),
                 if_modified_since.as_deref(),
             )
-            .await
+            .await)
         }
     }
 

@@ -91,6 +91,8 @@ extern "C" {
 
     // Streaming (SSE support)
     fn tokio_bridge_enable_streaming(ctx: *mut c_void, callback: StreamChunkCallback);
+    fn tokio_bridge_set_stream_callback(ctx: *mut c_void, callback: StreamChunkCallback);
+    fn tokio_bridge_try_enable_streaming() -> c_int;
     fn tokio_bridge_is_streaming() -> c_int;
     fn tokio_bridge_send_chunk(data: *const c_char, data_len: usize) -> c_int;
     fn tokio_bridge_get_stream_offset() -> usize;
@@ -188,6 +190,29 @@ pub unsafe fn set_finish_callback(ctx: *mut c_void, callback: FinishCallback) {
 #[inline]
 pub unsafe fn enable_streaming(ctx: *mut c_void, callback: StreamChunkCallback) {
     tokio_bridge_enable_streaming(ctx, callback);
+}
+
+/// Set streaming callback without enabling streaming mode.
+///
+/// This is used for all PHP requests to allow automatic SSE detection
+/// via Content-Type header. Streaming is enabled later when PHP sets
+/// `Content-Type: text/event-stream`.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer to a `StreamingChannel` created via `Arc::as_ptr`.
+#[inline]
+pub unsafe fn set_stream_callback(ctx: *mut c_void, callback: StreamChunkCallback) {
+    tokio_bridge_set_stream_callback(ctx, callback);
+}
+
+/// Try to enable streaming mode if callback is configured.
+///
+/// Returns `true` if streaming was enabled, `false` if no callback configured.
+/// This is called from the header handler when Content-Type: text/event-stream is detected.
+#[inline]
+pub fn try_enable_streaming() -> bool {
+    unsafe { tokio_bridge_try_enable_streaming() != 0 }
 }
 
 /// Check if streaming mode is enabled.

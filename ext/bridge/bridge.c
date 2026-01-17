@@ -341,6 +341,37 @@ void tokio_bridge_enable_streaming(void *ctx, tokio_stream_chunk_callback_t call
     tls_ctx->stream_callback = callback;
 }
 
+void tokio_bridge_set_stream_callback(void *ctx, tokio_stream_chunk_callback_t callback)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    /* Set callback without enabling streaming - streaming is enabled later
+     * when PHP sets Content-Type: text/event-stream header */
+    tls_ctx->stream_ctx = ctx;
+    tls_ctx->stream_callback = callback;
+    tls_ctx->stream_offset = 0;
+    /* Note: is_streaming remains 0 until try_enable_streaming is called */
+}
+
+int tokio_bridge_try_enable_streaming(void)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+    /* Already streaming */
+    if (tls_ctx->is_streaming) {
+        return 1;
+    }
+    /* No callback configured - can't enable streaming */
+    if (tls_ctx->stream_callback == NULL) {
+        return 0;
+    }
+    /* Enable streaming */
+    tls_ctx->is_streaming = 1;
+    return 1;
+}
+
 int tokio_bridge_is_streaming(void)
 {
     if (tls_ctx == NULL) {

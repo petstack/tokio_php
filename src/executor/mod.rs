@@ -79,6 +79,9 @@ pub use common::QUEUE_FULL_ERROR;
 #[cfg(feature = "php")]
 pub use common::REQUEST_TIMEOUT_ERROR;
 
+#[cfg(feature = "php")]
+pub use common::ExecuteResult;
+
 use crate::server::response::StreamChunk;
 use crate::types::{ScriptRequest, ScriptResponse};
 
@@ -184,5 +187,24 @@ pub trait ScriptExecutor: Send + Sync {
         _buffer_size: usize,
     ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, ExecutorError> {
         Err(ExecutorError::from("Streaming not supported by this executor"))
+    }
+
+    /// Executes a request with automatic SSE detection.
+    ///
+    /// Similar to `execute()`, but also detects when PHP dynamically enables
+    /// SSE by setting `Content-Type: text/event-stream` header.
+    ///
+    /// Returns `ExecuteResult::Normal` for regular responses, or
+    /// `ExecuteResult::Streaming` when SSE is auto-detected.
+    ///
+    /// Default implementation just calls `execute()` and wraps in `Normal`.
+    #[cfg(feature = "php")]
+    async fn execute_with_auto_sse(
+        &self,
+        request: ScriptRequest,
+    ) -> Result<ExecuteResult, ExecutorError> {
+        self.execute(request)
+            .await
+            .map(ExecuteResult::Normal)
     }
 }

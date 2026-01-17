@@ -4,13 +4,22 @@ Server-Sent Events (SSE) support for real-time data streaming from PHP to client
 
 ## Overview
 
-tokio_php supports SSE streaming with standard PHP `flush()` - no custom functions required. When a client requests with `Accept: text/event-stream`, the server automatically enables streaming mode.
+tokio_php supports SSE streaming with standard PHP `flush()` - no custom functions required. Streaming mode is enabled through two methods:
+
+1. **Explicit (client-driven)**: Client sends `Accept: text/event-stream` header
+2. **Auto-detect (server-driven)**: PHP sets `header('Content-Type: text/event-stream')`
+
+Both methods work transparently with the same PHP code.
 
 ## Quick Start
 
 ```php
 <?php
 // test_sse.php
+header('Content-Type: text/event-stream');  // Enables streaming (auto-detect)
+header('Cache-Control: no-cache');
+header('Connection: keep-alive');
+
 while ($hasData) {
     $event = json_encode(['time' => date('H:i:s'), 'data' => getData()]);
     echo "data: $event\n\n";
@@ -20,17 +29,31 @@ while ($hasData) {
 ```
 
 ```bash
-# Test with curl
+# Test with curl (auto-detect via Content-Type)
+curl -N http://localhost:8080/test_sse.php
+
+# Or with explicit Accept header
 curl -N -H "Accept: text/event-stream" http://localhost:8080/test_sse.php
 
-# Or in JavaScript
+# JavaScript EventSource (sends Accept header automatically)
 const source = new EventSource('/test_sse.php');
 source.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
 ## How It Works
 
-### Request Flow
+### Detection Methods
+
+| Method | Trigger | Use Case |
+|--------|---------|----------|
+| **Explicit** | `Accept: text/event-stream` header | EventSource API, SSE clients |
+| **Auto-detect** | `header('Content-Type: text/event-stream')` in PHP | Any client, curl, custom scripts |
+
+**Explicit mode**: Server detects `Accept` header before PHP execution and pre-enables streaming.
+
+**Auto-detect mode**: Server prepares a callback, then PHP's `header()` call triggers streaming when Content-Type matches.
+
+### Request Flow (Explicit Mode)
 
 ```
 Client                     Server                       PHP Worker
@@ -70,27 +93,82 @@ Client                     Server                       PHP Worker
   │ ◄─────────────────────────                               │
 ```
 
+### Request Flow (Auto-detect Mode)
+
+```
+Client                     Server                       PHP Worker
+  │                          │                               │
+  │  GET /sse.php            │                               │
+  │  (no Accept header)      │                               │
+  │ ─────────────────────────►                               │
+  │                          │                               │
+  │                          │  1. Normal request handling   │
+  │                          │  2. Set stream callback       │
+  │                          │     (not enabled yet)         │
+  │                          │ ──────────────────────────────►
+  │                          │                               │
+  │                          │     header('Content-Type:     │
+  │                          │     text/event-stream');      │
+  │                          │                               │
+  │                          │  3. SAPI header_handler:      │
+  │                          │     - Detect Content-Type     │
+  │                          │     - try_enable_streaming()  │
+  │                          │     - Streaming NOW enabled   │
+  │                          │ ◄──────────────────────────────
+  │                          │                               │
+  │  HTTP 200                │                               │
+  │  Content-Type:           │                               │
+  │  text/event-stream       │                               │
+  │ ◄─────────────────────────                               │
+  │                          │                               │
+  │                          │     echo "data: ...\n\n";     │
+  │                          │     flush();                  │
+  │                          │                               │
+  │                          │  4. SAPI flush handler:       │
+  │                          │     - Send via callback       │
+  │                          │ ◄──────────────────────────────
+  │                          │                               │
+  │  data: ...               │                               │
+  │ ◄─────────────────────────                               │
+  │                          │                               │
+  │      ... repeat for each flush() ...                     │
+  │                          │                               │
+  │                          │  5. Script ends               │
+  │                          │     end_stream()              │
+  │  (connection closes)     │ ◄──────────────────────────────
+  │ ◄─────────────────────────                               │
+```
+
 ### Components
 
 1. **SSE Detection** (`server/connection.rs`)
-   - Checks `Accept: text/event-stream` header
-   - Routes to `handle_sse_request()` handler
+   - Checks `Accept: text/event-stream` header for explicit mode
+   - Uses `execute_with_auto_sse()` for auto-detect mode
+   - Returns `ExecuteResult::Normal` or `ExecuteResult::Streaming`
 
 2. **Streaming Channel** (`bridge.rs`)
    - `StreamingChannel` wraps `mpsc::channel<StreamChunk>`
    - Callback sends chunks from PHP worker to async response
 
 3. **Bridge TLS Context** (`ext/bridge/bridge.c`)
-   - `tokio_bridge_enable_streaming()` - enables streaming mode
+   - `tokio_bridge_enable_streaming()` - enables streaming immediately (explicit mode)
+   - `tokio_bridge_set_stream_callback()` - sets callback without enabling (auto-detect)
+   - `tokio_bridge_try_enable_streaming()` - enables if callback configured (called by SAPI)
    - `tokio_bridge_send_chunk()` - sends data via callback
    - `tokio_bridge_end_stream()` - cleanup on completion
 
-4. **SAPI Flush Handler** (`ext/tokio_sapi.c`)
+4. **SAPI Header Handler** (`executor/sapi.rs`)
+   - Registered as `sapi_module.header_handler`
+   - Intercepts PHP `header()` calls
+   - Detects `Content-Type: text/event-stream`
+   - Calls `try_enable_streaming()` to activate streaming mode
+
+5. **SAPI Flush Handler** (`ext/tokio_sapi.c`)
    - Registered as `sapi_module.flush`
    - Intercepts PHP `flush()` calls
    - Flushes output buffers → reads from memfd → sends chunk
 
-5. **Streaming Response** (`server/response/streaming.rs`)
+6. **Streaming Response** (`server/response/streaming.rs`)
    - `ChunkFrameStream` converts channel to HTTP frames
    - `StreamBody` wraps stream for Hyper
 
@@ -148,6 +226,10 @@ flush();
 
 ```php
 <?php
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+header('Connection: keep-alive');
+
 $count = 0;
 while ($count < 10) {
     $count++;
@@ -161,6 +243,10 @@ while ($count < 10) {
 
 ```php
 <?php
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+header('Connection: keep-alive');
+
 while (true) {
     $notifications = getNewNotifications();
 
@@ -184,6 +270,10 @@ while (true) {
 
 ```php
 <?php
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+header('Connection: keep-alive');
+
 $total = count($items);
 $processed = 0;
 
@@ -247,6 +337,10 @@ For streams that run longer than `REQUEST_TIMEOUT`, use heartbeat:
 
 ```php
 <?php
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+header('Connection: keep-alive');
+
 while ($streaming) {
     echo "data: " . json_encode($data) . "\n\n";
     flush();
@@ -275,9 +369,10 @@ SSE responses are **not compressed** by default:
 
 ### Chunks arrive all at once
 
-Ensure you call `flush()` after each message:
+Ensure you set the Content-Type header and call `flush()` after each message:
 
 ```php
+header('Content-Type: text/event-stream');  // Required for auto-detect!
 echo "data: message\n\n";
 flush();  // Required!
 ```

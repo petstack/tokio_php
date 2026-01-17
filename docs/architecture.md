@@ -219,51 +219,51 @@ Client Request
                            ▼
 ┌─────────────────────────────────────────────────────┐
 │                     Routing                         │
-│  - Static file? → serve directly (with caching)    │
-│  - PHP script? → queue to worker                   │
-│  - INDEX_FILE mode? → route all to index.php       │
-│  - Not found? → 404                                │
+│  - Static file? → serve directly (with caching)     │
+│  - PHP script? → queue to worker                    │
+│  - INDEX_FILE mode? → route all to index.php        │
+│  - Not found? → 404                                 │
 └──────────────────────────┬──────────────────────────┘
                            │ PHP
                            ▼
 ┌─────────────────────────────────────────────────────┐
 │                   Worker Queue                      │
-│  - try_send() to bounded channel                   │
-│  - Queue full? → 503 Service Unavailable           │
-│  - HeartbeatContext for timeout extension          │
+│  - try_send() to bounded channel                    │
+│  - Queue full? → 503 Service Unavailable            │
+│  - HeartbeatContext for timeout extension           │
 └──────────────────────────┬──────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────┐
 │                    PHP Worker                       │
-│  1. php_request_startup()                          │
-│  2. Init bridge context (request_id, worker_id)   │
-│  3. Set superglobals (FFI or eval)                 │
-│  4. Set $_SERVER[TRACE_ID], $_SERVER[SPAN_ID]      │
-│  5. Execute script                                 │
-│     - tokio_finish_request() → response sent      │
-│     - tokio_request_heartbeat() → extend timeout  │
-│  6. php_request_shutdown()                         │
-│  7. Finalize: check bridge finish state           │
-│  8. Destroy bridge context                        │
+│  1. php_request_startup()                           │
+│  2. Init bridge context (request_id, worker_id)     │
+│  3. Set superglobals (FFI or eval)                  │
+│  4. Set $_SERVER[TRACE_ID], $_SERVER[SPAN_ID]       │
+│  5. Execute script                                  │
+│     - tokio_finish_request() → response sent        │
+│     - tokio_request_heartbeat() → extend timeout    │
+│  6. php_request_shutdown()                          │
+│  7. Finalize: check bridge finish state             │
+│  8. Destroy bridge context                          │
 └──────────────────────────┬──────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────┐
 │             Middleware Chain (Response)             │
-│  - Custom error pages (4xx/5xx)                    │
-│  - Static file caching headers                     │
-│  - Brotli compression                              │
-│  - Access log complete                             │
+│  - Custom error pages (4xx/5xx)                     │
+│  - Static file caching headers                      │
+│  - Brotli compression                               │
+│  - Access log complete                              │
 └──────────────────────────┬──────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────┐
 │                 Response Building                   │
-│  - Parse PHP headers (Status, Location)            │
-│  - Add X-Request-ID, traceparent                   │
-│  - Add profiling headers (if enabled)              │
-│  - Set Content-Type, Content-Length                │
+│  - Parse PHP headers (Status, Location)             │
+│  - Add X-Request-ID, traceparent                    │
+│  - Add profiling headers (if enabled)               │
+│  - Set Content-Type, Content-Length                 │
 └──────────────────────────┬──────────────────────────┘
                            │
                            ▼
@@ -380,35 +380,50 @@ traceparent: 00-{trace_id}-{parent_span}-01     traceparent: 00-{trace_id}-{new_
 
 ## SSE Streaming
 
-Server-Sent Events (SSE) support allows PHP scripts to stream data to clients in real-time:
+Server-Sent Events (SSE) support allows PHP scripts to stream data to clients in real-time.
+
+### Detection Methods
+
+SSE streaming is enabled automatically in two ways:
+
+1. **Client Accept header** (explicit): `Accept: text/event-stream`
+2. **PHP Content-Type header** (auto-detect): `header('Content-Type: text/event-stream')`
+
+The auto-detect method allows PHP scripts to enable SSE without requiring special client headers.
+
+### Request Flow
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         SSE Request Flow                              │
+│                    SSE Request Flow (Auto-Detect)                    │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  Client                    Server                      PHP Worker    │
 │    │                         │                              │        │
 │    │  GET /sse.php           │                              │        │
-│    │  Accept: text/event-    │                              │        │
-│    │  stream                 │                              │        │
 │    │ ───────────────────────►│                              │        │
 │    │                         │                              │        │
 │    │                         │  Create StreamingChannel     │        │
-│    │                         │  enable_streaming(ctx, cb)   │        │
+│    │                         │  set_stream_callback(ctx,cb) │        │
 │    │                         │ ────────────────────────────►│        │
 │    │                         │                              │        │
-│    │  HTTP 200               │                              │        │
-│    │  Content-Type:          │                              │        │
+│    │                         │  header('Content-Type:       │        │
+│    │                         │  text/event-stream');        │        │
+│    │                         │                              │        │
+│    │                         │  SAPI header_handler detects │        │
+│    │                         │  → try_enable_streaming()    │        │
+│    │                         │ ◄────────────────────────────│        │
+│    │                         │                              │        │
+│    │  HTTP 200               │  First chunk detected        │        │
+│    │  Content-Type:          │  → switch to streaming mode  │        │
 │    │  text/event-stream      │                              │        │
 │    │ ◄───────────────────────│                              │        │
 │    │                         │                              │        │
-│    │                         │          echo "data: ...\n\n";       │
-│    │                         │          flush();            │        │
+│    │                         │     echo "data: ...\n\n";    │        │
+│    │                         │     flush();                 │        │
 │    │                         │                              │        │
 │    │                         │  SAPI flush handler:         │        │
 │    │                         │  - Flush PHP output buffers  │        │
-│    │                         │  - Read new output from memfd│        │
 │    │                         │  - send_chunk(data)          │        │
 │    │                         │ ◄────────────────────────────│        │
 │    │  data: ...              │                              │        │
@@ -427,23 +442,33 @@ Server-Sent Events (SSE) support allows PHP scripts to stream data to clients in
 
 ### How It Works
 
-1. **Detection**: Server detects SSE request via `Accept: text/event-stream` header
-2. **Channel**: Creates `mpsc::channel` for streaming chunks
-3. **Bridge Setup**: Calls `bridge::enable_streaming()` with callback
-4. **Response**: Returns HTTP 200 with streaming body immediately
-5. **PHP flush()**: SAPI flush handler intercepts `flush()` calls:
-   - Flushes PHP output buffers to memfd
-   - Reads new data since last offset
-   - Sends chunk via bridge callback
-   - Callback pushes to mpsc channel
-6. **Streaming**: Hyper polls channel and sends frames to client
-7. **Cleanup**: `bridge::end_stream()` called when script ends
+**Explicit SSE (Accept header):**
+1. Server detects `Accept: text/event-stream` header
+2. Calls `bridge::enable_streaming()` immediately
+3. Returns streaming response
+
+**Auto-detect SSE (Content-Type header):**
+1. Server creates streaming channel for ALL PHP requests
+2. Calls `bridge::set_stream_callback()` (callback set but streaming not enabled)
+3. PHP script calls `header('Content-Type: text/event-stream')`
+4. SAPI `header_handler` detects Content-Type and calls `try_enable_streaming()`
+5. First `flush()` sends first chunk via callback
+6. Server detects first chunk → switches to streaming response mode
+
+**Common flow after streaming enabled:**
+1. PHP calls `flush()` → SAPI flush handler sends chunks via callback
+2. Callback pushes to `mpsc::channel`
+3. Hyper polls channel and sends frames to client
+4. `bridge::end_stream()` called when script ends
 
 ### Usage in PHP
 
 ```php
 <?php
-// Headers set automatically for SSE requests
+// Auto-detect mode: just set header
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+
 while ($hasData) {
     $event = json_encode(['time' => date('H:i:s')]);
     echo "data: $event\n\n";
@@ -455,7 +480,7 @@ while ($hasData) {
 Key points:
 - Standard `flush()` works via SAPI flush handler
 - No custom functions needed
-- Headers (`Content-Type: text/event-stream`) set automatically
+- Works without special client headers (auto-detect via Content-Type)
 - Works with EventSource API in browsers
 
 ## Memory Model

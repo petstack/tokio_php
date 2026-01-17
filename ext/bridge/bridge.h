@@ -316,6 +316,24 @@ void tokio_bridge_clear_headers(void);
 void tokio_bridge_enable_streaming(void *ctx, tokio_stream_chunk_callback_t callback);
 
 /**
+ * Set streaming callback without enabling streaming mode.
+ * Called from Rust for all PHP requests to allow Content-Type based streaming detection.
+ * Streaming is enabled later via tokio_bridge_try_enable_streaming().
+ *
+ * @param ctx      Opaque pointer to Rust channel sender
+ * @param callback Function to call for each chunk
+ */
+void tokio_bridge_set_stream_callback(void *ctx, tokio_stream_chunk_callback_t callback);
+
+/**
+ * Try to enable streaming mode if callback is configured.
+ * Called when PHP sets Content-Type: text/event-stream header.
+ *
+ * @return 1 if streaming was enabled, 0 if no callback configured
+ */
+int tokio_bridge_try_enable_streaming(void);
+
+/**
  * Check if streaming mode is enabled.
  *
  * @return 1 if streaming, 0 otherwise

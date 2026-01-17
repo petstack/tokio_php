@@ -152,6 +152,11 @@ extern "C" {
         replace: c_int,
     ) -> c_int;
     fn tokio_bridge_clear_headers();
+
+    /// Try to enable streaming mode if callback is configured.
+    /// Called when PHP sets Content-Type: text/event-stream header.
+    /// Returns 1 if streaming was enabled, 0 if no callback configured.
+    fn tokio_bridge_try_enable_streaming() -> c_int;
 }
 
 // tokio_sapi extension FFI - for SAPI flush handler
@@ -255,6 +260,14 @@ unsafe extern "C" fn custom_header_handler(
                             value.len(),
                             replace,
                         );
+
+                        // Detect Content-Type: text/event-stream and enable streaming
+                        // This allows SSE without requiring Accept header from client
+                        if name.eq_ignore_ascii_case("content-type")
+                            && value.to_lowercase().contains("text/event-stream")
+                        {
+                            tokio_bridge_try_enable_streaming();
+                        }
                     }
                 }
             }
