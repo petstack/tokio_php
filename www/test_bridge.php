@@ -10,7 +10,6 @@ echo "=== Bridge Communication Test ===\n\n";
 echo "1. Function availability:\n";
 echo "   - tokio_finish_request: " . (function_exists('tokio_finish_request') ? 'yes' : 'no') . "\n";
 echo "   - tokio_request_heartbeat: " . (function_exists('tokio_request_heartbeat') ? 'yes' : 'no') . "\n";
-echo "   - tokio_early_hints: " . (function_exists('tokio_early_hints') ? 'yes' : 'no') . "\n";
 echo "\n";
 
 // Test 2: Request ID and worker ID
@@ -32,13 +31,6 @@ echo "4. Heartbeat test:\n";
 $heartbeat_result = tokio_request_heartbeat(10);
 echo "   - tokio_request_heartbeat(10): " . ($heartbeat_result ? 'true' : 'false') . "\n";
 echo "   (Returns false if no timeout configured or exceeds limit)\n";
-echo "\n";
-
-// Test 5: Early hints (infrastructure ready, full support pending)
-echo "5. Early hints test:\n";
-$hints_result = tokio_early_hints(['Link: </test.css>; rel=preload']);
-echo "   - tokio_early_hints(): " . ($hints_result ? 'true' : 'false') . "\n";
-echo "   (Returns false - full streaming support pending)\n";
 echo "\n";
 
 echo "=== Test Complete ===\n";

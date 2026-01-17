@@ -65,41 +65,6 @@ void tokio_bridge_destroy_ctx(void)
 }
 
 /* ============================================================================
- * Early Hints API
- * ============================================================================ */
-
-void tokio_bridge_set_hints_callback(void *ctx, tokio_early_hints_callback_t callback)
-{
-    if (tls_ctx == NULL) {
-        return;
-    }
-    tls_ctx->hints_ctx = ctx;
-    tls_ctx->hints_callback = callback;
-}
-
-int tokio_bridge_send_early_hints(const char **headers, size_t count)
-{
-    if (tls_ctx == NULL) {
-        return 0;
-    }
-    if (tls_ctx->hints_callback == NULL) {
-        return 0;
-    }
-    if (headers == NULL || count == 0) {
-        return 0;
-    }
-
-    /* Limit count to prevent abuse */
-    if (count > TOKIO_BRIDGE_MAX_EARLY_HINTS) {
-        count = TOKIO_BRIDGE_MAX_EARLY_HINTS;
-    }
-
-    /* Call the Rust callback */
-    tls_ctx->hints_callback(tls_ctx->hints_ctx, headers, count);
-    return 1;
-}
-
-/* ============================================================================
  * Finish Request API
  * ============================================================================ */
 

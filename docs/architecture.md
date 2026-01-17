@@ -437,7 +437,7 @@ The bridge (`libtokio_bridge.so`) solves TLS (Thread-Local Storage) isolation be
 │                                                                 │
 │  - bridge::init_ctx()              - tokio_finish_request()     │
 │  - bridge::set_heartbeat()         - tokio_request_heartbeat()  │
-│  - bridge::get_finish_info()       - tokio_early_hints()        │
+│  - bridge::get_finish_info()                                    │
 │  - bridge::destroy_ctx()                                        │
 └─────────────────────────────────────────────────────────────────┘
 ```

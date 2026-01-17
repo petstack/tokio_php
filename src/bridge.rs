@@ -7,7 +7,6 @@
 //! # Features
 //!
 //! - Shared TLS context accessible from both Rust and PHP
-//! - Early Hints (HTTP 103) callback mechanism
 //! - Finish request state (fastcgi_finish_request analog)
 //! - Heartbeat for request timeout extension
 //!
@@ -21,7 +20,6 @@
 //!
 //! // Set callbacks before PHP execution (unsafe - raw pointers)
 //! unsafe {
-//!     bridge::set_hints_callback(channel_ptr, hints_callback);
 //!     bridge::set_heartbeat(heartbeat_ctx, max_secs, heartbeat_callback);
 //! }
 //!
@@ -47,10 +45,6 @@ use tokio::sync::mpsc;
 // FFI Bindings
 // =============================================================================
 
-/// Callback type for sending Early Hints.
-pub type EarlyHintsCallback =
-    extern "C" fn(ctx: *mut c_void, headers: *const *const c_char, count: usize);
-
 /// Callback type for heartbeat (request timeout extension).
 pub type HeartbeatCallback = extern "C" fn(ctx: *mut c_void, secs: u64) -> i64;
 
@@ -73,9 +67,6 @@ extern "C" {
     fn tokio_bridge_init_ctx(request_id: u64, worker_id: u64);
     fn tokio_bridge_destroy_ctx();
     fn tokio_bridge_get_ctx() -> *mut c_void;
-
-    // Early Hints
-    fn tokio_bridge_set_hints_callback(ctx: *mut c_void, callback: EarlyHintsCallback);
 
     // Finish request
     fn tokio_bridge_is_finished() -> c_int;
@@ -118,18 +109,6 @@ pub fn destroy_ctx() {
 #[inline]
 pub fn has_ctx() -> bool {
     unsafe { !tokio_bridge_get_ctx().is_null() }
-}
-
-/// Set the Early Hints callback.
-///
-/// The callback will be invoked when PHP calls `tokio_early_hints()`.
-///
-/// # Safety
-///
-/// `ctx` must be a valid pointer to an `EarlyHintsChannel` created via `Arc::as_ptr`.
-#[inline]
-pub unsafe fn set_hints_callback(ctx: *mut c_void, callback: EarlyHintsCallback) {
-    tokio_bridge_set_hints_callback(ctx, callback);
 }
 
 /// Check if `tokio_finish_request()` was called.
@@ -180,75 +159,6 @@ pub unsafe fn set_heartbeat(ctx: *mut c_void, max_secs: u64, callback: Heartbeat
 #[inline]
 pub unsafe fn set_finish_callback(ctx: *mut c_void, callback: FinishCallback) {
     tokio_bridge_set_finish_callback(ctx, callback);
-}
-
-// =============================================================================
-// Early Hints Channel
-// =============================================================================
-
-/// Channel for sending Early Hints from PHP to the HTTP handler.
-///
-/// This struct wraps an unbounded channel sender and provides the callback
-/// that the bridge library invokes when PHP calls `tokio_early_hints()`.
-pub struct EarlyHintsChannel {
-    tx: mpsc::UnboundedSender<Vec<String>>,
-}
-
-impl EarlyHintsChannel {
-    /// Create a new Early Hints channel.
-    pub fn new() -> (Self, mpsc::UnboundedReceiver<Vec<String>>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        (Self { tx }, rx)
-    }
-
-    /// Get a raw pointer to this channel for passing to FFI.
-    pub fn as_ptr(self: &Arc<Self>) -> *mut c_void {
-        Arc::as_ptr(self) as *mut c_void
-    }
-
-    /// The FFI callback function that the bridge library invokes.
-    ///
-    /// This function is called from C when PHP calls `tokio_early_hints()`.
-    /// It converts the C string array to Rust strings and sends them through the channel.
-    ///
-    /// # Safety
-    ///
-    /// This is an FFI callback. The caller (C code) must ensure:
-    /// - `ctx` is a valid pointer from `Arc::as_ptr`
-    /// - `headers` points to `count` valid C strings
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn callback(ctx: *mut c_void, headers: *const *const c_char, count: usize) {
-        if ctx.is_null() || headers.is_null() || count == 0 {
-            return;
-        }
-
-        // SAFETY: ctx was created from Arc::as_ptr and is still valid
-        let channel = unsafe { &*(ctx as *const EarlyHintsChannel) };
-
-        // Convert C strings to Rust strings
-        let hints: Vec<String> = (0..count)
-            .filter_map(|i| unsafe {
-                let ptr = *headers.add(i);
-                if ptr.is_null() {
-                    return None;
-                }
-                std::ffi::CStr::from_ptr(ptr)
-                    .to_str()
-                    .ok()
-                    .map(String::from)
-            })
-            .collect();
-
-        if !hints.is_empty() {
-            let _ = channel.tx.send(hints);
-        }
-    }
-}
-
-impl Default for EarlyHintsChannel {
-    fn default() -> Self {
-        Self::new().0
-    }
 }
 
 // =============================================================================
@@ -426,14 +336,6 @@ pub fn get_finish_info() -> Option<FinishRequestInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_early_hints_channel_creation() {
-        let (channel, _rx) = EarlyHintsChannel::new();
-        let arc = Arc::new(channel);
-        let ptr = arc.as_ptr();
-        assert!(!ptr.is_null());
-    }
 
     #[test]
     fn test_finish_channel_creation() {

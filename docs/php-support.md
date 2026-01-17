@@ -338,7 +338,6 @@ Custom extension providing:
 - `tokio_server_info()` — server configuration including build version with git hash
 - `tokio_request_heartbeat(int $time = 10)` — extend request timeout
 - `tokio_finish_request()` — send response immediately, continue script in background
-- `tokio_early_hints(array $headers)` — send HTTP 103 Early Hints (infrastructure ready)
 - `$_SERVER['TOKIO_SERVER_BUILD_VERSION']` — build version string (e.g., `"0.1.0 (abc12345)"`)
 
 See [tokio_sapi Extension](tokio-sapi-extension.md) for details.

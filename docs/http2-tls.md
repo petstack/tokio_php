@@ -177,11 +177,10 @@ TLS handshake is a one-time cost per connection. With keep-alive connections, su
 ## Limitations
 
 - **HTTP/3 (QUIC)**: Not yet implemented ([h3 crate is experimental](https://github.com/hyperium/h3))
-- **HTTP 103 Early Hints**: Infrastructure ready via bridge (`tokio_early_hints()` PHP function exists), but full streaming support pending server handler changes. See [tokio_sapi Extension](tokio-sapi-extension.md#tokio_early_hints) for current status.
+- **HTTP 103 Early Hints**: Not yet supported (waiting for [hyper support](https://github.com/hyperium/hyper/issues/2426))
 
 ## See Also
 
 - [Configuration](configuration.md) - TLS_CERT and TLS_KEY environment variables
 - [Profiling](profiling.md) - TLS handshake timing metrics
 - [Architecture](architecture.md) - Protocol detection implementation
-- [tokio_sapi Extension](tokio-sapi-extension.md) - Early Hints PHP function

@@ -7,7 +7,6 @@
  *
  * Features:
  * - Shared request context accessible from both Rust and PHP
- * - Early Hints (HTTP 103) support via callback mechanism
  * - Finish request state (fastcgi_finish_request analog)
  * - Heartbeat for request timeout extension
  */
@@ -27,27 +26,12 @@ extern "C" {
  * ============================================================================ */
 
 #define TOKIO_BRIDGE_VERSION "0.1.0"
-#define TOKIO_BRIDGE_MAX_EARLY_HINTS 16
-#define TOKIO_BRIDGE_MAX_HINT_LEN 512
 #define TOKIO_BRIDGE_MAX_HEADERS 128
 #define TOKIO_BRIDGE_MAX_HEADER_LEN 8192
 
 /* ============================================================================
  * Callback types
  * ============================================================================ */
-
-/**
- * Callback for sending Early Hints (HTTP 103)
- *
- * @param ctx     Opaque context pointer (Rust channel sender)
- * @param headers Array of header strings (e.g., "Link: </style.css>; rel=preload")
- * @param count   Number of headers in the array
- */
-typedef void (*tokio_early_hints_callback_t)(
-    void *ctx,
-    const char **headers,
-    size_t count
-);
 
 /**
  * Callback for heartbeat (request timeout extension)
@@ -112,10 +96,6 @@ typedef struct tokio_bridge_ctx {
     tokio_bridge_header_t headers[TOKIO_BRIDGE_MAX_HEADERS];
     int header_count;
 
-    /* Early Hints callback and context */
-    void *hints_ctx;
-    tokio_early_hints_callback_t hints_callback;
-
     /* Heartbeat callback and limits */
     void *heartbeat_ctx;
     uint64_t heartbeat_max_secs;
@@ -151,29 +131,6 @@ void tokio_bridge_init_ctx(uint64_t request_id, uint64_t worker_id);
  * Should be called after PHP execution completes.
  */
 void tokio_bridge_destroy_ctx(void);
-
-/* ============================================================================
- * Early Hints API
- * ============================================================================ */
-
-/**
- * Set the Early Hints callback and context.
- * Called from Rust before PHP execution to enable early hints.
- *
- * @param ctx      Opaque pointer to Rust channel sender (will be passed to callback)
- * @param callback Function to call when PHP sends early hints
- */
-void tokio_bridge_set_hints_callback(void *ctx, tokio_early_hints_callback_t callback);
-
-/**
- * Send Early Hints from PHP to client.
- * Called from PHP's tokio_early_hints() function.
- *
- * @param headers Array of header strings
- * @param count   Number of headers
- * @return        1 on success, 0 if no callback is set
- */
-int tokio_bridge_send_early_hints(const char **headers, size_t count);
 
 /* ============================================================================
  * Finish Request API

@@ -141,35 +141,6 @@ notify_admins($payload);    // Send notifications
 ?>
 ```
 
-### tokio_early_hints()
-
-Send HTTP 103 Early Hints to preload resources before the main response.
-
-```php
-<?php
-// Send early hints immediately (browser starts loading while PHP works)
-tokio_early_hints([
-    'Link: </style.css>; rel=preload; as=style',
-    'Link: </app.js>; rel=preload; as=script',
-    'Link: <https://cdn.example.com>; rel=preconnect',
-]);
-
-// Heavy work (browser already loading CSS/JS!)
-$data = fetch_from_database();
-$html = render_template($data);
-
-// Final response
-echo $html;
-?>
-```
-
-**Parameters:**
-- `array $headers` - Array of header strings (max 16 headers)
-
-**Returns:** `bool` - `true` on success, `false` if no handler is configured.
-
-**Note:** Full HTTP 103 streaming support is infrastructure-ready but pending server handler changes. Currently returns `false` (callback not set). See roadmap for full implementation.
-
 ### tokio_async_call()
 
 Placeholder for future async PHP-to-Rust calls (not yet implemented).
@@ -418,7 +389,6 @@ The extension uses a shared library (`libtokio_bridge.so`) to solve TLS (Thread-
 │  │  __thread bridge_ctx;   // Shared TLS           │   │
 │  │  - request_id, worker_id                        │   │
 │  │  - finish_request state                         │   │
-│  │  - early_hints callback                         │   │
 │  │  - heartbeat callback                           │   │
 │  │                                                  │   │
 │  └─────────────────────────────────────────────────┘   │
@@ -458,10 +428,9 @@ The extension uses the bridge library for shared thread-local storage:
 // Bridge provides shared TLS context (ext/bridge/bridge.c)
 static __thread tokio_bridge_ctx_t *tls_ctx = NULL;
 
-// tokio_sapi.c uses bridge for finish_request, heartbeat, early_hints
+// tokio_sapi.c uses bridge for finish_request, heartbeat
 tokio_bridge_mark_finished(offset, headers, code);
 tokio_bridge_send_heartbeat(secs);
-tokio_bridge_send_early_hints(headers, count);
 ```
 
 PHP ZTS (TSRM) handles superglobal isolation between threads. The bridge library ensures proper thread-local storage when called from external (Rust) worker threads.
@@ -523,7 +492,7 @@ curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep FFI
 
 ## Future Plans
 
-1. **HTTP 103 Early Hints streaming**: Full server handler integration with `tokio::select!` for real-time hint delivery (infrastructure ready via bridge)
+1. **HTTP 103 Early Hints**: Pending [hyper support](https://github.com/hyperium/hyper/issues/2426)
 2. **Async PHP-to-Rust calls**: Enable PHP to call async Rust functions
 3. **Session handler**: Implement `$_SESSION` via shared memory
 4. **Output streaming**: Direct output capture without stdout redirect

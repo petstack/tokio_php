@@ -1198,71 +1198,6 @@ int tokio_sapi_get_finished_response_code(void)
     return tokio_bridge_get_finished_response_code();
 }
 
-/* tokio_early_hints(array $headers): bool - send HTTP 103 Early Hints
- *
- * Sends HTTP 103 Early Hints to the client before the main response.
- * This allows the browser to start preloading resources while the server
- * is still generating the response.
- *
- * Example:
- *   tokio_early_hints([
- *       'Link: </style.css>; rel=preload; as=style',
- *       'Link: </app.js>; rel=preload; as=script',
- *   ]);
- *   // Browser starts loading CSS/JS while PHP generates response
- *   $html = render_page();
- *   echo $html;
- *
- * Uses tokio_bridge shared library for direct Rust <-> PHP communication.
- */
-PHP_FUNCTION(tokio_early_hints)
-{
-    zval *headers_array;
-
-    ZEND_PARSE_PARAMETERS_START(1, 1)
-        Z_PARAM_ARRAY(headers_array)
-    ZEND_PARSE_PARAMETERS_END();
-
-    HashTable *ht = Z_ARRVAL_P(headers_array);
-    size_t count = zend_hash_num_elements(ht);
-
-    if (count == 0) {
-        RETURN_FALSE;
-    }
-
-    /* Limit to prevent abuse */
-    if (count > TOKIO_BRIDGE_MAX_EARLY_HINTS) {
-        count = TOKIO_BRIDGE_MAX_EARLY_HINTS;
-    }
-
-    /* Collect headers into a C array */
-    const char **headers = emalloc(sizeof(char*) * count);
-    if (headers == NULL) {
-        RETURN_FALSE;
-    }
-
-    size_t i = 0;
-    zval *entry;
-
-    ZEND_HASH_FOREACH_VAL(ht, entry) {
-        if (i >= count) break;
-        if (Z_TYPE_P(entry) == IS_STRING) {
-            headers[i++] = Z_STRVAL_P(entry);
-        }
-    } ZEND_HASH_FOREACH_END();
-
-    if (i == 0) {
-        efree(headers);
-        RETURN_FALSE;
-    }
-
-    /* Send via bridge to Rust */
-    int result = tokio_bridge_send_early_hints(headers, i);
-
-    efree(headers);
-    RETURN_BOOL(result != 0);
-}
-
 /* ============================================================================
  * Arginfo for PHP 8+ (fixes "Missing arginfo" warnings)
  * ============================================================================ */
@@ -1288,10 +1223,6 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_finish_request, 0, 0, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_early_hints, 0, 1, _IS_BOOL, 0)
-    ZEND_ARG_TYPE_INFO(0, headers, IS_ARRAY, 0)
-ZEND_END_ARG_INFO()
-
 /* ============================================================================
  * PHP Extension registration
  * ============================================================================ */
@@ -1303,7 +1234,6 @@ static const zend_function_entry tokio_sapi_functions[] = {
     PHP_FE(tokio_async_call, arginfo_tokio_async_call)
     PHP_FE(tokio_request_heartbeat, arginfo_tokio_request_heartbeat)
     PHP_FE(tokio_finish_request, arginfo_tokio_finish_request)
-    PHP_FE(tokio_early_hints, arginfo_tokio_early_hints)
     PHP_FE_END
 };
 
