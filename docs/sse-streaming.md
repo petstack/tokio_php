@@ -333,7 +333,7 @@ function stop() {
 
 ## Long-Running Streams
 
-For streams that run longer than `REQUEST_TIMEOUT`, use heartbeat:
+SSE connections use a dedicated `SSE_TIMEOUT` (default: 30 minutes) separate from `REQUEST_TIMEOUT`. For streams that need to run longer, use heartbeat:
 
 ```php
 <?php
@@ -351,6 +351,21 @@ while ($streaming) {
     sleep(1);
 }
 ```
+
+### SSE_TIMEOUT Configuration
+
+```bash
+# Default: 30 minutes
+SSE_TIMEOUT=30m
+
+# 1 hour for long-running streams
+SSE_TIMEOUT=1h
+
+# Disable timeout (not recommended)
+SSE_TIMEOUT=off
+```
+
+See [Configuration](configuration.md#sse_timeout) for more details.
 
 ## Compression
 

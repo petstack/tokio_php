@@ -16,6 +16,7 @@ tokio_php is configured via environment variables.
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration (1d, 1w, 1m, 1y, off) |
 | `REQUEST_TIMEOUT` | `2m` | Request timeout (30s, 2m, 5m, off). Returns 504 on timeout |
+| `SSE_TIMEOUT` | `30m` | SSE connection timeout (30m, 1h, off). Separate from REQUEST_TIMEOUT |
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
@@ -142,6 +143,7 @@ INTERNAL_ADDR=127.0.0.1:9090
 Provides endpoints:
 - `/health` - JSON health check
 - `/metrics` - Prometheus-compatible metrics
+- `/config` - Current server configuration (JSON)
 
 See [Internal Server](internal-server.md) for endpoint details and Prometheus integration.
 
@@ -333,6 +335,38 @@ tokio_request_heartbeat(30);
 ```
 
 See [Request Heartbeat](request-heartbeat.md) for details.
+
+### SSE_TIMEOUT
+
+Timeout for Server-Sent Events (SSE) connections. Separate from `REQUEST_TIMEOUT` because SSE connections are typically long-lived.
+
+```bash
+# Default: 30 minutes
+SSE_TIMEOUT=30m
+
+# 1 hour
+SSE_TIMEOUT=1h
+
+# 2 hours (for long-running streams)
+SSE_TIMEOUT=2h
+
+# Disable timeout (not recommended)
+SSE_TIMEOUT=off
+```
+
+| Format | Duration |
+|--------|----------|
+| `30m` | 30 minutes |
+| `1h` | 1 hour |
+| `2h` | 2 hours |
+| `off` | No timeout |
+
+**Behavior:**
+- When timeout is reached, SSE connection is closed
+- Use `tokio_request_heartbeat()` to extend deadline for active streams
+- SSE connections bypass `REQUEST_TIMEOUT` and use this dedicated timeout
+
+See [SSE Streaming](sse-streaming.md) for implementation details.
 
 ### ACCESS_LOG
 
