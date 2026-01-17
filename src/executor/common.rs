@@ -282,6 +282,8 @@ impl WorkerPool {
     /// ScriptResponse for backward compatibility. For true streaming, use
     /// `submit_streaming()` instead.
     pub async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
+        use crate::profiler::ProfileData;
+
         let timeout = request.timeout;
 
         // Capture queued_at once - reused for both queue timing and HeartbeatContext
@@ -311,6 +313,7 @@ impl WorkerPool {
         let mut headers: Vec<(String, String)> = Vec::new();
         let mut status: u16 = 200;
         let mut body = Vec::new();
+        let mut profile: Option<ProfileData> = None;
 
         // Apply timeout with heartbeat support if configured
         if let Some(ctx) = heartbeat_ctx {
@@ -331,6 +334,9 @@ impl WorkerPool {
                                     }
                                     Some(ResponseChunk::Body(data)) => {
                                         body.extend_from_slice(&data);
+                                    }
+                                    Some(ResponseChunk::Profile(p)) => {
+                                        profile = Some(*p);
                                     }
                                     Some(ResponseChunk::End) => {
                                         break;
@@ -365,6 +371,9 @@ impl WorkerPool {
                     ResponseChunk::Body(data) => {
                         body.extend_from_slice(&data);
                     }
+                    ResponseChunk::Profile(p) => {
+                        profile = Some(*p);
+                    }
                     ResponseChunk::End => {
                         break;
                     }
@@ -383,7 +392,7 @@ impl WorkerPool {
         Ok(ScriptResponse {
             body: String::from_utf8_lossy(&body).into_owned(),
             headers,
-            profile: None, // Profile data no longer collected this way
+            profile,
         })
     }
 
@@ -451,7 +460,7 @@ impl WorkerPool {
                             break;
                         }
                     }
-                    ResponseChunk::End | ResponseChunk::Error(_) => {
+                    ResponseChunk::End | ResponseChunk::Error(_) | ResponseChunk::Profile(_) => {
                         break;
                     }
                     ResponseChunk::Headers { .. } => {
@@ -473,6 +482,8 @@ impl WorkerPool {
         &self,
         request: ScriptRequest,
     ) -> Result<ExecuteResult, String> {
+        use crate::profiler::ProfileData;
+
         let mut rx = self.submit_streaming(request)?;
 
         // Wait for headers chunk
@@ -490,6 +501,10 @@ impl WorkerPool {
             Some(ResponseChunk::Body(_)) => {
                 // Body before headers - shouldn't happen, treat as error
                 return Err("Received body chunk before headers".to_string());
+            }
+            Some(ResponseChunk::Profile(_)) => {
+                // Profile before headers - shouldn't happen, treat as error
+                return Err("Received profile chunk before headers".to_string());
             }
             None => return Err("Worker dropped connection".to_string()),
         };
@@ -512,7 +527,9 @@ impl WorkerPool {
                                 break;
                             }
                         }
-                        ResponseChunk::End | ResponseChunk::Error(_) => {
+                        ResponseChunk::End
+                        | ResponseChunk::Error(_)
+                        | ResponseChunk::Profile(_) => {
                             break;
                         }
                         ResponseChunk::Headers { .. } => {
@@ -528,12 +545,17 @@ impl WorkerPool {
                 receiver: stream_rx,
             })
         } else {
-            // Non-SSE: collect all body chunks
+            // Non-SSE: collect all body chunks and profile data
             let mut body = Vec::new();
+            let mut profile: Option<ProfileData> = None;
+
             while let Some(chunk) = rx.recv().await {
                 match chunk {
                     ResponseChunk::Body(data) => {
                         body.extend_from_slice(&data);
+                    }
+                    ResponseChunk::Profile(p) => {
+                        profile = Some(*p);
                     }
                     ResponseChunk::End => break,
                     ResponseChunk::Error(e) => return Err(e),
@@ -552,7 +574,7 @@ impl WorkerPool {
             Ok(ExecuteResult::Normal(Box::new(ScriptResponse {
                 body: String::from_utf8_lossy(&body).into_owned(),
                 headers: final_headers,
-                profile: None,
+                profile,
             })))
         }
     }

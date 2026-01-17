@@ -199,7 +199,7 @@ impl std::fmt::Debug for Iso8601Timestamp {
 /// Check if a year is a leap year.
 #[inline]
 const fn is_leap_year(year: u16) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+    (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
 }
 
 /// Write a 4-digit year to buffer (0000-9999).
@@ -301,6 +301,54 @@ mod server_var_values {
     pub const PORT_80: Cow<'static, str> = Cow::Borrowed("80");
     pub const PORT_443: Cow<'static, str> = Cow::Borrowed("443");
     pub const LOCALHOST: Cow<'static, str> = Cow::Borrowed("localhost");
+
+    // HTTP methods (zero allocation for common methods)
+    pub const METHOD_GET: Cow<'static, str> = Cow::Borrowed("GET");
+    pub const METHOD_POST: Cow<'static, str> = Cow::Borrowed("POST");
+    pub const METHOD_PUT: Cow<'static, str> = Cow::Borrowed("PUT");
+    pub const METHOD_DELETE: Cow<'static, str> = Cow::Borrowed("DELETE");
+    pub const METHOD_PATCH: Cow<'static, str> = Cow::Borrowed("PATCH");
+    pub const METHOD_HEAD: Cow<'static, str> = Cow::Borrowed("HEAD");
+    pub const METHOD_OPTIONS: Cow<'static, str> = Cow::Borrowed("OPTIONS");
+    pub const METHOD_QUERY: Cow<'static, str> = Cow::Borrowed("QUERY");
+
+    // HTTP protocol versions (zero allocation)
+    pub const PROTOCOL_HTTP_10: Cow<'static, str> = Cow::Borrowed("HTTP/1.0");
+    pub const PROTOCOL_HTTP_11: Cow<'static, str> = Cow::Borrowed("HTTP/1.1");
+    pub const PROTOCOL_HTTP_20: Cow<'static, str> = Cow::Borrowed("HTTP/2.0");
+}
+
+// ============================================================================
+// Static value helpers (zero allocation for common cases)
+// ============================================================================
+
+/// Get static Cow for HTTP method (zero allocation for common methods).
+#[inline]
+fn method_to_cow(method: &hyper::Method) -> std::borrow::Cow<'static, str> {
+    use std::borrow::Cow;
+    match method {
+        &hyper::Method::GET => server_var_values::METHOD_GET,
+        &hyper::Method::POST => server_var_values::METHOD_POST,
+        &hyper::Method::PUT => server_var_values::METHOD_PUT,
+        &hyper::Method::DELETE => server_var_values::METHOD_DELETE,
+        &hyper::Method::PATCH => server_var_values::METHOD_PATCH,
+        &hyper::Method::HEAD => server_var_values::METHOD_HEAD,
+        &hyper::Method::OPTIONS => server_var_values::METHOD_OPTIONS,
+        m if m.as_str() == "QUERY" => server_var_values::METHOD_QUERY,
+        m => Cow::Owned(m.as_str().to_string()),
+    }
+}
+
+/// Get static Cow for HTTP protocol version (zero allocation).
+#[inline]
+fn protocol_to_cow(version: &str) -> std::borrow::Cow<'static, str> {
+    use std::borrow::Cow;
+    match version {
+        "HTTP/1.0" => server_var_values::PROTOCOL_HTTP_10,
+        "HTTP/1.1" => server_var_values::PROTOCOL_HTTP_11,
+        "HTTP/2.0" => server_var_values::PROTOCOL_HTTP_20,
+        v => Cow::Owned(v.to_string()),
+    }
 }
 
 // ============================================================================
@@ -361,10 +409,86 @@ fn is_connection_error(err_str: &str) -> bool {
 use super::internal::RequestMetrics;
 use crate::trace_context::TraceContext;
 
+// ============================================================================
+// File Existence Cache (LRU with max 20 entries)
+// ============================================================================
+
+use std::collections::VecDeque;
+use std::sync::RwLock;
+
+/// Maximum number of cached file paths.
+const FILE_CACHE_CAPACITY: usize = 20;
+
+/// Simple LRU cache for file existence checks.
+/// Thread-safe with RwLock, stores up to 20 file paths known to exist.
+/// When full, oldest entry is evicted (FIFO).
+pub struct FileExistsCache {
+    /// Cached paths (most recently used at back).
+    paths: RwLock<VecDeque<Box<str>>>,
+}
+
+impl FileExistsCache {
+    /// Create a new empty cache.
+    pub fn new() -> Self {
+        Self {
+            paths: RwLock::new(VecDeque::with_capacity(FILE_CACHE_CAPACITY)),
+        }
+    }
+
+    /// Check if file exists, using cache.
+    /// Returns true if file exists (cached or verified), false otherwise.
+    #[inline]
+    pub fn file_exists(&self, path: &Path) -> bool {
+        let path_str = path.to_string_lossy();
+
+        // Fast path: check cache (read lock)
+        {
+            let cache = self.paths.read().unwrap();
+            if cache.iter().any(|p| p.as_ref() == path_str) {
+                return true;
+            }
+        }
+
+        // Cache miss: check filesystem
+        if !path.exists() {
+            return false;
+        }
+
+        // File exists: add to cache (write lock)
+        {
+            let mut cache = self.paths.write().unwrap();
+
+            // Double-check it wasn't added while we waited for write lock
+            if cache.iter().any(|p| p.as_ref() == path_str) {
+                return true;
+            }
+
+            // Evict oldest if at capacity
+            if cache.len() >= FILE_CACHE_CAPACITY {
+                cache.pop_front();
+            }
+
+            // Add new entry
+            cache.push_back(path_str.into_owned().into_boxed_str());
+        }
+
+        true
+    }
+}
+
+impl Default for FileExistsCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Connection handler context.
 pub struct ConnectionContext<E: ScriptExecutor> {
     pub executor: Arc<E>,
     pub document_root: Arc<str>,
+    /// Cached document root as Cow::Borrowed with 'static lifetime (zero allocation per request).
+    /// Created by leaking the document_root string at server startup.
+    pub document_root_static: std::borrow::Cow<'static, str>,
     pub skip_file_check: bool,
     pub is_stub_mode: bool,
     pub index_file_path: Option<Arc<str>>,
@@ -381,6 +505,8 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub profile_enabled: bool,
     /// Access logging enabled (ACCESS_LOG=1).
     pub access_log_enabled: bool,
+    /// Cache for file existence checks (max 20 entries, FIFO eviction).
+    pub file_exists_cache: Arc<FileExistsCache>,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -1008,9 +1134,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             path_resolve_us = path_start.elapsed().as_micros() as u64;
         }
 
-        // Check if file exists (sync - fast for stat syscall)
+        // Check if file exists (uses LRU cache for repeated requests)
         let file_check_start = Instant::now();
-        if !self.skip_file_check && !file_path.exists() {
+        if !self.skip_file_check && !self.file_exists_cache.file_exists(file_path) {
             return full_to_flexible(not_found_response());
         }
         if profiling_enabled {
@@ -1087,11 +1213,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             Cow::Owned(format!("{:.6}", request_time_float)),
         ));
 
-        // Request method and URI
-        server_vars.push((
-            server_var_keys::REQUEST_METHOD,
-            Cow::Owned(method.as_str().to_string()),
-        ));
+        // Request method and URI (zero allocation for common methods)
+        server_vars.push((server_var_keys::REQUEST_METHOD, method_to_cow(&method)));
         server_vars.push((server_var_keys::REQUEST_URI, Cow::Owned(uri.to_string())));
         server_vars.push((
             server_var_keys::QUERY_STRING,
@@ -1116,13 +1239,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             server_var_keys::SERVER_SOFTWARE,
             server_var_values::SERVER_SOFTWARE,
         ));
+        // Protocol version (zero allocation for HTTP/1.0, HTTP/1.1, HTTP/2.0)
         server_vars.push((
             server_var_keys::SERVER_PROTOCOL,
-            Cow::Borrowed(http_version),
+            protocol_to_cow(http_version),
         ));
+        // Document root (cached at server startup, zero allocation per request)
         server_vars.push((
             server_var_keys::DOCUMENT_ROOT,
-            Cow::Owned(self.document_root.to_string()),
+            self.document_root_static.clone(),
         ));
         server_vars.push((
             server_var_keys::GATEWAY_INTERFACE,
@@ -1241,7 +1366,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             let response = match execute_result {
                 Ok(ExecuteResult::Normal(resp)) => {
                     let mut resp = *resp; // Unbox
-                    // Add parse breakdown to profile data if profiling
+                                          // Add parse breakdown to profile data if profiling
                     if profiling_enabled {
                         if let Some(ref mut profile) = resp.profile {
                             profile.http_version = http_version.to_string();
@@ -1402,21 +1527,19 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             return Ok(full_to_flexible(response));
         }
 
-        // Check file exists
-        if !self.skip_file_check && !file_path.exists() {
+        // Check file exists (uses LRU cache for repeated requests)
+        if !self.skip_file_check && !self.file_exists_cache.file_exists(file_path) {
             return Ok(full_to_flexible(not_found_response()));
         }
 
-        // Build minimal server vars for SSE
+        // Build minimal server vars for SSE (optimized with static values)
         let request_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
 
         let mut server_vars = Vec::with_capacity(16);
-        server_vars.push((
-            server_var_keys::REQUEST_METHOD,
-            Cow::Owned(method.to_string()),
-        ));
+        // Method: zero allocation for common methods (GET, POST, etc.)
+        server_vars.push((server_var_keys::REQUEST_METHOD, method_to_cow(&method)));
         server_vars.push((server_var_keys::REQUEST_URI, Cow::Owned(uri.to_string())));
         server_vars.push((
             server_var_keys::QUERY_STRING,
@@ -1430,9 +1553,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             server_var_keys::SCRIPT_FILENAME,
             Cow::Owned(file_path_string.clone()),
         ));
+        // Document root: cached at server startup, zero allocation per request
         server_vars.push((
             server_var_keys::DOCUMENT_ROOT,
-            Cow::Owned(self.document_root.to_string()),
+            self.document_root_static.clone(),
         ));
         server_vars.push((
             server_var_keys::SERVER_SOFTWARE,

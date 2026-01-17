@@ -345,7 +345,7 @@ impl FinishChannel {
         let body_bytes = if body.is_null() || body_len == 0 {
             bytes::Bytes::new()
         } else {
-            let slice = unsafe { std::slice::from_raw_parts(body as *const u8, body_len) };
+            let slice = unsafe { std::slice::from_raw_parts(body.cast::<u8>(), body_len) };
             bytes::Bytes::copy_from_slice(slice)
         };
 
@@ -421,7 +421,7 @@ impl StreamingChannel {
         }
 
         // Copy data bytes
-        let slice = unsafe { std::slice::from_raw_parts(data as *const u8, data_len) };
+        let slice = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), data_len) };
         let chunk = StreamChunk::from(slice);
 
         // Non-blocking send (if receiver dropped or buffer full, that's OK)
@@ -435,7 +435,7 @@ fn parse_headers_buffer(ptr: *const c_char, len: usize, count: c_int) -> Vec<(St
         return Vec::new();
     }
 
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
+    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
     let mut result = Vec::with_capacity(count as usize);
     let mut pos = 0;
 

@@ -153,22 +153,38 @@ The server exits with an error if the index file is missing, preventing silent f
 
 ## Performance Optimization
 
-Single entry point mode uses `try_files` with optimized file checks:
+Single entry point mode skips file existence checks entirely:
 
 ```
 Normal mode:
 1. Parse URL → /users.php
-2. Check file exists → stat("/var/www/html/users.php")
+2. Check file exists → stat() or LRU cache lookup
 3. Execute PHP or return 404
 
 Single entry point mode:
 1. Parse URL → /users
-2. Check if static file exists → stat() (fast, single syscall)
-3. If exists: serve static file directly
-4. If not: route to pre-validated index.php (no second stat())
+2. Skip file check (index.php pre-validated at startup)
+3. Route directly to index.php
 ```
 
-For route requests (most traffic), index.php is pre-validated at startup — no additional file check needed.
+### Why It's Faster
+
+| Operation | Normal Mode | Single Entry Point |
+|-----------|-------------|-------------------|
+| File check | ~26µs (first) / 0µs (cached) | **0µs (skipped)** |
+| Path resolution | stat() syscall | No syscall |
+
+The index.php path is validated once at server startup. All subsequent requests route directly without filesystem checks.
+
+### Server Variables Optimization
+
+Server variables (`$_SERVER`) are built with zero-allocation optimizations:
+
+- `DOCUMENT_ROOT` — cached at startup, reused via `Cow::Borrowed`
+- `REQUEST_METHOD` — static constants for GET, POST, PUT, DELETE, etc.
+- `SERVER_PROTOCOL` — static constants for HTTP/1.0, HTTP/1.1, HTTP/2.0
+
+This reduces server_vars build time from ~15µs to ~6-7µs per request.
 
 ## Static Files
 

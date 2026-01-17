@@ -93,7 +93,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 pub use config::ServerConfig;
-use connection::ConnectionContext;
+use connection::{ConnectionContext, FileExistsCache};
 use error_pages::ErrorPages;
 use internal::{run_internal_server, RequestMetrics, ServerConfigInfo};
 
@@ -138,6 +138,10 @@ pub struct Server<E: ScriptExecutor> {
     error_pages: ErrorPages,
     /// Per-IP rate limiter
     rate_limiter: Option<Arc<RateLimiter>>,
+    /// File existence cache (LRU, max 20 entries)
+    file_exists_cache: Arc<FileExistsCache>,
+    /// Cached document root as static str (zero allocation per request)
+    document_root_static: std::borrow::Cow<'static, str>,
     /// Shutdown signal sender
     shutdown_tx: watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable)
@@ -204,6 +208,12 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+        // Leak document_root to get 'static lifetime (lives for entire process)
+        // This avoids string allocation on every request for $_SERVER['DOCUMENT_ROOT']
+        let document_root_static: std::borrow::Cow<'static, str> = std::borrow::Cow::Borrowed(
+            Box::leak(config.document_root.to_string().into_boxed_str()),
+        );
+
         Ok(Self {
             config,
             executor: Arc::new(executor),
@@ -213,6 +223,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             request_metrics: Arc::new(RequestMetrics::new()),
             error_pages,
             rate_limiter: None,
+            file_exists_cache: Arc::new(FileExistsCache::new()),
+            document_root_static,
             shutdown_tx,
             shutdown_rx,
             shutdown_initiated: Arc::new(AtomicBool::new(false)),
@@ -431,6 +443,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             let ctx = Arc::new(ConnectionContext {
                 executor: Arc::clone(&self.executor),
                 document_root: Arc::clone(&self.config.document_root),
+                document_root_static: self.document_root_static.clone(),
                 skip_file_check: self.executor.skip_file_check() || self.index_file_path.is_some(),
                 is_stub_mode: self.executor.skip_file_check(),
                 index_file_path: self.index_file_path.clone(),
@@ -444,6 +457,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 sse_timeout: self.config.sse_timeout,
                 profile_enabled: self.profile_enabled,
                 access_log_enabled: self.access_log_enabled,
+                file_exists_cache: Arc::clone(&self.file_exists_cache),
             });
 
             let handle = tokio::spawn(async move {
@@ -563,11 +577,11 @@ fn format_optional_duration(d: &config::OptionalDuration) -> String {
         return "off".to_string();
     }
     let secs = d.as_secs();
-    if secs.is_multiple_of(86400) {
+    if secs % 86400 == 0 {
         format!("{}d", secs / 86400)
-    } else if secs.is_multiple_of(3600) {
+    } else if secs % 3600 == 0 {
         format!("{}h", secs / 3600)
-    } else if secs.is_multiple_of(60) {
+    } else if secs % 60 == 0 {
         format!("{}m", secs / 60)
     } else {
         format!("{}s", secs)

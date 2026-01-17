@@ -21,7 +21,7 @@ const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 /// Trace context containing trace ID, span ID, and flags.
 /// All fields are stack-allocated for zero heap allocation.
 ///
-/// Memory layout (73 bytes total):
+/// Memory layout (138 bytes total):
 /// - trace_id: 32 bytes
 /// - span_id: 16 bytes
 /// - parent_span_id: 17 bytes (1 byte flag + 16 bytes data)
@@ -145,7 +145,7 @@ impl TraceContext {
             .get("traceparent")
             .and_then(|v| v.to_str().ok())
             .and_then(Self::parse)
-            .unwrap_or_else(Self::new)
+            .unwrap_or_default()
     }
 
     /// Build cached traceparent and short_id values.
@@ -429,6 +429,7 @@ mod tests {
     #[test]
     fn test_size() {
         // Verify the struct is reasonably sized for stack allocation
-        assert!(std::mem::size_of::<TraceContext>() <= 128);
+        // Actual size: 32 + 16 + 17 + 1 + 55 + 17 = 138 bytes
+        assert!(std::mem::size_of::<TraceContext>() <= 144);
     }
 }

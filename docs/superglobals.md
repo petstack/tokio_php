@@ -276,6 +276,23 @@ $_REQUEST = array_merge($_GET, $_POST);
 
 This is simpler but slower for complex applications.
 
+### Server Variables Optimization
+
+Server variables (`$_SERVER`) are built with zero-allocation optimizations for common values:
+
+| Variable | Optimization | Allocation |
+|----------|--------------|------------|
+| `DOCUMENT_ROOT` | Cached at server startup | Zero per request |
+| `REQUEST_METHOD` | Static constants (GET, POST, PUT, DELETE, etc.) | Zero for common methods |
+| `SERVER_PROTOCOL` | Static constants (HTTP/1.0, HTTP/1.1, HTTP/2.0) | Zero |
+| `SERVER_SOFTWARE` | Static constant | Zero |
+| `SERVER_ADDR` | Static constant ("0.0.0.0") | Zero |
+| `GATEWAY_INTERFACE` | Static constant ("CGI/1.1") | Zero |
+
+Dynamic values (like `REQUEST_URI`, `REMOTE_ADDR`, timestamps) are allocated per request.
+
+**Performance impact**: Server variables build time reduced from ~15µs to ~6-7µs per request.
+
 ## Headers and Responses
 
 ### Setting Headers

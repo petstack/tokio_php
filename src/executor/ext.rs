@@ -501,10 +501,18 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
             Ok(WorkerRequest {
                 request,
                 stream_tx,
-                queued_at: _,
+                queued_at,
                 heartbeat_ctx,
             }) => {
                 let request_id = next_request_id();
+                let profiling = request.profile;
+
+                // Profiling: queue wait time
+                let queue_wait_us = if profiling {
+                    queued_at.elapsed().as_micros() as u64
+                } else {
+                    0
+                };
 
                 // === PHP-FPM compatible: set request data BEFORE php_request_startup ===
                 // This allows SAPI callbacks to populate $_SERVER and $_COOKIE during startup
@@ -533,8 +541,17 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 // Initialize streaming state (output goes through ub_write callback)
                 sapi::init_stream_state(stream_tx);
 
+                // Profiling: PHP startup
+                let startup_start = Instant::now();
+
                 // Start PHP request - SAPI callbacks populate $_SERVER
                 let startup_ok = unsafe { php_request_startup() } == 0;
+
+                let php_startup_us = if profiling {
+                    startup_start.elapsed().as_micros() as u64
+                } else {
+                    0
+                };
 
                 if startup_ok {
                     // Initialize bridge context (shared TLS for Rust <-> PHP)
@@ -564,9 +581,21 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                         tokio_sapi_request_init(request_id);
                     }
 
+                    // Profiling: script execution (includes superglobals + script + finalize)
+                    let script_start = Instant::now();
+
                     // Execute script via FFI (output goes through ub_write -> stream_tx)
                     // Note: StdoutCapture is no longer used - ub_write handles output
                     execute_script_streaming(&request, request_id, id);
+
+                    let script_exec_us = if profiling {
+                        script_start.elapsed().as_micros() as u64
+                    } else {
+                        0
+                    };
+
+                    // Profiling: PHP shutdown
+                    let shutdown_start = Instant::now();
 
                     // Shutdown tokio_sapi and PHP request
                     unsafe {
@@ -574,8 +603,33 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                         php_request_shutdown(ptr::null_mut());
                     }
 
+                    let php_shutdown_us = if profiling {
+                        shutdown_start.elapsed().as_micros() as u64
+                    } else {
+                        0
+                    };
+
                     // Destroy bridge context
                     bridge::destroy_ctx();
+
+                    // Send profile data before finalize (which clears the state)
+                    if profiling {
+                        if let Some(tx) = sapi::get_stream_sender() {
+                            let profile = ProfileData {
+                                total_us: queue_wait_us
+                                    + php_startup_us
+                                    + script_exec_us
+                                    + php_shutdown_us,
+                                queue_wait_us,
+                                php_startup_us,
+                                script_exec_us,
+                                php_shutdown_us,
+                                ..Default::default()
+                            };
+                            let _ =
+                                tx.blocking_send(sapi::ResponseChunk::Profile(Box::new(profile)));
+                        }
+                    }
                 } else {
                     // Send error if startup failed
                     sapi::send_stream_error("Failed to start PHP request".to_string());

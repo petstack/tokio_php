@@ -152,6 +152,12 @@ pub struct RequestMetrics {
     pub sse_bytes: AtomicU64,
 }
 
+impl Default for RequestMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RequestMetrics {
     pub fn new() -> Self {
         Self {

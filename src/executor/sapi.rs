@@ -234,6 +234,9 @@ pub enum ResponseChunk {
     End,
     /// Error occurred during execution
     Error(String),
+    /// Profiling data (sent after End, only when profiling enabled)
+    /// Boxed to reduce enum size (ProfileData is large)
+    Profile(Box<crate::profiler::ProfileData>),
 }
 
 /// Streaming state for current request.
@@ -285,7 +288,7 @@ unsafe extern "C" fn stream_ub_write(str: *const c_char, len: usize) -> usize {
 
         // Send body chunk
         if len > 0 {
-            let data = std::slice::from_raw_parts(str as *const u8, len);
+            let data = std::slice::from_raw_parts(str.cast::<u8>(), len);
             let _ = stream_state
                 .tx
                 .blocking_send(ResponseChunk::Body(Bytes::copy_from_slice(data)));
@@ -381,6 +384,13 @@ pub fn send_stream_error(error: String) {
             }
         }
     });
+}
+
+/// Get a clone of the stream sender for sending profile data.
+/// Must be called BEFORE finalize_stream() as that clears the state.
+/// Returns None if no streaming state is active.
+pub fn get_stream_sender() -> Option<mpsc::Sender<ResponseChunk>> {
+    STREAM_STATE.with(|state| state.borrow().as_ref().map(|s| s.tx.clone()))
 }
 
 /// Check if streaming is active for current request.
@@ -572,7 +582,7 @@ unsafe extern "C" fn custom_read_post(buffer: *mut c_char, count_bytes: usize) -
                 if to_read > 0 {
                     ptr::copy_nonoverlapping(
                         body.as_ptr().add(req.post_read_pos),
-                        buffer as *mut u8,
+                        buffer.cast::<u8>(),
                         to_read,
                     );
                     req.post_read_pos += to_read;

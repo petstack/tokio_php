@@ -92,9 +92,9 @@ RUN echo "=== Library locations ===" && \
     cat /etc/ld-musl-*.path 2>/dev/null || echo "No ld-musl path files"
 
 # Run unit tests before building (fail fast if tests don't pass)
-# Note: --bin tokio_php excludes integration tests which require running server
-# Note: php feature required for tokio_bridge FFI bindings
-RUN cargo test --release --bin tokio_php
+# Note: --lib runs library unit tests, --bin tokio_php runs binary tests
+# Both exclude integration tests which require running server
+RUN cargo test --release --lib && cargo test --release --bin tokio_php
 
 # Build the application
 RUN cargo build --release
