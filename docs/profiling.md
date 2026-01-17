@@ -95,7 +95,6 @@ When using ExtExecutor, detailed FFI timing is available:
 
 | Header | Description |
 |--------|-------------|
-| `X-Profile-Memfd-Setup-Us` | memfd_create + stdout redirect |
 | `X-Profile-Script-Us` | php_execute_script time |
 
 ### Output Capture
@@ -104,8 +103,6 @@ When using ExtExecutor, detailed FFI timing is available:
 |--------|-------------|
 | `X-Profile-Output-Us` | Total output capture time |
 | `X-Profile-Output-Finalize-Us` | Finalize eval (flush + headers) |
-| `X-Profile-Output-Restore-Us` | Restore stdout |
-| `X-Profile-Output-Read-Us` | Read from memfd |
 | `X-Profile-Output-Parse-Us` | Parse body + headers from output |
 
 ### Shutdown & Response

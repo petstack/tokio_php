@@ -163,10 +163,10 @@ Client                     Server                       PHP Worker
    - Detects `Content-Type: text/event-stream`
    - Calls `try_enable_streaming()` to activate streaming mode
 
-5. **SAPI Flush Handler** (`ext/tokio_sapi.c`)
+5. **SAPI Flush Handler** (`executor/sapi.rs`)
    - Registered as `sapi_module.flush`
    - Intercepts PHP `flush()` calls
-   - Flushes output buffers → reads from memfd → sends chunk
+   - Flushes output buffers → sends chunk via bridge callback
 
 6. **Streaming Response** (`server/response/streaming.rs`)
    - `ChunkFrameStream` converts channel to HTTP frames
