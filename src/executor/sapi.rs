@@ -154,6 +154,14 @@ extern "C" {
     fn tokio_bridge_clear_headers();
 }
 
+// tokio_sapi extension FFI - for SAPI flush handler
+// Linked statically via build.rs
+extern "C" {
+    /// SAPI flush handler - sends streaming output when flush() is called in PHP.
+    /// Must be registered as sapi_module.flush for standard flush() to work with SSE.
+    fn tokio_sapi_flush(server_context: *mut c_void);
+}
+
 // =============================================================================
 // Request Data (set before php_request_startup)
 // =============================================================================
@@ -372,6 +380,7 @@ pub fn init() -> Result<(), String> {
         php_embed_module.register_server_variables = Some(custom_register_server_variables);
         php_embed_module.read_cookies = Some(custom_read_cookies);
         php_embed_module.read_post = Some(custom_read_post);
+        php_embed_module.flush = Some(tokio_sapi_flush); // SSE streaming support
 
         let program_name = CString::new("tokio_php").unwrap();
         let mut argv: [*mut c_char; 2] = [program_name.as_ptr() as *mut c_char, ptr::null_mut()];
@@ -387,7 +396,7 @@ pub fn init() -> Result<(), String> {
         sapi_module.register_server_variables = Some(custom_register_server_variables);
         sapi_module.read_cookies = Some(custom_read_cookies);
         sapi_module.read_post = Some(custom_read_post);
-        // tokio_sapi extension loaded dynamically via php.ini
+        sapi_module.flush = Some(tokio_sapi_flush); // SSE streaming support
     }
 
     tracing::info!(

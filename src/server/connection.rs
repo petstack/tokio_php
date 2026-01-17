@@ -336,12 +336,13 @@ use super::config::TlsInfo;
 use super::error_pages::{accepts_html, status_reason_phrase, ErrorPages};
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
-    accepts_brotli, empty_stub_response, from_script_response, not_found_response,
-    serve_static_file, stub_response_with_profile, BAD_REQUEST_BODY, EMPTY_BODY,
-    METHOD_NOT_ALLOWED_BODY,
+    accepts_brotli, empty_stub_response, from_script_response, full_to_flexible,
+    is_sse_accept, not_found_response, serve_static_file, streaming_response,
+    streaming_to_flexible, stub_response_with_profile, BAD_REQUEST_BODY, EMPTY_BODY,
+    FlexibleResponse, METHOD_NOT_ALLOWED_BODY,
 };
 use super::routing::{is_direct_index_access, is_php_uri, resolve_file_path};
-use crate::executor::ScriptExecutor;
+use crate::executor::{ScriptExecutor, DEFAULT_STREAM_BUFFER_SIZE};
 use crate::middleware::rate_limit::RateLimiter;
 use crate::types::{ScriptRequest, UploadedFile};
 
@@ -374,6 +375,8 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub rate_limiter: Option<Arc<RateLimiter>>,
     pub static_cache_ttl: super::config::StaticCacheTtl,
     pub request_timeout: super::config::RequestTimeout,
+    /// SSE timeout (SSE_TIMEOUT env var, default: 30m).
+    pub sse_timeout: super::config::RequestTimeout,
     /// Profiling enabled (PROFILE=1). Requires X-Profile: 1 header per request.
     pub profile_enabled: bool,
     /// Access logging enabled (ACCESS_LOG=1).
@@ -536,7 +539,20 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         req: Request<IncomingBody>,
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
+    ) -> Result<FlexibleResponse, Infallible> {
+        // Check for SSE request (Accept: text/event-stream)
+        let accept_header = req
+            .headers()
+            .get(&header_names::ACCEPT)
+            .and_then(|v| v.to_str().ok());
+        let is_sse = is_sse_accept(accept_header);
+
+        // Handle SSE requests separately (streaming response path)
+        if is_sse {
+            return self.handle_sse_request(req, remote_addr, tls_info).await;
+        }
+
+        // Normal (non-streaming) request path
         let request_start = Instant::now();
 
         // Extract or generate W3C Trace Context
@@ -572,7 +588,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 response
                     .headers_mut()
                     .insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
-                return Ok(response);
+                return Ok(full_to_flexible(response));
             }
         }
 
@@ -738,7 +754,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             );
         }
 
-        Ok(response)
+        Ok(full_to_flexible(response))
     }
 
     async fn process_request(
@@ -1285,6 +1301,151 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 if_modified_since.as_deref(),
             )
             .await
+        }
+    }
+
+    /// Handle an SSE (Server-Sent Events) streaming request.
+    ///
+    /// This method is called for requests with `Accept: text/event-stream` header.
+    /// It uses the streaming executor path and returns a streaming response.
+    async fn handle_sse_request(
+        &self,
+        req: Request<IncomingBody>,
+        remote_addr: SocketAddr,
+        tls_info: Option<TlsInfo>,
+    ) -> Result<FlexibleResponse, Infallible> {
+        let request_start = Instant::now();
+        let trace_ctx = TraceContext::from_headers(req.headers());
+
+        // Get request ID
+        let request_id_from_header: Option<String> = req
+            .headers()
+            .get(&*X_REQUEST_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_owned());
+        let request_id: &str = request_id_from_header
+            .as_deref()
+            .unwrap_or_else(|| trace_ctx.short_id());
+
+        // Increment request method metrics
+        self.request_metrics.increment_method(req.method());
+
+        let method = req.method().clone();
+        let uri = req.uri().clone();
+        let uri_path = uri.path();
+        let query_string = uri.query().unwrap_or("");
+
+        // Resolve file path
+        let file_path_string =
+            resolve_file_path(uri_path, &self.document_root, self.index_file_path.as_ref());
+        let file_path = Path::new(&file_path_string);
+        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // SSE only works for PHP scripts
+        if extension != "php" {
+            // Return error for non-PHP SSE requests
+            let response = Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                .body(Full::new(Bytes::from_static(b"SSE only supported for PHP scripts")))
+                .unwrap();
+            return Ok(full_to_flexible(response));
+        }
+
+        // Check file exists
+        if !self.skip_file_check && !file_path.exists() {
+            return Ok(full_to_flexible(not_found_response()));
+        }
+
+        // Build minimal server vars for SSE
+        let request_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+
+        let mut server_vars = Vec::with_capacity(16);
+        server_vars.push((server_var_keys::REQUEST_METHOD, Cow::Owned(method.to_string())));
+        server_vars.push((server_var_keys::REQUEST_URI, Cow::Owned(uri.to_string())));
+        server_vars.push((server_var_keys::QUERY_STRING, Cow::Owned(query_string.to_string())));
+        server_vars.push((server_var_keys::REMOTE_ADDR, Cow::Owned(remote_addr.ip().to_string())));
+        server_vars.push((server_var_keys::SCRIPT_FILENAME, Cow::Owned(file_path_string.clone())));
+        server_vars.push((server_var_keys::DOCUMENT_ROOT, Cow::Owned(self.document_root.to_string())));
+        server_vars.push((server_var_keys::SERVER_SOFTWARE, server_var_values::SERVER_SOFTWARE));
+        server_vars.push((server_var_keys::REQUEST_TIME, Cow::Owned(request_time.as_secs().to_string())));
+
+        if let Some(ref tls) = tls_info {
+            server_vars.push((server_var_keys::HTTPS, server_var_values::HTTPS_ON));
+            if !tls.protocol.is_empty() {
+                server_vars.push((server_var_keys::SSL_PROTOCOL, Cow::Owned(tls.protocol.clone())));
+            }
+        }
+
+        // Parse query string and cookies for SSE
+        let get_params = if query_string.is_empty() {
+            Vec::new()
+        } else {
+            parse_query_string(query_string)
+        };
+
+        let cookie_header_str = req
+            .headers()
+            .get(&header_names::COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let cookies = if cookie_header_str.is_empty() {
+            Vec::new()
+        } else {
+            parse_cookies(cookie_header_str)
+        };
+
+        let script_request = ScriptRequest {
+            script_path: file_path.to_string_lossy().into_owned(),
+            get_params,
+            post_params: Vec::new(),
+            cookies,
+            server_vars,
+            files: Vec::new(),
+            raw_body: None,
+            profile: false,
+            timeout: self.sse_timeout.as_duration(), // Use SSE timeout (longer than regular)
+        };
+
+        // Execute streaming request
+        match self.executor.execute_streaming(script_request, DEFAULT_STREAM_BUFFER_SIZE).await {
+            Ok(stream_rx) => {
+                // Track SSE connection
+                self.request_metrics.sse_connection_started();
+
+                // Build SSE headers
+                let mut headers = vec![
+                    ("Content-Type".to_string(), "text/event-stream".to_string()),
+                    ("Cache-Control".to_string(), "no-cache".to_string()),
+                    ("Connection".to_string(), "keep-alive".to_string()),
+                    ("X-Accel-Buffering".to_string(), "no".to_string()),
+                    ("X-Request-ID".to_string(), request_id.to_string()),
+                    ("traceparent".to_string(), trace_ctx.traceparent().to_owned()),
+                ];
+
+                // Add Server header
+                headers.push(("Server".to_string(), "tokio_php/0.1.0".to_string()));
+
+                let response = streaming_response(200, headers, stream_rx);
+
+                // Record metrics
+                let response_time_us = request_start.elapsed().as_micros() as u64;
+                self.request_metrics.record_response_time(response_time_us);
+                self.request_metrics.increment_status(200);
+
+                Ok(streaming_to_flexible(response))
+            }
+            Err(e) => {
+                // Streaming not supported or error
+                let response = Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(header_names::CONTENT_TYPE.clone(), header_values::TEXT_PLAIN.clone())
+                    .body(Full::new(Bytes::from(format!("SSE error: {}", e))))
+                    .unwrap();
+                Ok(full_to_flexible(response))
+            }
         }
     }
 }

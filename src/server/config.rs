@@ -78,6 +78,8 @@ pub struct ServerConfig {
     pub static_cache_ttl: StaticCacheTtl,
     /// Request timeout (default: 2m, "off" to disable)
     pub request_timeout: RequestTimeout,
+    /// SSE timeout (default: 30m, "off" to disable)
+    pub sse_timeout: RequestTimeout,
 }
 
 impl ServerConfig {
@@ -94,6 +96,7 @@ impl ServerConfig {
             drain_timeout: Duration::from_secs(30),
             static_cache_ttl: OptionalDuration::from_secs(86400), // 1 day
             request_timeout: OptionalDuration::from_secs(120),    // 2 minutes
+            sse_timeout: OptionalDuration::from_secs(1800),       // 30 minutes
         }
     }
 
@@ -140,6 +143,11 @@ impl ServerConfig {
 
     pub fn with_request_timeout(mut self, timeout: RequestTimeout) -> Self {
         self.request_timeout = timeout;
+        self
+    }
+
+    pub fn with_sse_timeout(mut self, timeout: RequestTimeout) -> Self {
+        self.sse_timeout = timeout;
         self
     }
 

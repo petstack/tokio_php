@@ -325,3 +325,73 @@ void tokio_bridge_clear_headers(void)
     }
     tls_ctx->header_count = 0;
 }
+
+/* ============================================================================
+ * Streaming API (SSE support)
+ * ============================================================================ */
+
+void tokio_bridge_enable_streaming(void *ctx, tokio_stream_chunk_callback_t callback)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    tls_ctx->is_streaming = 1;
+    tls_ctx->stream_offset = 0;
+    tls_ctx->stream_ctx = ctx;
+    tls_ctx->stream_callback = callback;
+}
+
+int tokio_bridge_is_streaming(void)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+    return tls_ctx->is_streaming;
+}
+
+int tokio_bridge_send_chunk(const char *data, size_t data_len)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+    if (!tls_ctx->is_streaming) {
+        return 0;
+    }
+    if (tls_ctx->stream_callback == NULL) {
+        return 0;
+    }
+    if (data == NULL || data_len == 0) {
+        return 0;
+    }
+
+    /* Call the Rust callback */
+    tls_ctx->stream_callback(tls_ctx->stream_ctx, data, data_len);
+    return 1;
+}
+
+size_t tokio_bridge_get_stream_offset(void)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+    return tls_ctx->stream_offset;
+}
+
+void tokio_bridge_set_stream_offset(size_t offset)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    tls_ctx->stream_offset = offset;
+}
+
+void tokio_bridge_end_stream(void)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    tls_ctx->is_streaming = 0;
+    tls_ctx->stream_offset = 0;
+    tls_ctx->stream_ctx = NULL;
+    tls_ctx->stream_callback = NULL;
+}

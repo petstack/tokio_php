@@ -1093,6 +1093,186 @@ static char* serialize_sapi_headers(size_t *len, int *count)
     return buf;
 }
 
+/* ============================================================================
+ * Streaming API (SSE support)
+ * ============================================================================ */
+
+/**
+ * Read new output from memfd since last stream offset.
+ * Returns allocated buffer that caller must free().
+ *
+ * @param offset  Input: last read position; Output: new position
+ * @param len     Output: length of returned buffer
+ * @return        Allocated buffer with new output, or NULL if none/error
+ */
+static char* get_output_since_offset(size_t *offset, size_t *len)
+{
+    *len = 0;
+
+    /* 1. Flush libc buffers */
+    fflush(stdout);
+
+    /* 2. Get current position (= amount written so far) */
+    off_t end_pos = lseek(STDOUT_FILENO, 0, SEEK_CUR);
+    if (end_pos < 0 || (size_t)end_pos <= *offset) {
+        return NULL;  /* No new data */
+    }
+
+    size_t new_data_len = (size_t)end_pos - *offset;
+
+    /* 3. Allocate buffer */
+    char *buf = (char*)malloc(new_data_len);
+    if (buf == NULL) {
+        return NULL;
+    }
+
+    /* 4. Seek to offset and read new data */
+    lseek(STDOUT_FILENO, (off_t)*offset, SEEK_SET);
+    ssize_t n = read(STDOUT_FILENO, buf, new_data_len);
+
+    /* 5. Seek back to end for further writes */
+    lseek(STDOUT_FILENO, 0, SEEK_END);
+
+    if (n <= 0) {
+        free(buf);
+        return NULL;
+    }
+
+    *offset = (size_t)end_pos;  /* Update offset for next call */
+    *len = (size_t)n;
+    return buf;
+}
+
+/**
+ * SAPI flush handler - called by PHP's flush() function.
+ *
+ * When streaming mode is enabled, this sends new output to the client
+ * via tokio_bridge_send_chunk(). This allows standard flush() to work
+ * for SSE streaming without requiring a custom function.
+ *
+ * @param server_context  SAPI server context (unused)
+ */
+/* Thread-local flag to prevent recursive flush handling */
+static __thread int flush_in_progress = 0;
+
+void tokio_sapi_flush(void *server_context)
+{
+    (void)server_context;  /* Unused */
+
+    /* Prevent recursive calls (php_output_flush can trigger this handler again) */
+    if (flush_in_progress) {
+        return;
+    }
+
+    /* Only process if streaming mode is enabled */
+    if (!tokio_bridge_is_streaming()) {
+        /* Not streaming - just flush normally */
+        fflush(stdout);
+        return;
+    }
+
+    flush_in_progress = 1;
+
+    /* 1. Flush PHP output buffers to stdout (memfd) */
+    int flush_count = 0;
+    while (php_output_get_level() > 0) {
+        php_output_flush();
+        flush_count++;
+        if (flush_count > 10) {
+            /* Safety limit to prevent infinite loop */
+            break;
+        }
+    }
+    fflush(stdout);
+
+    /* 2. Get new output since last stream offset */
+    size_t offset = tokio_bridge_get_stream_offset();
+    size_t len = 0;
+    char *data = get_output_since_offset(&offset, &len);
+
+    if (data == NULL || len == 0) {
+        /* No new data to send */
+        if (data) free(data);
+        flush_in_progress = 0;
+        return;
+    }
+
+    /* 3. Send chunk via bridge callback */
+    tokio_bridge_send_chunk(data, len);
+
+    /* 4. Update stream offset */
+    tokio_bridge_set_stream_offset(offset);
+
+    /* 5. Free buffer */
+    free(data);
+
+    flush_in_progress = 0;
+}
+
+/* tokio_stream_flush(): bool - flush output buffer and send to client
+ *
+ * For SSE/streaming mode. Sends any new output since last flush to the client.
+ * Returns false if streaming mode is not enabled.
+ *
+ * Note: With the SAPI flush handler installed, standard flush() also works
+ * for SSE streaming. This function is kept for explicit streaming control
+ * and backward compatibility.
+ *
+ * Usage:
+ *   header('Content-Type: text/event-stream');
+ *   header('Cache-Control: no-cache');
+ *
+ *   while ($has_data) {
+ *       echo "data: " . json_encode($data) . "\n\n";
+ *       flush();  // Works via SAPI flush handler
+ *       sleep(1);
+ *   }
+ */
+PHP_FUNCTION(tokio_stream_flush)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    /* Check if streaming mode is enabled */
+    if (!tokio_bridge_is_streaming()) {
+        RETURN_FALSE;
+    }
+
+    /* 1. Flush PHP output buffers to stdout (memfd) */
+    while (php_output_get_level() > 0) {
+        php_output_flush();
+    }
+    fflush(stdout);
+
+    /* 2. Get new output since last stream offset */
+    size_t offset = tokio_bridge_get_stream_offset();
+    size_t len = 0;
+    char *data = get_output_since_offset(&offset, &len);
+
+    if (data == NULL || len == 0) {
+        /* No new data to send */
+        if (data) free(data);
+        RETURN_TRUE;  /* Not an error, just no new data */
+    }
+
+    /* 3. Send chunk via bridge callback */
+    int result = tokio_bridge_send_chunk(data, len);
+
+    /* 4. Update stream offset */
+    tokio_bridge_set_stream_offset(offset);
+
+    /* 5. Free buffer */
+    free(data);
+
+    RETURN_BOOL(result != 0);
+}
+
+/* tokio_is_streaming(): bool - check if streaming mode is enabled */
+PHP_FUNCTION(tokio_is_streaming)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    RETURN_BOOL(tokio_bridge_is_streaming());
+}
+
 /* tokio_finish_request(): bool - send response to client, continue script execution
  *
  * Analog of fastcgi_finish_request(). After calling:
@@ -1223,6 +1403,12 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_finish_request, 0, 0, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_stream_flush, 0, 0, _IS_BOOL, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_is_streaming, 0, 0, _IS_BOOL, 0)
+ZEND_END_ARG_INFO()
+
 /* ============================================================================
  * PHP Extension registration
  * ============================================================================ */
@@ -1234,6 +1420,8 @@ static const zend_function_entry tokio_sapi_functions[] = {
     PHP_FE(tokio_async_call, arginfo_tokio_async_call)
     PHP_FE(tokio_request_heartbeat, arginfo_tokio_request_heartbeat)
     PHP_FE(tokio_finish_request, arginfo_tokio_finish_request)
+    PHP_FE(tokio_stream_flush, arginfo_tokio_stream_flush)
+    PHP_FE(tokio_is_streaming, arginfo_tokio_is_streaming)
     PHP_FE_END
 };
 

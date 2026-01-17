@@ -79,7 +79,11 @@ pub use common::QUEUE_FULL_ERROR;
 #[cfg(feature = "php")]
 pub use common::REQUEST_TIMEOUT_ERROR;
 
+use crate::server::response::StreamChunk;
 use crate::types::{ScriptRequest, ScriptResponse};
+
+/// Default buffer size for streaming channels.
+pub const DEFAULT_STREAM_BUFFER_SIZE: usize = 100;
 
 /// Error type for script execution.
 #[derive(Debug, Clone)]
@@ -166,5 +170,19 @@ pub trait ScriptExecutor: Send + Sync {
     /// Stub executors return true for maximum performance.
     fn skip_file_check(&self) -> bool {
         false
+    }
+
+    /// Executes a streaming script (SSE).
+    ///
+    /// Returns immediately with a receiver for streaming chunks.
+    /// The PHP script sends chunks via `tokio_stream_flush()`.
+    ///
+    /// Default implementation returns an error (not supported).
+    async fn execute_streaming(
+        &self,
+        _request: ScriptRequest,
+        _buffer_size: usize,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, ExecutorError> {
+        Err(ExecutorError::from("Streaming not supported by this executor"))
     }
 }

@@ -12,7 +12,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
-use crate::bridge::{FinishChannel, FinishData};
+use crate::bridge::{FinishChannel, FinishData, StreamingChannel};
+use crate::server::response::StreamChunk;
 use crate::executor::sapi;
 use crate::profiler::ProfileData;
 use crate::types::{ScriptRequest, ScriptResponse};
@@ -63,6 +64,8 @@ pub struct WorkerRequest {
     pub heartbeat_ctx: Option<Arc<HeartbeatContext>>,
     /// Finish channel for streaming early response (PHP calls tokio_finish_request)
     pub finish_channel: Option<Arc<FinishChannel>>,
+    /// Streaming channel for SSE (PHP calls tokio_stream_flush)
+    pub streaming_channel: Option<Arc<StreamingChannel>>,
 }
 
 /// Handle to a worker thread
@@ -259,6 +262,7 @@ impl WorkerPool {
                 queued_at,
                 heartbeat_ctx: heartbeat_ctx.clone(),
                 finish_channel: Some(finish_channel.clone()),
+                streaming_channel: None, // Non-streaming request
             })
             .map_err(|e| match e {
                 mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
@@ -324,6 +328,54 @@ impl WorkerPool {
                 }
             }
         }
+    }
+
+    /// Executes a streaming request asynchronously via the worker pool.
+    ///
+    /// Returns immediately with a receiver for streaming chunks.
+    /// The PHP script sends chunks via `tokio_stream_flush()`.
+    ///
+    /// # Arguments
+    /// * `request` - The script request
+    /// * `buffer_size` - Size of the streaming channel buffer
+    ///
+    /// # Returns
+    /// * `Ok((receiver, headers))` - Receiver for chunks and initial headers
+    /// * `Err(message)` - If queue is full or pool is shut down
+    pub fn execute_streaming(
+        &self,
+        request: ScriptRequest,
+        buffer_size: usize,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, String> {
+        let (response_tx, _response_rx) = oneshot::channel();
+        let timeout = request.timeout;
+
+        let queued_at = Instant::now();
+
+        // Create heartbeat context
+        let heartbeat_ctx =
+            timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
+
+        // Create streaming channel
+        let (streaming_channel, stream_rx) = StreamingChannel::new(buffer_size);
+        let streaming_channel = Arc::new(streaming_channel);
+
+        // Use try_send to avoid blocking
+        self.request_tx
+            .try_send(WorkerRequest {
+                request,
+                response_tx,
+                queued_at,
+                heartbeat_ctx,
+                finish_channel: None, // Streaming uses streaming_channel instead
+                streaming_channel: Some(streaming_channel),
+            })
+            .map_err(|e| match e {
+                mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
+                mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
+            })?;
+
+        Ok(stream_rx)
     }
 
     /// Returns the queue capacity
@@ -791,9 +843,10 @@ pub fn worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 queued_at,
                 heartbeat_ctx: _,
                 finish_channel: _,
+                streaming_channel: _,
             }) => {
-                // Note: heartbeat_ctx and finish_channel are ignored here - they're only used
-                // in ExtExecutor which has the tokio_sapi extension for heartbeat/finish support
+                // Note: heartbeat_ctx, finish_channel, and streaming_channel are ignored here -
+                // they're only used in ExtExecutor which has the tokio_sapi extension
                 let profiling = request.profile;
 
                 // Measure queue wait time

@@ -27,6 +27,7 @@ use super::sapi;
 use super::{ExecutorError, ScriptExecutor};
 use crate::bridge;
 use crate::profiler::ProfileData;
+use crate::server::response::StreamChunk;
 use crate::types::{ScriptRequest, ScriptResponse};
 
 // =============================================================================
@@ -486,6 +487,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 queued_at,
                 heartbeat_ctx,
                 finish_channel,
+                streaming_channel,
             }) => {
                 let profiling = request.profile;
                 let request_id = next_request_id();
@@ -562,6 +564,19 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                         }
                     }
 
+                    // Set up streaming callback via bridge (SSE support)
+                    if let Some(ref channel) = streaming_channel {
+                        let channel_ptr = channel.as_ptr();
+                        // SAFETY: channel_ptr is valid for the duration of request processing
+                        // The channel Arc is kept alive by WorkerPool::execute_streaming()
+                        unsafe {
+                            bridge::enable_streaming(
+                                channel_ptr,
+                                bridge::StreamingChannel::callback,
+                            );
+                        }
+                    }
+
                     // Initialize tokio_sapi request context (for headers, etc.)
                     unsafe {
                         tokio_sapi_request_init(request_id);
@@ -592,6 +607,11 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                                 0
                             };
 
+                            // End streaming mode if it was enabled
+                            if streaming_channel.is_some() {
+                                bridge::end_stream();
+                            }
+
                             // Finalize and build response (reads finish state from bridge)
                             // Must be called AFTER php_request_shutdown but BEFORE bridge::destroy_ctx
                             let response = finalize_execution(
@@ -609,6 +629,10 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                             response
                         }
                         Err(e) => {
+                            // End streaming mode if it was enabled
+                            if streaming_channel.is_some() {
+                                bridge::end_stream();
+                            }
                             unsafe {
                                 tokio_sapi_request_shutdown();
                                 php_request_shutdown(ptr::null_mut());
@@ -674,6 +698,14 @@ impl ExtPool {
         self.pool.execute(request).await
     }
 
+    fn execute_streaming_request(
+        &self,
+        request: ScriptRequest,
+        buffer_size: usize,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, String> {
+        self.pool.execute_streaming(request, buffer_size)
+    }
+
     fn worker_count(&self) -> usize {
         self.pool.worker_count()
     }
@@ -721,6 +753,16 @@ impl ScriptExecutor for ExtExecutor {
         self.pool
             .execute_request(request)
             .await
+            .map_err(ExecutorError::from)
+    }
+
+    async fn execute_streaming(
+        &self,
+        request: ScriptRequest,
+        buffer_size: usize,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, ExecutorError> {
+        self.pool
+            .execute_streaming_request(request, buffer_size)
             .map_err(ExecutorError::from)
     }
 

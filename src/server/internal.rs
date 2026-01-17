@@ -144,6 +144,11 @@ pub struct RequestMetrics {
     // Response time tracking (microseconds)
     pub total_response_time_us: AtomicU64,
     pub response_count: AtomicU64,
+    // SSE metrics
+    pub sse_active: AtomicUsize,
+    pub sse_total: AtomicU64,
+    pub sse_chunks: AtomicU64,
+    pub sse_bytes: AtomicU64,
 }
 
 impl RequestMetrics {
@@ -166,6 +171,10 @@ impl RequestMetrics {
             dropped_requests: AtomicUsize::new(0),
             total_response_time_us: AtomicU64::new(0),
             response_count: AtomicU64::new(0),
+            sse_active: AtomicUsize::new(0),
+            sse_total: AtomicU64::new(0),
+            sse_chunks: AtomicU64::new(0),
+            sse_bytes: AtomicU64::new(0),
         }
     }
 
@@ -265,6 +274,26 @@ impl RequestMetrics {
         } else {
             0.0
         }
+    }
+
+    /// Increment active SSE connections (called when SSE stream starts).
+    #[inline]
+    pub fn sse_connection_started(&self) {
+        self.sse_active.fetch_add(1, Ordering::Relaxed);
+        self.sse_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement active SSE connections (called when SSE stream ends).
+    #[inline]
+    pub fn sse_connection_ended(&self) {
+        self.sse_active.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Record SSE chunk sent.
+    #[inline]
+    pub fn sse_chunk_sent(&self, bytes: usize) {
+        self.sse_chunks.fetch_add(1, Ordering::Relaxed);
+        self.sse_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
     }
 }
 
@@ -413,7 +442,23 @@ async fn handle_internal_request(
                  \n\
                  # HELP tokio_php_memory_usage_percent Memory usage percentage\n\
                  # TYPE tokio_php_memory_usage_percent gauge\n\
-                 tokio_php_memory_usage_percent {:.2}\n",
+                 tokio_php_memory_usage_percent {:.2}\n\
+                 \n\
+                 # HELP tokio_php_sse_active_connections Current active SSE connections\n\
+                 # TYPE tokio_php_sse_active_connections gauge\n\
+                 tokio_php_sse_active_connections {}\n\
+                 \n\
+                 # HELP tokio_php_sse_connections_total Total SSE connections\n\
+                 # TYPE tokio_php_sse_connections_total counter\n\
+                 tokio_php_sse_connections_total {}\n\
+                 \n\
+                 # HELP tokio_php_sse_chunks_total Total SSE chunks sent\n\
+                 # TYPE tokio_php_sse_chunks_total counter\n\
+                 tokio_php_sse_chunks_total {}\n\
+                 \n\
+                 # HELP tokio_php_sse_bytes_total Total SSE bytes sent\n\
+                 # TYPE tokio_php_sse_bytes_total counter\n\
+                 tokio_php_sse_bytes_total {}\n",
                 metrics.uptime_secs(),
                 metrics.rps(),
                 metrics.avg_response_time_us() / 1_000_000.0, // convert us to seconds
@@ -439,6 +484,10 @@ async fn handle_internal_request(
                 sys.memory_available_bytes,
                 sys.memory_used_bytes,
                 sys.memory_usage_percent,
+                metrics.sse_active.load(Ordering::Relaxed),
+                metrics.sse_total.load(Ordering::Relaxed),
+                metrics.sse_chunks.load(Ordering::Relaxed),
+                metrics.sse_bytes.load(Ordering::Relaxed),
             );
             Response::builder()
                 .status(StatusCode::OK)

@@ -9,6 +9,7 @@
  * - Shared request context accessible from both Rust and PHP
  * - Finish request state (fastcgi_finish_request analog)
  * - Heartbeat for request timeout extension
+ * - Streaming support for SSE (Server-Sent Events)
  */
 
 #ifndef TOKIO_BRIDGE_H
@@ -66,6 +67,22 @@ typedef void (*tokio_finish_callback_t)(
     int status_code
 );
 
+/**
+ * Callback for streaming chunks (SSE support)
+ *
+ * Called when PHP flushes output in streaming mode.
+ * Each call sends a chunk of data to the client immediately.
+ *
+ * @param ctx       Opaque context pointer (Rust channel sender)
+ * @param data      Chunk data bytes
+ * @param data_len  Length of data in bytes
+ */
+typedef void (*tokio_stream_chunk_callback_t)(
+    void *ctx,
+    const char *data,
+    size_t data_len
+);
+
 /* ============================================================================
  * Bridge context structure
  * ============================================================================ */
@@ -104,6 +121,12 @@ typedef struct tokio_bridge_ctx {
     /* Finish request callback (streaming early response) */
     void *finish_ctx;
     tokio_finish_callback_t finish_callback;
+
+    /* Streaming support (SSE) */
+    int is_streaming;                               /* Streaming mode enabled */
+    size_t stream_offset;                           /* Last read offset for polling */
+    void *stream_ctx;                               /* Stream callback context */
+    tokio_stream_chunk_callback_t stream_callback;  /* Chunk callback */
 
 } tokio_bridge_ctx_t;
 
@@ -278,6 +301,56 @@ int tokio_bridge_get_header(int index, const char **name, const char **value);
  * Called at request start.
  */
 void tokio_bridge_clear_headers(void);
+
+/* ============================================================================
+ * Streaming API (SSE support)
+ * ============================================================================ */
+
+/**
+ * Enable streaming mode for current request.
+ * Called from Rust before PHP execution to enable SSE.
+ *
+ * @param ctx      Opaque pointer to Rust channel sender
+ * @param callback Function to call for each chunk
+ */
+void tokio_bridge_enable_streaming(void *ctx, tokio_stream_chunk_callback_t callback);
+
+/**
+ * Check if streaming mode is enabled.
+ *
+ * @return 1 if streaming, 0 otherwise
+ */
+int tokio_bridge_is_streaming(void);
+
+/**
+ * Send a streaming chunk to the client.
+ * Called from PHP when flush() is detected.
+ *
+ * @param data     Chunk data bytes
+ * @param data_len Length of data
+ * @return         1 on success, 0 if streaming not enabled
+ */
+int tokio_bridge_send_chunk(const char *data, size_t data_len);
+
+/**
+ * Get the current stream offset (for polling mode).
+ * Returns the last read position in output buffer.
+ */
+size_t tokio_bridge_get_stream_offset(void);
+
+/**
+ * Set the stream offset (for polling mode).
+ * Updates the last read position after reading new data.
+ *
+ * @param offset New offset value
+ */
+void tokio_bridge_set_stream_offset(size_t offset);
+
+/**
+ * End streaming mode.
+ * Called when PHP script finishes or streaming is stopped.
+ */
+void tokio_bridge_end_stream(void);
 
 #ifdef __cplusplus
 }

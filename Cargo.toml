@@ -18,6 +18,7 @@ stub = []
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "net", "io-util", "fs", "sync", "signal", "macros"] }
+tokio-stream = "0.1"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 http = "1"
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server-graceful"] }

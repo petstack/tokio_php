@@ -440,6 +440,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 rate_limiter: self.rate_limiter.clone(),
                 static_cache_ttl: self.config.static_cache_ttl,
                 request_timeout: self.config.request_timeout,
+                sse_timeout: self.config.sse_timeout,
                 profile_enabled: self.profile_enabled,
                 access_log_enabled: self.access_log_enabled,
             });

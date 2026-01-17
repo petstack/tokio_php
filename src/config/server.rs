@@ -10,6 +10,7 @@ use super::ConfigError;
 // Default values as constants
 const DEFAULT_STATIC_CACHE_TTL_SECS: u64 = 86400; // 1 day
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120; // 2 minutes
+const DEFAULT_SSE_TIMEOUT_SECS: u64 = 1800; // 30 minutes (SSE connections are long-lived)
 const DEFAULT_DRAIN_TIMEOUT_SECS: u64 = 30;
 
 /// Duration-based configuration that can be disabled.
@@ -76,6 +77,9 @@ pub type StaticCacheTtl = OptionalDuration;
 /// Request timeout (default: 2 minutes).
 pub type RequestTimeout = OptionalDuration;
 
+/// SSE (Server-Sent Events) timeout (default: 30 minutes).
+pub type SseTimeout = OptionalDuration;
+
 /// TLS configuration.
 #[derive(Clone, Debug, Default)]
 pub struct TlsConfig {
@@ -126,6 +130,8 @@ pub struct ServerConfig {
     pub static_cache_ttl: StaticCacheTtl,
     /// Request timeout.
     pub request_timeout: RequestTimeout,
+    /// SSE (Server-Sent Events) timeout.
+    pub sse_timeout: SseTimeout,
     /// TLS configuration.
     pub tls: TlsConfig,
 }
@@ -150,6 +156,10 @@ impl ServerConfig {
             request_timeout: OptionalDuration::parse(
                 &env_or("REQUEST_TIMEOUT", "2m"),
                 DEFAULT_REQUEST_TIMEOUT_SECS,
+            ),
+            sse_timeout: OptionalDuration::parse(
+                &env_or("SSE_TIMEOUT", "30m"),
+                DEFAULT_SSE_TIMEOUT_SECS,
             ),
             tls: TlsConfig::from_env(),
         })

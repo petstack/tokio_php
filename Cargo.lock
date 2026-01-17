@@ -1379,6 +1379,7 @@ dependencies = [
  "socket2 0.5.10",
  "tokio",
  "tokio-rustls",
+ "tokio-stream",
  "tokio-test",
  "tracing",
  "tracing-subscriber",

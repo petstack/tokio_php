@@ -217,6 +217,55 @@ sleep(10);  // This doesn't delay the response
 
 **Use cases:** Webhooks, async notifications, background logging, cleanup tasks.
 
+#### tokio_stream_flush(): bool
+
+Flushes output buffer and sends data to client immediately in SSE (Server-Sent Events) streaming mode. Returns `false` if streaming mode is not enabled.
+
+```php
+<?php
+// SSE streaming example
+// Client sends: Accept: text/event-stream
+
+while ($has_data) {
+    $data = json_encode(['time' => date('H:i:s'), 'value' => rand()]);
+    echo "data: $data\n\n";
+    tokio_stream_flush();  // Send immediately to client
+    sleep(1);
+}
+```
+
+**Streaming mode is automatically enabled** when the client sends `Accept: text/event-stream` header.
+
+**Test with curl:**
+```bash
+curl -N -H "Accept: text/event-stream" http://localhost:8080/test_sse.php
+```
+
+**JavaScript EventSource:**
+```javascript
+const source = new EventSource('/test_sse.php');
+source.onmessage = (e) => console.log(JSON.parse(e.data));
+```
+
+**SSE Format:**
+```
+data: {"key": "value"}\n\n
+event: custom-event\ndata: payload\n\n
+```
+
+#### tokio_is_streaming(): bool
+
+Check if streaming mode is enabled for the current request.
+
+```php
+<?php
+if (tokio_is_streaming()) {
+    // Running in SSE mode
+    echo "data: streaming mode active\n\n";
+    tokio_stream_flush();
+}
+```
+
 ### PHP Worker Pool
 
 - Multi-threaded worker pool (threads = `PHP_WORKERS` or CPU count)
@@ -330,6 +379,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout (seconds) |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration (1d, 1w, 1m, 1y, off) |
 | `REQUEST_TIMEOUT` | `2m` | Request timeout (30s, 2m, 5m, off). Returns 504 on timeout. Use `tokio_request_heartbeat()` to extend |
+| `SSE_TIMEOUT` | `30m` | SSE/streaming connection timeout (30s, 2m, 1h, off). Long-lived SSE connections use this instead of REQUEST_TIMEOUT |
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |

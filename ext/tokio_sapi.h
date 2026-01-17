@@ -184,6 +184,11 @@ int tokio_sapi_get_response_code(void);
 /* Execute script */
 int tokio_sapi_execute_script(const char *path);
 
+/* SAPI flush handler - for registering as sapi_module.flush
+ * Called by PHP's flush() function. When streaming mode is enabled,
+ * sends new output to client via tokio_bridge_send_chunk(). */
+void tokio_sapi_flush(void *server_context);
+
 /* Heartbeat API for request timeout extension */
 typedef int64_t (*tokio_heartbeat_fn_t)(void *ctx, uint64_t secs);
 void tokio_sapi_set_heartbeat_ctx(void *ctx, uint64_t max_secs, tokio_heartbeat_fn_t callback);

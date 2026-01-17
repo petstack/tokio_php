@@ -120,7 +120,18 @@
             <li><a href="/ext_test.php">ext_test.php</a><span class="desc">Extension test</span></li>
             <li><a href="/method.php">method.php</a><span class="desc">HTTP methods tester</span></li>
             <li><a href="/api.php">api.php</a><span class="desc">REST API example</span></li>
+            <li><a href="/test_sse.php">test_sse.php</a><span class="desc">SSE streaming</span></li>
         </ul>
+    </div>
+
+    <div class="section">
+        <div class="section-title">SSE Demo</div>
+        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+            <button id="sse-start" style="padding: 8px 16px; background: #0066cc; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Start SSE</button>
+            <button id="sse-stop" style="padding: 8px 16px; background: #dc3545; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;" disabled>Stop</button>
+            <span id="sse-status" style="color: #999; font-size: 13px;">Not connected</span>
+        </div>
+        <div id="sse-output" style="background: #1e1e1e; color: #d4d4d4; padding: 14px; border-radius: 8px; font-family: 'SF Mono', Consolas, monospace; font-size: 13px; height: 200px; overflow-y: auto; white-space: pre-wrap;"></div>
     </div>
 
     <div class="section">
@@ -173,6 +184,7 @@
     </div>
 
     <script>
+        // Tabs
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -182,6 +194,66 @@
             });
         });
         document.querySelector('.tab-content').classList.add('active');
+
+        // SSE Demo
+        let eventSource = null;
+        const output = document.getElementById('sse-output');
+        const status = document.getElementById('sse-status');
+        const startBtn = document.getElementById('sse-start');
+        const stopBtn = document.getElementById('sse-stop');
+
+        function log(msg, color = '#d4d4d4') {
+            const time = new Date().toLocaleTimeString();
+            output.innerHTML += `<span style="color:#6a9955">[${time}]</span> <span style="color:${color}">${msg}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        startBtn.addEventListener('click', () => {
+            output.innerHTML = '';
+            log('Connecting to /test_sse.php...', '#569cd6');
+
+            eventSource = new EventSource('/test_sse.php');
+
+            eventSource.onopen = () => {
+                status.textContent = 'Connected';
+                status.style.color = '#28a745';
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                log('Connection established', '#4ec9b0');
+            };
+
+            eventSource.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    log(`Event ${data.event}: ${data.message}`, '#ce9178');
+                } catch {
+                    log(e.data, '#ce9178');
+                }
+            };
+
+            eventSource.onerror = () => {
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    log('Connection closed', '#569cd6');
+                    status.textContent = 'Disconnected';
+                    status.style.color = '#999';
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    eventSource = null;
+                }
+            };
+        });
+
+        stopBtn.addEventListener('click', () => {
+            if (eventSource) {
+                eventSource.close();
+                log('Connection closed by user', '#dcdcaa');
+                status.textContent = 'Disconnected';
+                status.style.color = '#999';
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                eventSource = null;
+            }
+        });
     </script>
 <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #eee; font-size: 12px; color: #999;"><?= number_format((microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000, 2) ?> ms</div>
 </body>

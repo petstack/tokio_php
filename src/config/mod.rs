@@ -23,7 +23,7 @@ pub use error::ConfigError;
 pub use executor::{ExecutorConfig, ExecutorType};
 pub use logging::LoggingConfig;
 pub use middleware::{MiddlewareConfig, RateLimitConfig};
-pub use server::{OptionalDuration, RequestTimeout, ServerConfig, StaticCacheTtl};
+pub use server::{OptionalDuration, RequestTimeout, ServerConfig, SseTimeout, StaticCacheTtl};
 
 /// Complete application configuration.
 #[derive(Clone, Debug)]
@@ -88,6 +88,12 @@ impl Config {
             );
         } else {
             info!("Request timeout: disabled");
+        }
+
+        if self.server.sse_timeout.is_enabled() {
+            info!("SSE timeout: {}s", self.server.sse_timeout.as_secs());
+        } else {
+            info!("SSE timeout: disabled");
         }
 
         if let Some(rl) = self.middleware.rate_limit() {

@@ -9,6 +9,7 @@
 //! - Shared TLS context accessible from both Rust and PHP
 //! - Finish request state (fastcgi_finish_request analog)
 //! - Heartbeat for request timeout extension
+//! - Streaming support for SSE (Server-Sent Events)
 //!
 //! # Usage
 //!
@@ -41,6 +42,8 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::server::response::StreamChunk;
+
 // =============================================================================
 // FFI Bindings
 // =============================================================================
@@ -61,7 +64,13 @@ pub type FinishCallback = extern "C" fn(
     status_code: c_int,
 );
 
+/// Callback type for streaming chunks (SSE support).
+///
+/// Called when PHP flushes output in streaming mode.
+pub type StreamChunkCallback = extern "C" fn(ctx: *mut c_void, data: *const c_char, data_len: usize);
+
 #[link(name = "tokio_bridge")]
+#[allow(dead_code)] // FFI functions may be called from C, not Rust
 extern "C" {
     // Context lifecycle
     fn tokio_bridge_init_ctx(request_id: u64, worker_id: u64);
@@ -79,6 +88,14 @@ extern "C" {
 
     // Finish request callback (streaming early response)
     fn tokio_bridge_set_finish_callback(ctx: *mut c_void, callback: FinishCallback);
+
+    // Streaming (SSE support)
+    fn tokio_bridge_enable_streaming(ctx: *mut c_void, callback: StreamChunkCallback);
+    fn tokio_bridge_is_streaming() -> c_int;
+    fn tokio_bridge_send_chunk(data: *const c_char, data_len: usize) -> c_int;
+    fn tokio_bridge_get_stream_offset() -> usize;
+    fn tokio_bridge_set_stream_offset(offset: usize);
+    fn tokio_bridge_end_stream();
 }
 
 // =============================================================================
@@ -159,6 +176,42 @@ pub unsafe fn set_heartbeat(ctx: *mut c_void, max_secs: u64, callback: Heartbeat
 #[inline]
 pub unsafe fn set_finish_callback(ctx: *mut c_void, callback: FinishCallback) {
     tokio_bridge_set_finish_callback(ctx, callback);
+}
+
+/// Enable streaming mode for current request.
+///
+/// The callback will be invoked when PHP flushes output in streaming mode.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer to a `StreamingChannel` created via `Arc::as_ptr`.
+#[inline]
+pub unsafe fn enable_streaming(ctx: *mut c_void, callback: StreamChunkCallback) {
+    tokio_bridge_enable_streaming(ctx, callback);
+}
+
+/// Check if streaming mode is enabled.
+#[inline]
+pub fn is_streaming() -> bool {
+    unsafe { tokio_bridge_is_streaming() != 0 }
+}
+
+/// Get the current stream offset (for polling mode).
+#[inline]
+pub fn get_stream_offset() -> usize {
+    unsafe { tokio_bridge_get_stream_offset() }
+}
+
+/// Set the stream offset (for polling mode).
+#[inline]
+pub fn set_stream_offset(offset: usize) {
+    unsafe { tokio_bridge_set_stream_offset(offset) }
+}
+
+/// End streaming mode.
+#[inline]
+pub fn end_stream() {
+    unsafe { tokio_bridge_end_stream() }
 }
 
 // =============================================================================
@@ -253,6 +306,66 @@ impl FinishChannel {
 impl Default for FinishChannel {
     fn default() -> Self {
         Self::new().0
+    }
+}
+
+// =============================================================================
+// Streaming Channel (SSE Support)
+// =============================================================================
+
+/// Channel for sending streaming chunks to the HTTP response.
+///
+/// When PHP flushes output in streaming mode, the callback sends data
+/// through this channel, allowing the HTTP handler to stream chunks
+/// to the client immediately.
+pub struct StreamingChannel {
+    tx: mpsc::Sender<StreamChunk>,
+}
+
+impl StreamingChannel {
+    /// Create a new streaming channel.
+    ///
+    /// Returns the channel and a receiver. Buffer size controls backpressure.
+    pub fn new(buffer_size: usize) -> (Self, mpsc::Receiver<StreamChunk>) {
+        let (tx, rx) = mpsc::channel(buffer_size);
+        (Self { tx }, rx)
+    }
+
+    /// Get a raw pointer to this channel for passing to FFI.
+    pub fn as_ptr(self: &Arc<Self>) -> *mut c_void {
+        Arc::as_ptr(self) as *mut c_void
+    }
+
+    /// The FFI callback function that the bridge library invokes.
+    ///
+    /// Called from C when PHP flushes output in streaming mode.
+    /// Sends the chunk through the channel.
+    ///
+    /// # Safety
+    ///
+    /// This is an FFI callback. The caller (C code) must ensure:
+    /// - `ctx` is a valid pointer from `Arc::as_ptr`
+    /// - `data` points to `data_len` bytes (or is null if data_len is 0)
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn callback(ctx: *mut c_void, data: *const c_char, data_len: usize) {
+        if ctx.is_null() {
+            return;
+        }
+
+        // SAFETY: ctx was created from Arc::as_ptr and is still valid
+        let channel = unsafe { &*(ctx as *const StreamingChannel) };
+
+        // Skip empty chunks
+        if data.is_null() || data_len == 0 {
+            return;
+        }
+
+        // Copy data bytes
+        let slice = unsafe { std::slice::from_raw_parts(data as *const u8, data_len) };
+        let chunk = StreamChunk::from(slice);
+
+        // Non-blocking send (if receiver dropped or buffer full, that's OK)
+        let _ = channel.tx.try_send(chunk);
     }
 }
 
@@ -361,5 +474,13 @@ mod tests {
         // Test with wrong count (more than actual)
         let result = parse_headers_buffer(buffer.as_ptr() as *const c_char, buffer.len(), 5);
         assert_eq!(result.len(), 2); // Should only parse what's available
+    }
+
+    #[test]
+    fn test_streaming_channel_creation() {
+        let (channel, _rx) = StreamingChannel::new(100);
+        let arc = Arc::new(channel);
+        let ptr = arc.as_ptr();
+        assert!(!ptr.is_null());
     }
 }

@@ -2,9 +2,10 @@
 
 pub mod compression;
 pub mod static_file;
+pub mod streaming;
 
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{Either, Full};
 use hyper::{Response, StatusCode};
 
 use crate::types::ScriptResponse;
@@ -14,6 +15,31 @@ use compression::{
 
 pub use compression::accepts_brotli;
 pub use static_file::serve_static_file;
+pub use streaming::{
+    is_sse_accept, is_sse_content_type, sse_response, stream_channel, streaming_response,
+    StreamChunk, StreamingBody, StreamingResponse, DEFAULT_STREAM_BUFFER_SIZE,
+};
+
+/// Response body that can be either full (buffered) or streaming.
+///
+/// This type allows handlers to return either a complete response or a streaming
+/// response using the same return type.
+pub type FlexibleBody = Either<Full<Bytes>, StreamingBody>;
+
+/// HTTP response with flexible body (full or streaming).
+pub type FlexibleResponse = Response<FlexibleBody>;
+
+/// Convert a full response to a flexible response.
+#[inline]
+pub fn full_to_flexible(resp: Response<Full<Bytes>>) -> FlexibleResponse {
+    resp.map(Either::Left)
+}
+
+/// Convert a streaming response to a flexible response.
+#[inline]
+pub fn streaming_to_flexible(resp: StreamingResponse) -> FlexibleResponse {
+    resp.map(Either::Right)
+}
 
 // Pre-allocated static bytes for common responses
 pub static EMPTY_BODY: Bytes = Bytes::from_static(b"");
