@@ -82,6 +82,9 @@ pub use common::REQUEST_TIMEOUT_ERROR;
 #[cfg(feature = "php")]
 pub use common::ExecuteResult;
 
+#[cfg(feature = "php")]
+pub use sapi::ResponseChunk;
+
 use crate::server::response::StreamChunk;
 use crate::types::{ScriptRequest, ScriptResponse};
 
@@ -186,7 +189,9 @@ pub trait ScriptExecutor: Send + Sync {
         _request: ScriptRequest,
         _buffer_size: usize,
     ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, ExecutorError> {
-        Err(ExecutorError::from("Streaming not supported by this executor"))
+        Err(ExecutorError::from(
+            "Streaming not supported by this executor",
+        ))
     }
 
     /// Executes a request with automatic SSE detection.
@@ -205,6 +210,6 @@ pub trait ScriptExecutor: Send + Sync {
     ) -> Result<ExecuteResult, ExecutorError> {
         self.execute(request)
             .await
-            .map(ExecuteResult::Normal)
+            .map(|r| ExecuteResult::Normal(Box::new(r)))
     }
 }

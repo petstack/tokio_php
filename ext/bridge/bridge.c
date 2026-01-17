@@ -426,3 +426,55 @@ void tokio_bridge_end_stream(void)
     tls_ctx->stream_ctx = NULL;
     tls_ctx->stream_callback = NULL;
 }
+
+/* ============================================================================
+ * Stream Finish API (new streaming architecture)
+ * ============================================================================ */
+
+void tokio_bridge_set_stream_finish_callback(void *ctx, tokio_stream_finish_callback_t callback)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    tls_ctx->stream_finish_ctx = ctx;
+    tls_ctx->stream_finish_callback = callback;
+}
+
+int tokio_bridge_trigger_stream_finish(void)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+
+    /* Idempotent - only trigger once */
+    if (tls_ctx->is_finished) {
+        return 0;
+    }
+
+    /* Mark as finished first (prevents re-entry) */
+    tls_ctx->is_finished = 1;
+
+    /* If stream finish callback is set, invoke it */
+    if (tls_ctx->stream_finish_callback != NULL) {
+        tls_ctx->stream_finish_callback(tls_ctx->stream_finish_ctx);
+        return 1;
+    }
+
+    /* Fallback: try the legacy finish callback (for backwards compatibility) */
+    /* Note: In the new streaming architecture, body is already sent via ub_write,
+     * so we pass empty body/headers to the legacy callback */
+    if (tls_ctx->finish_callback != NULL) {
+        tls_ctx->finish_callback(
+            tls_ctx->finish_ctx,
+            NULL,  /* body - already sent via ub_write */
+            0,     /* body_len */
+            NULL,  /* headers - already sent */
+            0,     /* headers_len */
+            0,     /* header_count */
+            tls_ctx->response_code
+        );
+        return 1;
+    }
+
+    return 0;
+}

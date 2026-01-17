@@ -25,6 +25,9 @@ use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use bytes::Bytes;
+use tokio::sync::mpsc;
+
 // =============================================================================
 // PHP FFI Bindings
 // =============================================================================
@@ -208,15 +211,230 @@ thread_local! {
     pub static CAPTURED_STATUS: RefCell<u16> = const { RefCell::new(200) };
     /// Request data for SAPI callbacks (set before php_request_startup)
     static REQUEST_DATA: RefCell<Option<RequestDataOwned>> = const { RefCell::new(None) };
+    /// Streaming state for current request (set when streaming is enabled)
+    static STREAM_STATE: RefCell<Option<StreamState>> = const { RefCell::new(None) };
+}
+
+// =============================================================================
+// HTTP Streaming Support
+// =============================================================================
+
+/// Response chunk types for streaming HTTP responses.
+/// Sent through mpsc channel from worker to HTTP handler.
+#[derive(Debug)]
+pub enum ResponseChunk {
+    /// HTTP headers (sent once, must be first chunk)
+    Headers {
+        status: u16,
+        headers: Vec<(String, String)>,
+    },
+    /// Body data chunk
+    Body(Bytes),
+    /// End of response (script finished or tokio_finish_request called)
+    End,
+    /// Error occurred during execution
+    Error(String),
+}
+
+/// Streaming state for current request.
+/// Stored in thread-local storage during PHP execution.
+struct StreamState {
+    /// Channel sender for response chunks
+    tx: mpsc::Sender<ResponseChunk>,
+    /// HTTP status code (can be changed via header() before output)
+    status_code: u16,
+    /// Whether headers have been sent to the client
+    headers_sent: bool,
+    /// Whether tokio_finish_request() was called
+    finished: bool,
+}
+
+/// SAPI ub_write callback - called for each output from PHP.
+/// This is called AFTER PHP's output buffering (ob_*), so we receive
+/// data when PHP decides to actually output it (buffer full, flush(), script end).
+///
+/// # Safety
+/// Called from PHP via FFI. The str pointer is valid for the duration of the call.
+unsafe extern "C" fn stream_ub_write(str: *const c_char, len: usize) -> usize {
+    // Quick path: if no streaming state, this is likely during PHP startup/shutdown
+    // Return len to indicate all bytes were "written"
+    STREAM_STATE.with(|state| {
+        let mut state_ref = state.borrow_mut();
+        let stream_state = match state_ref.as_mut() {
+            Some(s) => s,
+            None => return len, // No streaming context - ignore output
+        };
+
+        // After tokio_finish_request(), output is discarded
+        if stream_state.finished {
+            return len;
+        }
+
+        // First output triggers header sending
+        if !stream_state.headers_sent {
+            // Take headers from CAPTURED_HEADERS (populated by header_handler)
+            let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+            let status = stream_state.status_code;
+
+            // Send headers chunk (blocking_send is ok - we're in a worker thread)
+            let _ = stream_state
+                .tx
+                .blocking_send(ResponseChunk::Headers { status, headers });
+            stream_state.headers_sent = true;
+        }
+
+        // Send body chunk
+        if len > 0 {
+            let data = std::slice::from_raw_parts(str as *const u8, len);
+            let _ = stream_state
+                .tx
+                .blocking_send(ResponseChunk::Body(Bytes::copy_from_slice(data)));
+        }
+
+        len
+    })
+}
+
+/// Initialize streaming state for current request.
+/// Must be called BEFORE PHP script execution starts.
+///
+/// # Arguments
+/// * `tx` - Channel sender for response chunks
+pub fn init_stream_state(tx: mpsc::Sender<ResponseChunk>) {
+    STREAM_STATE.with(|state| {
+        *state.borrow_mut() = Some(StreamState {
+            tx,
+            status_code: 200,
+            headers_sent: false,
+            finished: false,
+        });
+    });
+}
+
+/// Finalize streaming for current request.
+/// Called after PHP script execution completes (including php_request_shutdown).
+/// Sends End chunk if not already finished, and cleans up state.
+pub fn finalize_stream() {
+    STREAM_STATE.with(|state| {
+        let mut state_ref = state.borrow_mut();
+        if let Some(stream_state) = state_ref.as_mut() {
+            // If no output occurred, send headers now (empty response)
+            if !stream_state.headers_sent {
+                let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+                let status = stream_state.status_code;
+                let _ = stream_state
+                    .tx
+                    .blocking_send(ResponseChunk::Headers { status, headers });
+                stream_state.headers_sent = true;
+            }
+
+            // Send End chunk (unless already finished via tokio_finish_request)
+            if !stream_state.finished {
+                let _ = stream_state.tx.blocking_send(ResponseChunk::End);
+            }
+        }
+
+        // Clean up state
+        *state_ref = None;
+    });
+}
+
+/// Mark response as finished (called from tokio_finish_request).
+/// Sends End chunk immediately, subsequent output is discarded.
+/// Returns true if this was the first finish call, false if already finished.
+pub fn mark_stream_finished() -> bool {
+    STREAM_STATE.with(|state| {
+        let mut state_ref = state.borrow_mut();
+        if let Some(stream_state) = state_ref.as_mut() {
+            if stream_state.finished {
+                return false; // Already finished
+            }
+
+            stream_state.finished = true;
+
+            // If no output yet, send headers first
+            if !stream_state.headers_sent {
+                let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+                let status = stream_state.status_code;
+                let _ = stream_state
+                    .tx
+                    .blocking_send(ResponseChunk::Headers { status, headers });
+                stream_state.headers_sent = true;
+            }
+
+            // Send End chunk - client receives response now
+            let _ = stream_state.tx.blocking_send(ResponseChunk::End);
+            return true;
+        }
+        false
+    })
+}
+
+/// Send error chunk through streaming channel.
+/// Used when PHP execution fails.
+pub fn send_stream_error(error: String) {
+    STREAM_STATE.with(|state| {
+        let state_ref = state.borrow();
+        if let Some(stream_state) = state_ref.as_ref() {
+            if !stream_state.finished {
+                let _ = stream_state.tx.blocking_send(ResponseChunk::Error(error));
+            }
+        }
+    });
+}
+
+/// Check if streaming is active for current request.
+pub fn is_streaming_active() -> bool {
+    STREAM_STATE.with(|state| state.borrow().is_some())
+}
+
+/// Check if headers have been sent for current streaming request.
+pub fn are_headers_sent() -> bool {
+    STREAM_STATE.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .map(|s| s.headers_sent)
+            .unwrap_or(false)
+    })
+}
+
+/// Update HTTP status code for streaming response.
+/// Only effective before headers are sent.
+pub fn set_stream_status(status: u16) {
+    STREAM_STATE.with(|state| {
+        let mut state_ref = state.borrow_mut();
+        if let Some(stream_state) = state_ref.as_mut() {
+            if !stream_state.headers_sent {
+                stream_state.status_code = status;
+            }
+        }
+    });
 }
 
 /// Custom header handler - captures headers set via header()
-/// Stores headers in both Rust's CAPTURED_HEADERS and the bridge TLS (for PHP access)
+/// Stores headers in both Rust's CAPTURED_HEADERS and the bridge TLS (for PHP access).
+/// In streaming mode, rejects headers after output has started (PHP will emit warning).
 unsafe extern "C" fn custom_header_handler(
     sapi_header: *mut SapiHeader,
     op: SapiHeaderOp,
     sapi_headers: *mut SapiHeaders,
 ) -> c_int {
+    // Check if headers already sent in streaming mode
+    // PHP will emit "headers already sent" warning, we just need to ignore the header
+    let headers_already_sent = STREAM_STATE.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .map(|s| s.headers_sent)
+            .unwrap_or(false)
+    });
+
+    if headers_already_sent {
+        // Return success but don't store - PHP handles the warning
+        return 0;
+    }
+
     // Always check http_response_code from sapi_headers (set by header() third arg)
     if !sapi_headers.is_null() {
         let code = (*sapi_headers).http_response_code as u16;
@@ -224,6 +442,8 @@ unsafe extern "C" fn custom_header_handler(
             CAPTURED_STATUS.with(|s| {
                 *s.borrow_mut() = code;
             });
+            // Also update streaming state status
+            set_stream_status(code);
         }
     }
 
@@ -394,6 +614,7 @@ pub fn init() -> Result<(), String> {
         php_embed_module.read_cookies = Some(custom_read_cookies);
         php_embed_module.read_post = Some(custom_read_post);
         php_embed_module.flush = Some(tokio_sapi_flush); // SSE streaming support
+        php_embed_module.ub_write = Some(stream_ub_write); // HTTP streaming output
 
         let program_name = CString::new("tokio_php").unwrap();
         let mut argv: [*mut c_char; 2] = [program_name.as_ptr() as *mut c_char, ptr::null_mut()];
@@ -410,10 +631,11 @@ pub fn init() -> Result<(), String> {
         sapi_module.read_cookies = Some(custom_read_cookies);
         sapi_module.read_post = Some(custom_read_post);
         sapi_module.flush = Some(tokio_sapi_flush); // SSE streaming support
+        sapi_module.ub_write = Some(stream_ub_write); // HTTP streaming output
     }
 
     tracing::info!(
-        "PHP initialized with SAPI 'cli-server' (register_server_variables, read_cookies, read_post)"
+        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables)"
     );
     Ok(())
 }

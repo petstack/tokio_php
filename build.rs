@@ -75,7 +75,9 @@ fn main() {
     println!("cargo:rustc-link-search=native=/usr/local/lib"); // Official PHP images
 
     // Debug: Print library search paths
-    eprintln!("build.rs: Adding library search paths: /usr/lib, /lib, /usr/lib/php84, /usr/local/lib");
+    eprintln!(
+        "build.rs: Adding library search paths: /usr/lib, /lib, /usr/lib/php84, /usr/local/lib"
+    );
 
     // Link against php embed library
     println!("cargo:rustc-link-lib=dylib=php");

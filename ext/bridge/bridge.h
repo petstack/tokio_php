@@ -83,6 +83,17 @@ typedef void (*tokio_stream_chunk_callback_t)(
     size_t data_len
 );
 
+/**
+ * Callback for stream finish (new streaming architecture)
+ *
+ * Called when PHP invokes tokio_finish_request() in streaming mode.
+ * Sends ResponseChunk::End to mark stream as finished.
+ * Simpler than finish_callback - no body/headers passed (already sent via ub_write).
+ *
+ * @param ctx  Opaque context pointer (unused, for consistency)
+ */
+typedef void (*tokio_stream_finish_callback_t)(void *ctx);
+
 /* ============================================================================
  * Bridge context structure
  * ============================================================================ */
@@ -127,6 +138,10 @@ typedef struct tokio_bridge_ctx {
     size_t stream_offset;                           /* Last read offset for polling */
     void *stream_ctx;                               /* Stream callback context */
     tokio_stream_chunk_callback_t stream_callback;  /* Chunk callback */
+
+    /* Stream finish callback (new streaming architecture) */
+    void *stream_finish_ctx;                        /* Stream finish callback context */
+    tokio_stream_finish_callback_t stream_finish_callback;  /* Stream finish callback */
 
 } tokio_bridge_ctx_t;
 
@@ -369,6 +384,35 @@ void tokio_bridge_set_stream_offset(size_t offset);
  * Called when PHP script finishes or streaming is stopped.
  */
 void tokio_bridge_end_stream(void);
+
+/* ============================================================================
+ * Stream Finish API (new streaming architecture)
+ * ============================================================================ */
+
+/**
+ * Set the stream finish callback.
+ * Called from Rust before PHP execution to enable immediate response completion.
+ *
+ * In the new streaming architecture, output is sent via ub_write callback,
+ * so when tokio_finish_request() is called, we just need to signal stream end.
+ *
+ * @param ctx      Opaque pointer (passed to callback, can be NULL)
+ * @param callback Function to call when PHP calls tokio_finish_request()
+ */
+void tokio_bridge_set_stream_finish_callback(void *ctx, tokio_stream_finish_callback_t callback);
+
+/**
+ * Trigger stream finish (for new streaming architecture).
+ * Called from PHP's tokio_finish_request() function.
+ *
+ * This function:
+ * 1. Marks the request as finished (idempotent)
+ * 2. Invokes the stream finish callback to send ResponseChunk::End
+ * 3. Allows PHP to continue executing in background (output discarded)
+ *
+ * @return 1 on success, 0 if no callback or already finished
+ */
+int tokio_bridge_trigger_stream_finish(void);
 
 #ifdef __cplusplus
 }

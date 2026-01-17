@@ -1301,49 +1301,19 @@ PHP_FUNCTION(tokio_finish_request)
         RETURN_TRUE;
     }
 
-    /* 1. Flush all PHP output buffers to stdout (memfd) */
+    /* 1. Flush all PHP output buffers
+     * In streaming mode, this triggers ub_write callback to send any remaining output */
     while (php_output_get_level() > 0) {
         php_output_end();
     }
 
-    /* 2. Force flush libc buffers */
-    fflush(stdout);
+    /* 2. Trigger stream finish (new streaming architecture)
+     * This marks request as finished and invokes the stream finish callback
+     * which sends ResponseChunk::End to close the response */
+    int result = tokio_bridge_trigger_stream_finish();
 
-    /* 3. Read current output from memfd */
-    size_t body_len = 0;
-    char *body = get_current_output(&body_len);
-
-    /* 4. Get response code */
-    int response_code = SG(sapi_headers).http_response_code;
-    if (response_code == 0) {
-        response_code = 200;
-    }
-
-    /* 5. Serialize headers */
-    size_t headers_len = 0;
-    int header_count = 0;
-    char *headers = serialize_sapi_headers(&headers_len, &header_count);
-
-    /* 6. Trigger callback to Rust (sends response immediately if callback is set)
-     * This also marks the request as finished */
-    int result = tokio_bridge_trigger_finish(
-        body,
-        body_len,
-        headers,
-        headers_len,
-        header_count,
-        response_code
-    );
-
-    /* 7. Free temporary buffers */
-    if (body) {
-        free(body);
-    }
-    if (headers) {
-        free(headers);
-    }
-
-    /* 8. Start a new output buffer for any post-finish output (will be discarded) */
+    /* 3. Start a new output buffer for any post-finish output
+     * This output will be discarded (ub_write checks is_finished flag) */
     php_output_start_default();
 
     RETURN_BOOL(result != 0);

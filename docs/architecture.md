@@ -174,14 +174,15 @@ Worker lifecycle per request:
 2. `php_request_startup()` - initialize request state
 3. `bridge::init_ctx()` - initialize bridge TLS context
 4. Set heartbeat callback via `bridge::set_heartbeat()`
-5. Set superglobals via FFI or `zend_eval_string`
-6. Execute PHP script via `php_execute_script()` or `zend_eval_string`
-7. Capture output via memfd redirect
-8. Capture headers via SAPI `header_handler`
-9. `php_request_shutdown()` - cleanup
-10. Check `bridge::get_finish_info()` for early response
-11. `bridge::destroy_ctx()` - cleanup bridge context
-12. Send `ScriptResponse` back
+5. Set stream finish callback via `bridge::set_stream_finish_callback()`
+6. Initialize streaming state via `sapi::init_stream_state()`
+7. Set superglobals via FFI or `zend_eval_string`
+8. Execute PHP script via `php_execute_script()` or `zend_eval_string`
+9. Output streamed via SAPI `ub_write` callback
+10. Headers captured via SAPI `header_handler`
+11. `php_request_shutdown()` - cleanup
+12. `sapi::finalize_stream()` - send End chunk if not finished
+13. `bridge::destroy_ctx()` - cleanup bridge context
 
 ## Request Flow
 
@@ -532,7 +533,8 @@ The bridge (`libtokio_bridge.so`) solves TLS (Thread-Local Storage) isolation be
 │  │  - request_id, worker_id                                  │  │
 │  │  - is_finished, output_offset, response_code              │  │
 │  │  - heartbeat_ctx, heartbeat_callback                      │  │
-│  │  - finish_ctx, finish_callback (early response)           │  │
+│  │  - finish_ctx, finish_callback (legacy)                   │  │
+│  │  - stream_finish_ctx, stream_finish_callback (new)        │  │
 │  │  - is_streaming, stream_ctx, stream_callback (SSE)        │  │
 │  │                                                           │  │
 │  └───────────────────────────────────────────────────────────┘  │
@@ -573,17 +575,23 @@ php_embed_init(...);
 
 This enables OPcache and JIT, providing ~84% performance improvement.
 
-### Output Capture
+### Output Capture (Streaming)
 
-PHP output is captured via stdout redirect to memfd:
-1. Create memfd (in-memory file) via `memfd_create`
-2. `dup2(memfd_fd, STDOUT_FILENO)` - redirect stdout
-3. Execute PHP script
-4. `php_request_shutdown()` while stdout still redirected (captures shutdown handler output)
-5. Restore stdout via `dup2`
-6. Read memfd contents
+PHP output is captured via the SAPI `ub_write` callback for real-time streaming:
 
-Using memfd instead of pipes avoids deadlock with large outputs (like phpinfo()).
+1. `sapi::init_stream_state(tx)` - initialize streaming channel
+2. Execute PHP script
+3. Each `echo`/`print` triggers `ub_write` callback
+4. `ub_write` sends `ResponseChunk::Headers` on first output (if not sent)
+5. `ub_write` sends `ResponseChunk::Body` for each output chunk
+6. `php_request_shutdown()` - cleanup
+7. `sapi::finalize_stream()` sends `ResponseChunk::End`
+
+Benefits of streaming over memfd:
+- Output sent to client immediately (no buffering)
+- Enables `tokio_finish_request()` for early response
+- Supports SSE without special handling
+- PHP's output buffering (`ob_*`) still works (data flows through when flushed)
 
 ### Header Capture
 

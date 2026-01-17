@@ -290,9 +290,9 @@ fn generate_span_id(buf: &mut [u8; 16]) {
 #[inline]
 fn u64_to_hex(val: u64, buf: &mut [u8]) {
     debug_assert!(buf.len() >= 16);
-    for i in 0..16 {
+    for (i, byte) in buf.iter_mut().enumerate().take(16) {
         let nibble = ((val >> (60 - i * 4)) & 0x0f) as usize;
-        buf[i] = HEX_CHARS[nibble];
+        *byte = HEX_CHARS[nibble];
     }
 }
 
@@ -345,17 +345,20 @@ mod tests {
     fn test_parse_invalid_traceparent() {
         // Wrong version
         assert!(
-            TraceContext::parse("01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").is_none()
+            TraceContext::parse("01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+                .is_none()
         );
 
         // All zeros trace-id
         assert!(
-            TraceContext::parse("00-00000000000000000000000000000000-b7ad6b7169203331-01").is_none()
+            TraceContext::parse("00-00000000000000000000000000000000-b7ad6b7169203331-01")
+                .is_none()
         );
 
         // All zeros parent-id
         assert!(
-            TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01").is_none()
+            TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01")
+                .is_none()
         );
 
         // Wrong length
@@ -363,7 +366,8 @@ mod tests {
 
         // Invalid hex
         assert!(
-            TraceContext::parse("00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-b7ad6b7169203331-01").is_none()
+            TraceContext::parse("00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-b7ad6b7169203331-01")
+                .is_none()
         );
     }
 

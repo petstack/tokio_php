@@ -7,15 +7,15 @@ use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
 use crate::bridge::{FinishChannel, FinishData, StreamingChannel};
-use crate::server::response::StreamChunk;
-use crate::executor::sapi;
+use crate::executor::sapi::{self, ResponseChunk};
 use crate::profiler::ProfileData;
+use crate::server::response::StreamChunk;
 use crate::types::{ScriptRequest, ScriptResponse};
 
 // =============================================================================
@@ -23,6 +23,7 @@ use crate::types::{ScriptRequest, ScriptResponse};
 // =============================================================================
 
 /// Buffer size for streaming channel in auto-detect mode.
+#[allow(dead_code)]
 pub const AUTO_SSE_BUFFER_SIZE: usize = 32;
 
 /// Result of execute_with_auto_sse().
@@ -31,13 +32,13 @@ pub const AUTO_SSE_BUFFER_SIZE: usize = 32;
 /// dynamically enables SSE via Content-Type: text/event-stream header).
 pub enum ExecuteResult {
     /// Normal response (no streaming).
-    Normal(ScriptResponse),
+    Normal(Box<ScriptResponse>),
     /// Streaming response (SSE auto-detected via Content-Type header).
     /// Contains initial headers, status code, and receiver for stream chunks.
     Streaming {
         headers: Vec<(String, String)>,
         status_code: u16,
-        receiver: tokio::sync::mpsc::Receiver<StreamChunk>,
+        receiver: tokio_mpsc::Receiver<StreamChunk>,
     },
 }
 
@@ -78,20 +79,34 @@ thread_local! {
 // Worker Pool Infrastructure
 // =============================================================================
 
-/// Request sent to a worker thread
+/// Request sent to a worker thread.
+///
+/// All requests now use streaming via `stream_tx`. The worker sends:
+/// 1. `ResponseChunk::Headers` - once, when first output occurs or script ends
+/// 2. `ResponseChunk::Body(data)` - for each output chunk
+/// 3. `ResponseChunk::End` - when script completes or tokio_finish_request() is called
+/// 4. `ResponseChunk::Error(msg)` - if execution fails
 pub struct WorkerRequest {
     pub request: ScriptRequest,
-    pub response_tx: oneshot::Sender<Result<ScriptResponse, String>>,
+    /// Channel for streaming response chunks back to the HTTP handler.
+    /// Worker uses `blocking_send()` since it runs in a sync context.
+    pub stream_tx: tokio_mpsc::Sender<ResponseChunk>,
+    #[allow(dead_code)]
     pub queued_at: Instant,
     /// Heartbeat context for timeout extension (shared with async side)
     pub heartbeat_ctx: Option<Arc<HeartbeatContext>>,
-    /// Finish channel for streaming early response (PHP calls tokio_finish_request)
+}
+
+/// Legacy request struct for backward compatibility during migration.
+/// Will be removed after full streaming migration.
+#[allow(dead_code)]
+pub struct LegacyWorkerRequest {
+    pub request: ScriptRequest,
+    pub response_tx: oneshot::Sender<Result<ScriptResponse, String>>,
+    pub queued_at: Instant,
+    pub heartbeat_ctx: Option<Arc<HeartbeatContext>>,
     pub finish_channel: Option<Arc<FinishChannel>>,
-    /// Streaming channel for SSE (PHP calls tokio_stream_flush)
     pub streaming_channel: Option<Arc<StreamingChannel>>,
-    /// True if client explicitly requested SSE (Accept: text/event-stream).
-    /// When true, streaming is enabled immediately. When false, streaming is
-    /// enabled dynamically when PHP sets Content-Type: text/event-stream.
     pub explicit_sse: bool,
 }
 
@@ -189,7 +204,7 @@ pub extern "C" fn tokio_php_heartbeat(ctx: *mut std::ffi::c_void, secs: u64) -> 
 
 /// Generic worker pool for PHP execution
 pub struct WorkerPool {
-    request_tx: mpsc::SyncSender<WorkerRequest>,
+    request_tx: std_mpsc::SyncSender<WorkerRequest>,
     workers: Vec<WorkerThread>,
     worker_count: AtomicUsize,
     queue_capacity: usize,
@@ -201,7 +216,7 @@ impl WorkerPool {
     /// Queue capacity defaults to workers * 100.
     pub fn new<F>(num_workers: usize, name_prefix: &str, worker_fn: F) -> Result<Self, String>
     where
-        F: Fn(usize, Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
+        F: Fn(usize, Arc<Mutex<std_mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
     {
         Self::with_queue_capacity(
             num_workers,
@@ -219,9 +234,9 @@ impl WorkerPool {
         worker_fn: F,
     ) -> Result<Self, String>
     where
-        F: Fn(usize, Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
+        F: Fn(usize, Arc<Mutex<std_mpsc::Receiver<WorkerRequest>>>) + Send + Clone + 'static,
     {
-        let (request_tx, request_rx) = mpsc::sync_channel::<WorkerRequest>(queue_capacity);
+        let (request_tx, request_rx) = std_mpsc::sync_channel::<WorkerRequest>(queue_capacity);
         let request_rx = Arc::new(Mutex::new(request_rx));
 
         let mut workers = Vec::with_capacity(num_workers);
@@ -263,295 +278,282 @@ impl WorkerPool {
     /// Supports heartbeat mechanism: if timeout is configured, creates a HeartbeatContext
     /// that allows PHP scripts to extend the deadline via tokio_request_heartbeat().
     ///
-    /// Supports streaming early response: if PHP calls `tokio_finish_request()`,
-    /// the response is returned immediately while PHP continues executing.
+    /// This method uses streaming internally but collects all output into a single
+    /// ScriptResponse for backward compatibility. For true streaming, use
+    /// `submit_streaming()` instead.
     pub async fn execute(&self, request: ScriptRequest) -> Result<ScriptResponse, String> {
-        let (response_tx, response_rx) = oneshot::channel();
         let timeout = request.timeout;
-        let profiling = request.profile;
 
         // Capture queued_at once - reused for both queue timing and HeartbeatContext
         let queued_at = Instant::now();
 
-        // Create heartbeat context reusing queued_at (one Instant::now() for both)
+        // Create heartbeat context reusing queued_at
         let heartbeat_ctx =
             timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
 
-        // Create finish channel for streaming early response
-        let (finish_channel, mut finish_rx) = FinishChannel::new();
-        let finish_channel = Arc::new(finish_channel);
+        // Create streaming channel (buffer size of 32 is enough for collecting)
+        let (stream_tx, mut stream_rx) = tokio_mpsc::channel::<ResponseChunk>(32);
 
         // Use try_send to avoid blocking and detect queue full
         self.request_tx
             .try_send(WorkerRequest {
                 request,
-                response_tx,
+                stream_tx,
                 queued_at,
                 heartbeat_ctx: heartbeat_ctx.clone(),
-                finish_channel: Some(finish_channel.clone()),
-                streaming_channel: None, // Non-streaming request
-                explicit_sse: false,     // Not used since streaming_channel is None
             })
             .map_err(|e| match e {
-                mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
-                mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
+                std_mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
+                std_mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
             })?;
+
+        // Collect streaming response into ScriptResponse
+        let mut headers: Vec<(String, String)> = Vec::new();
+        let mut status: u16 = 200;
+        let mut body = Vec::new();
 
         // Apply timeout with heartbeat support if configured
         if let Some(ctx) = heartbeat_ctx {
-            // Pin the receiver for re-polling in loop
-            tokio::pin!(response_rx);
-
             loop {
                 match ctx.remaining() {
                     None => {
-                        // Deadline expired
                         return Err(REQUEST_TIMEOUT_ERROR.to_string());
                     }
                     Some(remaining) => {
-                        // Sleep for full remaining time (no 100ms polling overhead)
-                        // Also listen for early finish signal
                         tokio::select! {
                             biased;
 
-                            // Early finish signal from PHP
-                            Some(finish_data) = finish_rx.recv() => {
-                                return Ok(finish_data_to_response(finish_data, profiling));
+                            chunk = stream_rx.recv() => {
+                                match chunk {
+                                    Some(ResponseChunk::Headers { status: s, headers: h }) => {
+                                        status = s;
+                                        headers = h;
+                                    }
+                                    Some(ResponseChunk::Body(data)) => {
+                                        body.extend_from_slice(&data);
+                                    }
+                                    Some(ResponseChunk::End) => {
+                                        break;
+                                    }
+                                    Some(ResponseChunk::Error(e)) => {
+                                        return Err(e);
+                                    }
+                                    None => {
+                                        return Err("Worker dropped connection".to_string());
+                                    }
+                                }
                             }
 
-                            // Normal completion
-                            result = &mut response_rx => {
-                                return match result {
-                                    Ok(r) => r,
-                                    Err(_) => Err("Worker dropped response".to_string()),
-                                };
-                            }
-
-                            // Timeout
                             _ = tokio::time::sleep(remaining) => {
-                                // Timeout reached, loop will check remaining() again
-                                // (in case heartbeat extended the deadline)
-                                continue;
+                                continue; // Check remaining() again (heartbeat may have extended)
                             }
                         }
                     }
                 }
             }
         } else {
-            // No timeout configured - wait for either early finish or normal completion
-            tokio::select! {
-                biased;
-
-                // Early finish signal from PHP
-                Some(finish_data) = finish_rx.recv() => {
-                    Ok(finish_data_to_response(finish_data, profiling))
-                }
-
-                // Normal completion
-                result = response_rx => {
-                    match result {
-                        Ok(r) => r,
-                        Err(_) => Err("Worker dropped response".to_string()),
+            // No timeout - just collect all chunks
+            while let Some(chunk) = stream_rx.recv().await {
+                match chunk {
+                    ResponseChunk::Headers {
+                        status: s,
+                        headers: h,
+                    } => {
+                        status = s;
+                        headers = h;
+                    }
+                    ResponseChunk::Body(data) => {
+                        body.extend_from_slice(&data);
+                    }
+                    ResponseChunk::End => {
+                        break;
+                    }
+                    ResponseChunk::Error(e) => {
+                        return Err(e);
                     }
                 }
             }
         }
+
+        // Add Status header if non-200
+        if status != 200 {
+            headers.insert(0, ("Status".to_string(), status.to_string()));
+        }
+
+        Ok(ScriptResponse {
+            body: String::from_utf8_lossy(&body).into_owned(),
+            headers,
+            profile: None, // Profile data no longer collected this way
+        })
     }
 
-    /// Executes a streaming request asynchronously via the worker pool.
+    /// Submits a streaming request to the worker pool.
     ///
-    /// Returns immediately with a receiver for streaming chunks.
-    /// The PHP script sends chunks via `tokio_stream_flush()`.
+    /// Returns immediately with a receiver for streaming response chunks.
+    /// The caller should wait for `ResponseChunk::Headers` first, then stream
+    /// `ResponseChunk::Body` chunks until `ResponseChunk::End`.
     ///
     /// # Arguments
     /// * `request` - The script request
-    /// * `buffer_size` - Size of the streaming channel buffer
     ///
     /// # Returns
-    /// * `Ok((receiver, headers))` - Receiver for chunks and initial headers
+    /// * `Ok(receiver)` - Receiver for response chunks
     /// * `Err(message)` - If queue is full or pool is shut down
-    pub fn execute_streaming(
+    pub fn submit_streaming(
         &self,
         request: ScriptRequest,
-        buffer_size: usize,
-    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, String> {
-        let (response_tx, _response_rx) = oneshot::channel();
+    ) -> Result<tokio_mpsc::Receiver<ResponseChunk>, String> {
         let timeout = request.timeout;
-
         let queued_at = Instant::now();
 
         // Create heartbeat context
         let heartbeat_ctx =
             timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
 
-        // Create streaming channel
-        let (streaming_channel, stream_rx) = StreamingChannel::new(buffer_size);
-        let streaming_channel = Arc::new(streaming_channel);
+        // Create streaming channel with reasonable buffer
+        let (stream_tx, stream_rx) = tokio_mpsc::channel::<ResponseChunk>(32);
 
-        // Use try_send to avoid blocking
         self.request_tx
             .try_send(WorkerRequest {
                 request,
-                response_tx,
+                stream_tx,
                 queued_at,
                 heartbeat_ctx,
-                finish_channel: None, // Streaming uses streaming_channel instead
-                streaming_channel: Some(streaming_channel),
-                explicit_sse: true, // Client explicitly requested SSE
             })
             .map_err(|e| match e {
-                mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
-                mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
+                std_mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
+                std_mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
             })?;
 
         Ok(stream_rx)
     }
 
-    /// Executes a request with automatic SSE detection.
-    ///
-    /// Similar to `execute()`, but also detects when PHP dynamically enables
-    /// SSE by setting `Content-Type: text/event-stream` header.
-    ///
-    /// Returns `ExecuteResult::Normal` for regular responses, or
-    /// `ExecuteResult::Streaming` when SSE is auto-detected.
-    pub async fn execute_with_auto_sse(&self, request: ScriptRequest) -> Result<ExecuteResult, String> {
-        let (response_tx, response_rx) = oneshot::channel();
-        let timeout = request.timeout;
-        let profiling = request.profile;
+    /// Legacy streaming method - delegates to submit_streaming.
+    /// Deprecated: Use submit_streaming() with ResponseChunk instead.
+    #[deprecated(note = "Use submit_streaming() with ResponseChunk instead")]
+    #[allow(deprecated)]
+    pub fn execute_streaming(
+        &self,
+        request: ScriptRequest,
+        buffer_size: usize,
+    ) -> Result<tokio_mpsc::Receiver<StreamChunk>, String> {
+        // Convert new ResponseChunk stream to old StreamChunk stream
+        let rx = self.submit_streaming(request)?;
+        let (tx, new_rx) = tokio_mpsc::channel::<StreamChunk>(buffer_size);
 
-        let queued_at = Instant::now();
-
-        // Create heartbeat context
-        let heartbeat_ctx =
-            timeout.map(|t| Arc::new(HeartbeatContext::new(queued_at, t.as_secs())));
-
-        // Create finish channel for streaming early response
-        let (finish_channel, mut finish_rx) = FinishChannel::new();
-        let finish_channel = Arc::new(finish_channel);
-
-        // Create streaming channel for auto-detect SSE
-        let (streaming_channel, mut stream_rx) = StreamingChannel::new(AUTO_SSE_BUFFER_SIZE);
-        let streaming_channel = Arc::new(streaming_channel);
-
-        // Send request to worker
-        self.request_tx
-            .try_send(WorkerRequest {
-                request,
-                response_tx,
-                queued_at,
-                heartbeat_ctx: heartbeat_ctx.clone(),
-                finish_channel: Some(finish_channel.clone()),
-                streaming_channel: Some(streaming_channel),
-                explicit_sse: false, // Auto-detect mode
-            })
-            .map_err(|e| match e {
-                mpsc::TrySendError::Full(_) => QUEUE_FULL_ERROR.to_string(),
-                mpsc::TrySendError::Disconnected(_) => "Worker pool shut down".to_string(),
-            })?;
-
-        // Wait for response, finish signal, or first stream chunk
-        if let Some(ctx) = heartbeat_ctx {
-            tokio::pin!(response_rx);
-
-            loop {
-                match ctx.remaining() {
-                    None => {
-                        return Err(REQUEST_TIMEOUT_ERROR.to_string());
-                    }
-                    Some(remaining) => {
-                        tokio::select! {
-                            biased;
-
-                            // First stream chunk = SSE auto-detected
-                            Some(first_chunk) = stream_rx.recv() => {
-                                // PHP enabled streaming via Content-Type header
-                                // Return streaming response with the first chunk already received
-                                // We need to create a new channel that includes the first chunk
-                                let (combined_tx, combined_rx) = tokio::sync::mpsc::channel(AUTO_SSE_BUFFER_SIZE);
-                                // Send first chunk
-                                let _ = combined_tx.try_send(first_chunk);
-                                // Spawn task to forward remaining chunks
-                                tokio::spawn(async move {
-                                    while let Some(chunk) = stream_rx.recv().await {
-                                        if combined_tx.send(chunk).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                });
-                                return Ok(ExecuteResult::Streaming {
-                                    headers: vec![
-                                        ("Content-Type".to_string(), "text/event-stream".to_string()),
-                                        ("Cache-Control".to_string(), "no-cache".to_string()),
-                                        ("Connection".to_string(), "keep-alive".to_string()),
-                                        ("X-Accel-Buffering".to_string(), "no".to_string()),
-                                    ],
-                                    status_code: 200,
-                                    receiver: combined_rx,
-                                });
-                            }
-
-                            // Early finish signal from PHP
-                            Some(finish_data) = finish_rx.recv() => {
-                                return Ok(ExecuteResult::Normal(finish_data_to_response(finish_data, profiling)));
-                            }
-
-                            // Normal completion
-                            result = &mut response_rx => {
-                                return match result {
-                                    Ok(r) => r.map(ExecuteResult::Normal),
-                                    Err(_) => Err("Worker dropped response".to_string()),
-                                };
-                            }
-
-                            // Timeout
-                            _ = tokio::time::sleep(remaining) => {
-                                continue;
-                            }
+        // Spawn task to convert chunks (only forward body data)
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Some(chunk) = rx.recv().await {
+                match chunk {
+                    ResponseChunk::Body(data) => {
+                        if tx.send(StreamChunk::new(data)).await.is_err() {
+                            break;
                         }
+                    }
+                    ResponseChunk::End | ResponseChunk::Error(_) => {
+                        break;
+                    }
+                    ResponseChunk::Headers { .. } => {
+                        // Headers are handled separately, skip
                     }
                 }
             }
-        } else {
-            // No timeout configured
-            tokio::select! {
-                biased;
+        });
 
-                // First stream chunk = SSE auto-detected
-                Some(first_chunk) = stream_rx.recv() => {
-                    let (combined_tx, combined_rx) = tokio::sync::mpsc::channel(AUTO_SSE_BUFFER_SIZE);
-                    let _ = combined_tx.try_send(first_chunk);
-                    tokio::spawn(async move {
-                        while let Some(chunk) = stream_rx.recv().await {
-                            if combined_tx.send(chunk).await.is_err() {
+        Ok(new_rx)
+    }
+
+    /// Executes a request with automatic SSE detection.
+    ///
+    /// Uses the new streaming infrastructure internally. If PHP sets
+    /// `Content-Type: text/event-stream`, returns a streaming result.
+    /// Otherwise, collects all output and returns a normal response.
+    pub async fn execute_with_auto_sse(
+        &self,
+        request: ScriptRequest,
+    ) -> Result<ExecuteResult, String> {
+        let mut rx = self.submit_streaming(request)?;
+
+        // Wait for headers chunk
+        let (status, headers) = match rx.recv().await {
+            Some(ResponseChunk::Headers { status, headers }) => (status, headers),
+            Some(ResponseChunk::Error(e)) => return Err(e),
+            Some(ResponseChunk::End) => {
+                // Empty response (no headers sent)
+                return Ok(ExecuteResult::Normal(Box::new(ScriptResponse {
+                    body: String::new(),
+                    headers: Vec::new(),
+                    profile: None,
+                })));
+            }
+            Some(ResponseChunk::Body(_)) => {
+                // Body before headers - shouldn't happen, treat as error
+                return Err("Received body chunk before headers".to_string());
+            }
+            None => return Err("Worker dropped connection".to_string()),
+        };
+
+        // Check if this is SSE (Content-Type: text/event-stream)
+        let is_sse = headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("content-type") && v.contains("text/event-stream")
+        });
+
+        if is_sse {
+            // SSE mode: create bridge channel to convert ResponseChunk::Body -> StreamChunk
+            let (tx, stream_rx) = tokio_mpsc::channel::<StreamChunk>(32);
+
+            // Spawn task to forward body chunks
+            tokio::spawn(async move {
+                while let Some(chunk) = rx.recv().await {
+                    match chunk {
+                        ResponseChunk::Body(data) => {
+                            if tx.send(StreamChunk::new(data)).await.is_err() {
                                 break;
                             }
                         }
-                    });
-                    Ok(ExecuteResult::Streaming {
-                        headers: vec![
-                            ("Content-Type".to_string(), "text/event-stream".to_string()),
-                            ("Cache-Control".to_string(), "no-cache".to_string()),
-                            ("Connection".to_string(), "keep-alive".to_string()),
-                            ("X-Accel-Buffering".to_string(), "no".to_string()),
-                        ],
-                        status_code: 200,
-                        receiver: combined_rx,
-                    })
+                        ResponseChunk::End | ResponseChunk::Error(_) => {
+                            break;
+                        }
+                        ResponseChunk::Headers { .. } => {
+                            // Ignore duplicate headers
+                        }
+                    }
                 }
+            });
 
-                // Early finish signal from PHP
-                Some(finish_data) = finish_rx.recv() => {
-                    Ok(ExecuteResult::Normal(finish_data_to_response(finish_data, profiling)))
-                }
-
-                // Normal completion
-                result = response_rx => {
-                    match result {
-                        Ok(r) => r.map(ExecuteResult::Normal),
-                        Err(_) => Err("Worker dropped response".to_string()),
+            Ok(ExecuteResult::Streaming {
+                headers,
+                status_code: status,
+                receiver: stream_rx,
+            })
+        } else {
+            // Non-SSE: collect all body chunks
+            let mut body = Vec::new();
+            while let Some(chunk) = rx.recv().await {
+                match chunk {
+                    ResponseChunk::Body(data) => {
+                        body.extend_from_slice(&data);
+                    }
+                    ResponseChunk::End => break,
+                    ResponseChunk::Error(e) => return Err(e),
+                    ResponseChunk::Headers { .. } => {
+                        // Ignore duplicate headers
                     }
                 }
             }
+
+            // Add Status header if non-200
+            let mut final_headers = headers;
+            if status != 200 {
+                final_headers.insert(0, ("Status".to_string(), status.to_string()));
+            }
+
+            Ok(ExecuteResult::Normal(Box::new(ScriptResponse {
+                body: String::from_utf8_lossy(&body).into_owned(),
+                headers: final_headers,
+                profile: None,
+            })))
         }
     }
 
@@ -574,6 +576,7 @@ impl WorkerPool {
 }
 
 /// Convert FinishData from early finish callback to ScriptResponse
+#[allow(dead_code)]
 fn finish_data_to_response(data: FinishData, profiling: bool) -> ScriptResponse {
     use crate::profiler::ProfileData;
 
@@ -775,6 +778,7 @@ pub fn build_combined_code(request: &ScriptRequest) -> String {
 // =============================================================================
 
 /// Timing data for profiling
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct ExecutionTiming {
     pub superglobals_build_us: u64,
@@ -787,11 +791,13 @@ pub struct ExecutionTiming {
 }
 
 /// Stdout capture state - keeps stdout redirected until finalized
+#[allow(dead_code)]
 pub struct StdoutCapture {
     write_fd: libc::c_int,
     original_stdout: libc::c_int,
 }
 
+#[allow(dead_code)]
 impl StdoutCapture {
     /// Sets up stdout capture, redirecting to memfd
     pub fn new() -> Result<Self, String> {
@@ -877,6 +883,7 @@ impl StdoutCapture {
 
 /// Executes PHP script, returns capture handle for later finalization
 /// IMPORTANT: Caller must call php_request_shutdown() before finalizing capture!
+#[allow(dead_code)]
 pub fn execute_php_script_start(
     request: &ScriptRequest,
     profiling: bool,
@@ -932,6 +939,7 @@ pub fn execute_php_script_start(
 }
 
 /// Finalizes script execution after php_request_shutdown
+#[allow(dead_code)]
 pub fn execute_php_script_finish(
     capture: StdoutCapture,
     mut timing: ExecutionTiming,
@@ -998,8 +1006,9 @@ pub fn execute_php_script_finish(
     })
 }
 
-/// Worker thread main loop - processes requests until channel closes
-pub fn worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>) {
+/// Worker thread main loop - processes requests until channel closes.
+/// Uses streaming output via SAPI ub_write callback.
+pub fn worker_main_loop(id: usize, rx: Arc<Mutex<std_mpsc::Receiver<WorkerRequest>>>) {
     // Initialize thread-local storage for ZTS
     unsafe {
         let _ = ts_resource_ex(0, ptr::null_mut());
@@ -1016,84 +1025,52 @@ pub fn worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
         match work {
             Ok(WorkerRequest {
                 request,
-                response_tx,
-                queued_at,
+                stream_tx,
+                queued_at: _,
                 heartbeat_ctx: _,
-                finish_channel: _,
-                streaming_channel: _,
-                explicit_sse: _,
             }) => {
-                // Note: heartbeat_ctx, finish_channel, streaming_channel, and explicit_sse
-                // are ignored here - they're only used in ExtExecutor with tokio_sapi extension
-                let profiling = request.profile;
+                // Clear captured headers from previous request
+                sapi::clear_captured_headers();
 
-                // Measure queue wait time
-                let queue_wait_us = if profiling {
-                    queued_at.elapsed().as_micros() as u64
-                } else {
-                    0
-                };
+                // Initialize streaming state (output will go through ub_write callback)
+                sapi::init_stream_state(stream_tx);
 
                 // Start PHP request
-                let startup_start = Instant::now();
                 let startup_ok = unsafe { php_request_startup() } == 0;
-                let php_startup_us = if profiling {
-                    startup_start.elapsed().as_micros() as u64
-                } else {
-                    0
-                };
 
-                let result = if startup_ok {
-                    // Execute script, get capture handle (stdout still redirected)
-                    match execute_php_script_start(&request, profiling) {
-                        Ok((capture, timing)) => {
-                            // Call php_request_shutdown WHILE stdout is still captured
-                            // This ensures shutdown handlers output goes to memfd
-                            let shutdown_start = Instant::now();
-                            unsafe {
-                                php_request_shutdown(ptr::null_mut());
-                            }
-                            let php_shutdown_us = if profiling {
-                                shutdown_start.elapsed().as_micros() as u64
-                            } else {
-                                0
-                            };
+                if startup_ok {
+                    // Build and execute combined code (superglobals + script)
+                    let combined_code = build_combined_code(&request);
 
-                            // NOW finalize capture (restore stdout, read output)
-                            match execute_php_script_finish(
-                                capture,
-                                timing,
-                                profiling,
-                                queue_wait_us,
-                                php_startup_us,
-                            ) {
-                                Ok(mut resp) => {
-                                    if let Some(ref mut profile) = resp.profile {
-                                        profile.php_shutdown_us = php_shutdown_us;
-                                        profile.total_us = profile.queue_wait_us
-                                            + profile.php_startup_us
-                                            + profile.superglobals_us
-                                            + profile.script_exec_us
-                                            + profile.output_capture_us
-                                            + profile.php_shutdown_us;
-                                    }
-                                    Ok(resp)
-                                }
-                                Err(e) => Err(e),
-                            }
-                        }
-                        Err(e) => {
-                            unsafe {
-                                php_request_shutdown(ptr::null_mut());
-                            }
-                            Err(e)
-                        }
+                    unsafe {
+                        let code_c = CString::new(combined_code).unwrap_or_default();
+                        let name_c = CString::new("x").unwrap();
+                        zend_eval_string(
+                            code_c.as_ptr() as *mut c_char,
+                            ptr::null_mut(),
+                            name_c.as_ptr() as *mut c_char,
+                        );
+
+                        // Finalize code (flush PHP buffers)
+                        zend_eval_string(
+                            FINALIZE_CODE.as_ptr() as *mut c_char,
+                            ptr::null_mut(),
+                            FINALIZE_NAME.as_ptr() as *mut c_char,
+                        );
+                    }
+
+                    // PHP request shutdown
+                    unsafe {
+                        php_request_shutdown(ptr::null_mut());
                     }
                 } else {
-                    Err("Failed to start PHP request".to_string())
-                };
+                    // Send error if startup failed
+                    sapi::send_stream_error("Failed to start PHP request".to_string());
+                }
 
-                let _ = response_tx.send(result);
+                // Finalize streaming (sends End chunk if not already sent)
+                sapi::finalize_stream();
+                sapi::clear_request_data();
             }
             Err(_) => {
                 break;

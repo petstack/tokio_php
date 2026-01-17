@@ -67,7 +67,14 @@ pub type FinishCallback = extern "C" fn(
 /// Callback type for streaming chunks (SSE support).
 ///
 /// Called when PHP flushes output in streaming mode.
-pub type StreamChunkCallback = extern "C" fn(ctx: *mut c_void, data: *const c_char, data_len: usize);
+pub type StreamChunkCallback =
+    extern "C" fn(ctx: *mut c_void, data: *const c_char, data_len: usize);
+
+/// Callback type for stream finish (new streaming architecture).
+///
+/// Called when PHP invokes `tokio_finish_request()` in streaming mode.
+/// Simpler than FinishCallback - no body/headers passed (already sent via ub_write).
+pub type StreamFinishCallback = extern "C" fn(ctx: *mut c_void);
 
 #[link(name = "tokio_bridge")]
 #[allow(dead_code)] // FFI functions may be called from C, not Rust
@@ -98,6 +105,10 @@ extern "C" {
     fn tokio_bridge_get_stream_offset() -> usize;
     fn tokio_bridge_set_stream_offset(offset: usize);
     fn tokio_bridge_end_stream();
+
+    // Stream finish (new streaming architecture)
+    fn tokio_bridge_set_stream_finish_callback(ctx: *mut c_void, callback: StreamFinishCallback);
+    fn tokio_bridge_trigger_stream_finish() -> c_int;
 }
 
 // =============================================================================
@@ -237,6 +248,30 @@ pub fn set_stream_offset(offset: usize) {
 #[inline]
 pub fn end_stream() {
     unsafe { tokio_bridge_end_stream() }
+}
+
+/// Set the stream finish callback.
+///
+/// In the new streaming architecture, this callback is invoked when PHP calls
+/// `tokio_finish_request()`. Unlike the legacy FinishCallback, no body/headers
+/// are passed because they've already been sent via ub_write.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer that remains valid for the request lifetime,
+/// or can be null if the callback doesn't need context.
+#[inline]
+pub unsafe fn set_stream_finish_callback(ctx: *mut c_void, callback: StreamFinishCallback) {
+    tokio_bridge_set_stream_finish_callback(ctx, callback);
+}
+
+/// Trigger stream finish from PHP.
+///
+/// Called when PHP invokes `tokio_finish_request()`. Returns true if this was
+/// the first finish call (callback invoked), false if already finished.
+#[inline]
+pub fn trigger_stream_finish() -> bool {
+    unsafe { tokio_bridge_trigger_stream_finish() != 0 }
 }
 
 // =============================================================================
@@ -395,11 +430,7 @@ impl StreamingChannel {
 }
 
 /// Parse headers from serialized buffer format: name\0value\0name\0value\0...
-fn parse_headers_buffer(
-    ptr: *const c_char,
-    len: usize,
-    count: c_int,
-) -> Vec<(String, String)> {
+fn parse_headers_buffer(ptr: *const c_char, len: usize, count: c_int) -> Vec<(String, String)> {
     if ptr.is_null() || len == 0 || count <= 0 {
         return Vec::new();
     }
@@ -493,7 +524,10 @@ mod tests {
         let buffer = b"Content-Type\0text/html\0X-Test\0value\0";
         let result = parse_headers_buffer(buffer.as_ptr() as *const c_char, buffer.len(), 2);
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], ("Content-Type".to_string(), "text/html".to_string()));
+        assert_eq!(
+            result[0],
+            ("Content-Type".to_string(), "text/html".to_string())
+        );
         assert_eq!(result[1], ("X-Test".to_string(), "value".to_string()));
 
         // Test with wrong count (more than actual)

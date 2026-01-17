@@ -139,6 +139,20 @@ where
 }
 
 // =============================================================================
+// Stream Finish Callback (for tokio_finish_request)
+// =============================================================================
+
+/// Callback invoked by bridge when PHP calls `tokio_finish_request()`.
+/// This marks the stream as finished, sending ResponseChunk::End immediately.
+///
+/// # Safety
+/// This is an FFI callback - called from C. The ctx parameter is unused
+/// since we use thread-local storage for stream state.
+extern "C" fn stream_finish_callback(_ctx: *mut c_void) {
+    sapi::mark_stream_finished();
+}
+
+// =============================================================================
 // Request ID Counter
 // =============================================================================
 
@@ -152,6 +166,7 @@ fn next_request_id() -> u64 {
 // Timing Data
 // =============================================================================
 
+#[allow(dead_code)]
 #[derive(Default)]
 struct ExtExecutionTiming {
     // FFI breakdown
@@ -185,6 +200,7 @@ struct ExtExecutionTiming {
 ///
 /// Note: $_SERVER and $_COOKIE are now populated via SAPI callbacks during
 /// php_request_startup(). This function only handles $_GET, $_POST, $_FILES, $_REQUEST.
+#[allow(dead_code)]
 fn execute_script_with_ffi(
     request: &ScriptRequest,
     _request_id: u64,
@@ -361,6 +377,7 @@ fn execute_script_with_ffi(
 }
 
 /// Finalize execution and build response
+#[allow(dead_code)]
 fn finalize_execution(
     capture: StdoutCapture,
     timing: ExtExecutionTiming,
@@ -483,22 +500,11 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
         match work {
             Ok(WorkerRequest {
                 request,
-                response_tx,
-                queued_at,
+                stream_tx,
+                queued_at: _,
                 heartbeat_ctx,
-                finish_channel,
-                streaming_channel,
-                explicit_sse,
             }) => {
-                let profiling = request.profile;
                 let request_id = next_request_id();
-
-                // Measure queue wait time
-                let queue_wait_us = if profiling {
-                    queued_at.elapsed().as_micros() as u64
-                } else {
-                    0
-                };
 
                 // === PHP-FPM compatible: set request data BEFORE php_request_startup ===
                 // This allows SAPI callbacks to populate $_SERVER and $_COOKIE during startup
@@ -514,29 +520,24 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     Cow::Borrowed(crate::VERSION),
                 ));
 
-                // Heartbeat info is now set via bridge (not via $_SERVER)
-                // See bridge::set_heartbeat() call after php_request_startup()
-
                 // Set request data for SAPI callbacks (before php_request_startup)
-                // Note: cookies param is not used (read_cookies callback not called by embed SAPI)
                 sapi::set_request_data(
                     &extended_server_vars,
                     &request.cookies,
                     request.raw_body.as_deref(),
                 );
 
-                // Start PHP request - SAPI callbacks populate $_SERVER
-                let startup_start = Instant::now();
-                let startup_ok = unsafe { php_request_startup() } == 0;
-                let php_startup_us = if profiling {
-                    startup_start.elapsed().as_micros() as u64
-                } else {
-                    0
-                };
+                // Clear captured headers from previous request
+                sapi::clear_captured_headers();
 
-                let result = if startup_ok {
+                // Initialize streaming state (output goes through ub_write callback)
+                sapi::init_stream_state(stream_tx);
+
+                // Start PHP request - SAPI callbacks populate $_SERVER
+                let startup_ok = unsafe { php_request_startup() } == 0;
+
+                if startup_ok {
                     // Initialize bridge context (shared TLS for Rust <-> PHP)
-                    let req_init_start = Instant::now();
                     bridge::init_ctx(request_id, id as u64);
 
                     // Set up heartbeat callback via bridge
@@ -552,114 +553,37 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                         }
                     }
 
-                    // Set up finish callback via bridge (streaming early response)
-                    if let Some(ref channel) = finish_channel {
-                        let channel_ptr = channel.as_ptr();
-                        // SAFETY: channel_ptr is valid for the duration of request processing
-                        // The channel Arc is kept alive by WorkerPool::execute()
-                        unsafe {
-                            bridge::set_finish_callback(
-                                channel_ptr,
-                                bridge::FinishChannel::callback,
-                            );
-                        }
-                    }
-
-                    // Set up streaming callback via bridge (SSE support)
-                    if let Some(ref channel) = streaming_channel {
-                        let channel_ptr = channel.as_ptr();
-                        // SAFETY: channel_ptr is valid for the duration of request processing
-                        // The channel Arc is kept alive by WorkerPool
-                        unsafe {
-                            if explicit_sse {
-                                // Explicit SSE mode (client sent Accept: text/event-stream)
-                                // Enable streaming immediately
-                                bridge::enable_streaming(
-                                    channel_ptr,
-                                    bridge::StreamingChannel::callback,
-                                );
-                            } else {
-                                // Auto-detect mode: set callback but don't enable streaming yet
-                                // Streaming will be enabled when PHP sets Content-Type: text/event-stream
-                                bridge::set_stream_callback(
-                                    channel_ptr,
-                                    bridge::StreamingChannel::callback,
-                                );
-                            }
-                        }
+                    // Set up stream finish callback for tokio_finish_request()
+                    // SAFETY: null ctx is fine - we use thread-local storage for stream state
+                    unsafe {
+                        bridge::set_stream_finish_callback(ptr::null_mut(), stream_finish_callback);
                     }
 
                     // Initialize tokio_sapi request context (for headers, etc.)
                     unsafe {
                         tokio_sapi_request_init(request_id);
                     }
-                    let ffi_request_init_us = if profiling {
-                        req_init_start.elapsed().as_micros() as u64
-                    } else {
-                        0
-                    };
 
-                    // Execute script (superglobals already set via SAPI + FFI for $_GET/$_POST)
-                    match execute_script_with_ffi(&request, request_id, id, profiling) {
-                        Ok((capture, mut timing)) => {
-                            // Add request_init timing
-                            timing.ffi_request_init_us = ffi_request_init_us;
+                    // Execute script via FFI (output goes through ub_write -> stream_tx)
+                    // Note: StdoutCapture is no longer used - ub_write handles output
+                    execute_script_streaming(&request, request_id, id);
 
-                            // Shutdown tokio_sapi and PHP request FIRST
-                            // This flushes PHP's output buffers to our memfd capture
-                            let shutdown_start = Instant::now();
-                            unsafe {
-                                tokio_sapi_request_shutdown();
-                                php_request_shutdown(ptr::null_mut());
-                            }
-                            sapi::clear_request_data();
-                            let php_shutdown_us = if profiling {
-                                shutdown_start.elapsed().as_micros() as u64
-                            } else {
-                                0
-                            };
-
-                            // End streaming mode if it was enabled
-                            if streaming_channel.is_some() {
-                                bridge::end_stream();
-                            }
-
-                            // Finalize and build response (reads finish state from bridge)
-                            // Must be called AFTER php_request_shutdown but BEFORE bridge::destroy_ctx
-                            let response = finalize_execution(
-                                capture,
-                                timing,
-                                profiling,
-                                queue_wait_us,
-                                php_startup_us,
-                                php_shutdown_us,
-                            );
-
-                            // Destroy bridge context after reading finish state
-                            bridge::destroy_ctx();
-
-                            response
-                        }
-                        Err(e) => {
-                            // End streaming mode if it was enabled
-                            if streaming_channel.is_some() {
-                                bridge::end_stream();
-                            }
-                            unsafe {
-                                tokio_sapi_request_shutdown();
-                                php_request_shutdown(ptr::null_mut());
-                            }
-                            sapi::clear_request_data();
-                            bridge::destroy_ctx();
-                            Err(e)
-                        }
+                    // Shutdown tokio_sapi and PHP request
+                    unsafe {
+                        tokio_sapi_request_shutdown();
+                        php_request_shutdown(ptr::null_mut());
                     }
-                } else {
-                    sapi::clear_request_data();
-                    Err("Failed to start PHP request".to_string())
-                };
 
-                let _ = response_tx.send(result);
+                    // Destroy bridge context
+                    bridge::destroy_ctx();
+                } else {
+                    // Send error if startup failed
+                    sapi::send_stream_error("Failed to start PHP request".to_string());
+                }
+
+                // Finalize streaming (sends End chunk if not already sent)
+                sapi::finalize_stream();
+                sapi::clear_request_data();
             }
             Err(_) => {
                 break;
@@ -668,6 +592,113 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
     }
 
     tracing::debug!("ExtWorker {}: Shutdown complete", id);
+}
+
+/// Execute PHP script with streaming output (no StdoutCapture).
+/// Output goes through SAPI ub_write callback to stream_tx.
+fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_id: usize) {
+    // Initialize superglobal array caches (for $_GET, $_POST, $_FILES)
+    unsafe {
+        tokio_sapi_init_superglobals();
+    }
+
+    // Set $_GET variables (batch)
+    let (buf_len, count) = GET_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        pack_into_buffer(
+            &mut buf,
+            request.get_params.iter().map(|(k, v)| (k, v)),
+            &[],
+        )
+    });
+    if count > 0 {
+        GET_BUFFER.with(|buf| unsafe {
+            tokio_sapi_set_get_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+        });
+    }
+
+    // Set $_POST variables (batch)
+    let (buf_len, count) = POST_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        pack_into_buffer(
+            &mut buf,
+            request.post_params.iter().map(|(k, v)| (k, v)),
+            &[],
+        )
+    });
+    if count > 0 {
+        POST_BUFFER.with(|buf| unsafe {
+            tokio_sapi_set_post_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
+        });
+    }
+
+    // Set raw request body for php://input
+    if let Some(ref body) = request.raw_body {
+        unsafe {
+            tokio_sapi_set_post_data(body.as_ptr() as *const c_char, body.len());
+        }
+    }
+
+    // Set $_COOKIE variables (batch)
+    let (buf_len, count) = COOKIE_BUFFER.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        pack_into_buffer(&mut buf, request.cookies.iter().map(|(k, v)| (k, v)), &[])
+    });
+    if count > 0 {
+        COOKIE_BUFFER.with(|buf| unsafe {
+            tokio_sapi_set_cookie_vars_batch(
+                buf.borrow().as_ptr() as *const c_char,
+                buf_len,
+                count,
+            );
+        });
+    }
+
+    // Set $_FILES variables
+    unsafe {
+        for (field_name, files_vec) in &request.files {
+            for file in files_vec {
+                let name_c = CString::new(file.name.as_str()).unwrap_or_default();
+                let type_c = CString::new(file.mime_type.as_str()).unwrap_or_default();
+                let tmp_c = CString::new(file.tmp_name.as_str()).unwrap_or_default();
+
+                tokio_sapi_set_files_var(
+                    field_name.as_ptr() as *const c_char,
+                    field_name.len(),
+                    name_c.as_ptr(),
+                    type_c.as_ptr(),
+                    tmp_c.as_ptr(),
+                    file.error as c_int,
+                    file.size as usize,
+                );
+            }
+        }
+    }
+
+    // Build $_REQUEST from $_GET + $_POST
+    unsafe {
+        tokio_sapi_build_request();
+    }
+
+    // Initialize PHP state (headers, output buffering) via FFI
+    unsafe {
+        tokio_sapi_init_request_state();
+    }
+
+    // Execute script via FFI
+    unsafe {
+        let path_c = CString::new(request.script_path.as_str()).unwrap_or_default();
+        tokio_sapi_execute_script(path_c.as_ptr());
+    }
+
+    // Finalize (flush PHP buffers) - output goes through ub_write
+    unsafe {
+        zend_eval_string(
+            FINALIZE_CODE.as_ptr() as *mut c_char,
+            ptr::null_mut(),
+            FINALIZE_NAME.as_ptr() as *mut c_char,
+        );
+    }
 }
 
 // =============================================================================
@@ -710,6 +741,7 @@ impl ExtPool {
         self.pool.execute(request).await
     }
 
+    #[allow(deprecated)]
     fn execute_streaming_request(
         &self,
         request: ScriptRequest,

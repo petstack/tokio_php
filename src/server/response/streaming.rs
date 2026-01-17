@@ -49,9 +49,7 @@ impl StreamChunk {
     /// Create an empty chunk (used for keep-alive).
     #[inline]
     pub fn empty() -> Self {
-        Self {
-            data: Bytes::new(),
-        }
+        Self { data: Bytes::new() }
     }
 
     /// Check if this chunk is empty.
@@ -122,7 +120,9 @@ impl Stream for ChunkFrameStream {
                 // Skip empty chunks (or use them as comments for keep-alive)
                 if chunk.is_empty() {
                     // SSE comment for keep-alive
-                    Poll::Ready(Some(Ok(Frame::data(Bytes::from_static(b": keepalive\n\n")))))
+                    Poll::Ready(Some(Ok(Frame::data(Bytes::from_static(
+                        b": keepalive\n\n",
+                    )))))
                 } else {
                     Poll::Ready(Some(Ok(Frame::data(chunk.data))))
                 }
@@ -194,10 +194,7 @@ pub fn sse_response(
         ("Content-Type".to_string(), "text/event-stream".to_string()),
         ("Cache-Control".to_string(), "no-cache".to_string()),
         ("Connection".to_string(), "keep-alive".to_string()),
-        (
-            "X-Accel-Buffering".to_string(),
-            "no".to_string(),
-        ),
+        ("X-Accel-Buffering".to_string(), "no".to_string()),
     ];
 
     headers.extend(extra_headers);
@@ -230,6 +227,8 @@ pub const DEFAULT_STREAM_BUFFER_SIZE: usize = 100;
 ///
 /// Returns a sender for sending chunks and a receiver for the response.
 #[inline]
-pub fn stream_channel(buffer_size: usize) -> (mpsc::Sender<StreamChunk>, mpsc::Receiver<StreamChunk>) {
+pub fn stream_channel(
+    buffer_size: usize,
+) -> (mpsc::Sender<StreamChunk>, mpsc::Receiver<StreamChunk>) {
     mpsc::channel(buffer_size)
 }
