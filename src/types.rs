@@ -91,6 +91,15 @@ pub struct ScriptRequest {
     /// Unix timestamp when request was received (for $_SERVER['REQUEST_TIME_FLOAT'])
     #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub received_at: f64,
+    /// Request ID for trace correlation (e.g., "65bdbab40000")
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
+    pub request_id: String,
+    /// W3C trace ID (32 hex chars) for distributed tracing
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
+    pub trace_id: String,
+    /// W3C span ID (16 hex chars) for distributed tracing
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
+    pub span_id: String,
 }
 
 // =============================================================================

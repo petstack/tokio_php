@@ -1356,6 +1356,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 profile: profiling_enabled,
                 timeout: self.request_timeout.as_duration(),
                 received_at: request_time_float,
+                request_id: trace_ctx.short_id().to_string(),
+                trace_id: trace_ctx.trace_id().to_string(),
+                span_id: trace_ctx.span_id().to_string(),
             };
 
             // Track pending requests for metrics (guard ensures cleanup on cancel)
@@ -1607,6 +1610,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             profile: false,
             timeout: self.sse_timeout.as_duration(), // Use SSE timeout (longer than regular)
             received_at: request_time.as_secs_f64(),
+            request_id: request_id.to_string(),
+            trace_id: trace_ctx.trace_id().to_string(),
+            span_id: trace_ctx.span_id().to_string(),
         };
 
         // Execute streaming request

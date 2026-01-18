@@ -204,6 +204,18 @@ struct RequestDataOwned {
     post_read_pos: usize,
 }
 
+/// Trace context for log correlation.
+/// Stored in thread-local storage during PHP execution.
+#[derive(Default, Clone)]
+struct TraceContext {
+    /// Unique request identifier (e.g., "65bdbab40000")
+    request_id: String,
+    /// W3C trace ID (32 hex chars)
+    trace_id: String,
+    /// W3C span ID (16 hex chars)
+    span_id: String,
+}
+
 thread_local! {
     /// Captured headers for current request
     pub static CAPTURED_HEADERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
@@ -213,6 +225,12 @@ thread_local! {
     static REQUEST_DATA: RefCell<Option<RequestDataOwned>> = const { RefCell::new(None) };
     /// Streaming state for current request (set when streaming is enabled)
     static STREAM_STATE: RefCell<Option<StreamState>> = const { RefCell::new(None) };
+    /// Trace context for log correlation (set before PHP execution)
+    static TRACE_CTX: RefCell<TraceContext> = const { RefCell::new(TraceContext {
+        request_id: String::new(),
+        trace_id: String::new(),
+        span_id: String::new(),
+    }) };
 }
 
 // =============================================================================
@@ -605,6 +623,96 @@ unsafe extern "C" fn custom_get_request_time(request_time: *mut f64) -> c_int {
     0 // SUCCESS
 }
 
+/// SAPI callback: log message
+/// Called by PHP when error_log() is invoked or when PHP logs errors/warnings.
+/// Routes messages to our structured JSON logger with trace correlation.
+///
+/// # Arguments
+/// * `message` - The log message (null-terminated C string)
+/// * `syslog_type` - PHP's internal log type (LOG_* constants from syslog.h)
+///
+/// # Syslog levels (from syslog.h):
+/// - LOG_EMERG (0), LOG_ALERT (1), LOG_CRIT (2) -> ERROR
+/// - LOG_ERR (3) -> ERROR
+/// - LOG_WARNING (4) -> WARN
+/// - LOG_NOTICE (5), LOG_INFO (6) -> INFO
+/// - LOG_DEBUG (7) -> DEBUG
+unsafe extern "C" fn custom_log_message(message: *const c_char, syslog_type: c_int) {
+    if message.is_null() {
+        return;
+    }
+
+    // Parse message
+    let msg = match CStr::from_ptr(message).to_str() {
+        Ok(s) => s.trim(),
+        Err(_) => return,
+    };
+
+    // Skip empty messages
+    if msg.is_empty() {
+        return;
+    }
+
+    // Get trace context
+    let (request_id, trace_id, span_id) = TRACE_CTX.with(|ctx| {
+        let ctx = ctx.borrow();
+        (
+            ctx.request_id.clone(),
+            ctx.trace_id.clone(),
+            ctx.span_id.clone(),
+        )
+    });
+
+    // Map syslog level to tracing level and log
+    // Note: we use explicit match to avoid the overhead of creating spans
+    match syslog_type {
+        0..=3 => {
+            // LOG_EMERG, LOG_ALERT, LOG_CRIT, LOG_ERR -> ERROR
+            tracing::error!(
+                target: "php",
+                request_id = %request_id,
+                trace_id = %trace_id,
+                span_id = %span_id,
+                "{}",
+                msg
+            );
+        }
+        4 => {
+            // LOG_WARNING -> WARN
+            tracing::warn!(
+                target: "php",
+                request_id = %request_id,
+                trace_id = %trace_id,
+                span_id = %span_id,
+                "{}",
+                msg
+            );
+        }
+        5 | 6 => {
+            // LOG_NOTICE, LOG_INFO -> INFO
+            tracing::info!(
+                target: "php",
+                request_id = %request_id,
+                trace_id = %trace_id,
+                span_id = %span_id,
+                "{}",
+                msg
+            );
+        }
+        _ => {
+            // LOG_DEBUG and unknown -> DEBUG
+            tracing::debug!(
+                target: "php",
+                request_id = %request_id,
+                trace_id = %trace_id,
+                span_id = %span_id,
+                "{}",
+                msg
+            );
+        }
+    }
+}
+
 // =============================================================================
 // SAPI Configuration
 // =============================================================================
@@ -635,6 +743,7 @@ pub fn init() -> Result<(), String> {
         php_embed_module.read_cookies = Some(custom_read_cookies);
         php_embed_module.read_post = Some(custom_read_post);
         php_embed_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
+        php_embed_module.log_message = Some(custom_log_message); // Structured logging
         php_embed_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         php_embed_module.ub_write = Some(stream_ub_write); // HTTP streaming output
 
@@ -653,12 +762,13 @@ pub fn init() -> Result<(), String> {
         sapi_module.read_cookies = Some(custom_read_cookies);
         sapi_module.read_post = Some(custom_read_post);
         sapi_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
+        sapi_module.log_message = Some(custom_log_message); // Structured logging
         sapi_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         sapi_module.ub_write = Some(stream_ub_write); // HTTP streaming output
     }
 
     tracing::info!(
-        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time)"
+        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time, log_message)"
     );
     Ok(())
 }
@@ -738,5 +848,32 @@ pub fn set_request_data(
 pub fn clear_request_data() {
     REQUEST_DATA.with(|data| {
         *data.borrow_mut() = None;
+    });
+}
+
+/// Set trace context for log correlation.
+/// Must be called before PHP execution to enable trace correlation in logs.
+///
+/// # Arguments
+/// * `request_id` - Unique request identifier (e.g., "65bdbab40000")
+/// * `trace_id` - W3C trace ID (32 hex chars)
+/// * `span_id` - W3C span ID (16 hex chars)
+pub fn set_trace_context(request_id: &str, trace_id: &str, span_id: &str) {
+    TRACE_CTX.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.request_id = request_id.to_string();
+        ctx.trace_id = trace_id.to_string();
+        ctx.span_id = span_id.to_string();
+    });
+}
+
+/// Clear trace context after PHP execution.
+/// This resets the trace context for the next request.
+pub fn clear_trace_context() {
+    TRACE_CTX.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.request_id.clear();
+        ctx.trace_id.clear();
+        ctx.span_id.clear();
     });
 }

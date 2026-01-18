@@ -557,6 +557,11 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     // Initialize bridge context (shared TLS for Rust <-> PHP)
                     bridge::init_ctx(request_id, id as u64);
                     bridge::set_request_time(request.received_at);
+                    sapi::set_trace_context(
+                        &request.request_id,
+                        &request.trace_id,
+                        &request.span_id,
+                    );
 
                     // Set up heartbeat callback via bridge
                     if let Some(ref ctx) = heartbeat_ctx {
@@ -639,6 +644,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 // Finalize streaming (sends End chunk if not already sent)
                 sapi::finalize_stream();
                 sapi::clear_request_data();
+                sapi::clear_trace_context();
             }
             Err(_) => {
                 break;
