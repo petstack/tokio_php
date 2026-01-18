@@ -21,6 +21,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -231,6 +232,9 @@ thread_local! {
         trace_id: String::new(),
         span_id: String::new(),
     }) };
+    /// Virtual environment variables for getenv() (cleared per request)
+    /// Maps env var name -> cached CString for FFI
+    static VIRTUAL_ENV: RefCell<HashMap<String, CString>> = RefCell::new(HashMap::new());
 }
 
 // =============================================================================
@@ -713,6 +717,46 @@ unsafe extern "C" fn custom_log_message(message: *const c_char, syslog_type: c_i
     }
 }
 
+/// SAPI callback: get environment variable
+/// Called by PHP's getenv() function.
+/// First checks virtual environment variables, then falls back to real getenv.
+///
+/// # Arguments
+/// * `name` - Environment variable name (NOT null-terminated, length provided)
+/// * `name_len` - Length of the name string
+///
+/// # Returns
+/// * Pointer to null-terminated string value (from our thread-local storage)
+/// * null if not found in virtual env (PHP will fall back to real getenv)
+///
+/// # Safety
+/// Called from PHP via FFI. The returned pointer must remain valid until
+/// the next request or clear_virtual_env() call.
+unsafe extern "C" fn custom_getenv(name: *const c_char, name_len: usize) -> *mut c_char {
+    if name.is_null() || name_len == 0 {
+        return ptr::null_mut();
+    }
+
+    // Convert name to Rust string
+    let name_slice = std::slice::from_raw_parts(name as *const u8, name_len);
+    let name_str = match std::str::from_utf8(name_slice) {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    // Check virtual environment variables
+    VIRTUAL_ENV.with(|env| {
+        let env = env.borrow();
+        if let Some(cstring) = env.get(name_str) {
+            // Return pointer to our cached CString (valid until clear_virtual_env)
+            cstring.as_ptr() as *mut c_char
+        } else {
+            // Not found - return null so PHP falls back to real getenv
+            ptr::null_mut()
+        }
+    })
+}
+
 // =============================================================================
 // SAPI Configuration
 // =============================================================================
@@ -744,6 +788,7 @@ pub fn init() -> Result<(), String> {
         php_embed_module.read_post = Some(custom_read_post);
         php_embed_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
         php_embed_module.log_message = Some(custom_log_message); // Structured logging
+        php_embed_module.getenv = Some(custom_getenv); // Virtual environment variables
         php_embed_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         php_embed_module.ub_write = Some(stream_ub_write); // HTTP streaming output
 
@@ -763,12 +808,13 @@ pub fn init() -> Result<(), String> {
         sapi_module.read_post = Some(custom_read_post);
         sapi_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
         sapi_module.log_message = Some(custom_log_message); // Structured logging
+        sapi_module.getenv = Some(custom_getenv); // Virtual environment variables
         sapi_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         sapi_module.ub_write = Some(stream_ub_write); // HTTP streaming output
     }
 
     tracing::info!(
-        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time, log_message)"
+        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time, log_message, getenv)"
     );
     Ok(())
 }
@@ -875,5 +921,29 @@ pub fn clear_trace_context() {
         ctx.request_id.clear();
         ctx.trace_id.clear();
         ctx.span_id.clear();
+    });
+}
+
+/// Set a virtual environment variable.
+/// These are accessible via PHP's getenv() without polluting the real process environment.
+///
+/// # Arguments
+/// * `name` - Environment variable name (e.g., "TOKIO_REQUEST_ID")
+/// * `value` - Environment variable value
+///
+/// # Panics
+/// Panics if the value contains a null byte (invalid for C strings).
+pub fn set_virtual_env(name: &str, value: &str) {
+    let cstring = CString::new(value).expect("virtual env value contains null byte");
+    VIRTUAL_ENV.with(|env| {
+        env.borrow_mut().insert(name.to_string(), cstring);
+    });
+}
+
+/// Clear all virtual environment variables.
+/// Should be called after PHP execution to prevent leaking between requests.
+pub fn clear_virtual_env() {
+    VIRTUAL_ENV.with(|env| {
+        env.borrow_mut().clear();
     });
 }

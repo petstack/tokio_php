@@ -563,6 +563,12 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                         &request.span_id,
                     );
 
+                    // Set virtual environment variables for getenv()
+                    sapi::set_virtual_env("TOKIO_REQUEST_ID", &request.request_id);
+                    sapi::set_virtual_env("TOKIO_WORKER_ID", &id.to_string());
+                    sapi::set_virtual_env("TOKIO_TRACE_ID", &request.trace_id);
+                    sapi::set_virtual_env("TOKIO_SPAN_ID", &request.span_id);
+
                     // Set up heartbeat callback via bridge
                     if let Some(ref ctx) = heartbeat_ctx {
                         let ctx_ptr = Arc::as_ptr(ctx) as *mut c_void;
@@ -645,6 +651,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 sapi::finalize_stream();
                 sapi::clear_request_data();
                 sapi::clear_trace_context();
+                sapi::clear_virtual_env();
             }
             Err(_) => {
                 break;

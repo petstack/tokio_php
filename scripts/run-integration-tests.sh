@@ -227,6 +227,51 @@ else
 fi
 
 echo ""
+echo "=== Virtual Environment (getenv) Tests ==="
+
+# Test virtual environment variables via getenv()
+body=$(curl -s --max-time "$CURL_TIMEOUT" "$SERVER_URL/test_getenv.php" 2>/dev/null || echo "")
+
+# Check that all virtual env vars are accessible
+if echo "$body" | tr -d ' \n' | grep -q '"request_id_via_getenv":true'; then
+    pass "getenv(TOKIO_REQUEST_ID) works"
+else
+    fail "getenv(TOKIO_REQUEST_ID)" "found" "not found"
+fi
+
+if echo "$body" | tr -d ' \n' | grep -q '"worker_id_via_getenv":true'; then
+    pass "getenv(TOKIO_WORKER_ID) works"
+else
+    fail "getenv(TOKIO_WORKER_ID)" "found" "not found"
+fi
+
+if echo "$body" | tr -d ' \n' | grep -q '"trace_id_via_getenv":true'; then
+    pass "getenv(TOKIO_TRACE_ID) works"
+else
+    fail "getenv(TOKIO_TRACE_ID)" "found" "not found"
+fi
+
+if echo "$body" | tr -d ' \n' | grep -q '"trace_id_matches_server":true'; then
+    pass "getenv(TOKIO_TRACE_ID) matches $_SERVER[TRACE_ID]"
+else
+    fail "getenv/SERVER trace match" "true" "false"
+fi
+
+# Check that real env vars still work
+if echo "$body" | tr -d ' \n' | grep -q '"real_env_works":true'; then
+    pass "Real getenv(PATH) still works"
+else
+    fail "Real getenv" "works" "broken"
+fi
+
+# Check that non-existent vars return false
+if echo "$body" | tr -d ' \n' | grep -q '"non_existent_is_false":true'; then
+    pass "Non-existent env var returns false"
+else
+    fail "Non-existent env" "false" "not false"
+fi
+
+echo ""
 echo "=== SSE (Server-Sent Events) Tests ==="
 
 # Test SSE headers
