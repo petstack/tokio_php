@@ -162,6 +162,14 @@ extern "C" {
     /// Called when PHP sets Content-Type: text/event-stream header.
     /// Returns 1 if streaming was enabled, 0 if no callback configured.
     fn tokio_bridge_try_enable_streaming() -> c_int;
+
+    /// Check if chunked transfer encoding mode is enabled.
+    /// Set by PHP flush handler when flush() is called before output.
+    fn tokio_bridge_is_chunked_mode() -> c_int;
+
+    /// Mark headers as sent to client.
+    /// Called after sending headers chunk.
+    fn tokio_bridge_mark_headers_sent();
 }
 
 // tokio_sapi extension FFI - for SAPI flush handler
@@ -302,6 +310,8 @@ unsafe extern "C" fn stream_ub_write(str: *const c_char, len: usize) -> usize {
         if !stream_state.headers_sent {
             // Take headers from CAPTURED_HEADERS (populated by header_handler)
             let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+            // Filter headers for streaming (remove Content-Length if chunked mode)
+            let headers = filter_headers_for_streaming(headers);
             let status = stream_state.status_code;
 
             // Send headers chunk (blocking_send is ok - we're in a worker thread)
@@ -309,6 +319,8 @@ unsafe extern "C" fn stream_ub_write(str: *const c_char, len: usize) -> usize {
                 .tx
                 .blocking_send(ResponseChunk::Headers { status, headers });
             stream_state.headers_sent = true;
+            // Mark headers as sent in bridge TLS
+            tokio_bridge_mark_headers_sent();
         }
 
         // Send body chunk
@@ -339,6 +351,25 @@ pub fn init_stream_state(tx: mpsc::Sender<ResponseChunk>) {
     });
 }
 
+/// Internal header name used to signal chunked streaming mode.
+/// This is filtered out before sending to the client.
+const CHUNKED_MODE_HEADER: &str = "x-tokio-streaming-mode";
+
+/// Filter headers for streaming: remove Content-Length when in chunked mode.
+/// Checks the bridge's chunked_mode flag (set by PHP flush handler or tokio_send_headers).
+/// Also adds an internal marker header to signal the executor to use streaming mode.
+fn filter_headers_for_streaming(mut headers: Vec<(String, String)>) -> Vec<(String, String)> {
+    // Check if chunked mode is enabled via bridge (set by tokio_send_headers or flush)
+    let chunked = unsafe { tokio_bridge_is_chunked_mode() != 0 };
+    if !chunked {
+        return headers;
+    }
+    // Remove Content-Length and add streaming marker
+    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("content-length"));
+    headers.push((CHUNKED_MODE_HEADER.to_string(), "chunked".to_string()));
+    headers
+}
+
 /// Finalize streaming for current request.
 /// Called after PHP script execution completes (including php_request_shutdown).
 /// Sends End chunk if not already finished, and cleans up state.
@@ -349,11 +380,15 @@ pub fn finalize_stream() {
             // If no output occurred, send headers now (empty response)
             if !stream_state.headers_sent {
                 let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+                // Filter headers for streaming (remove Content-Length if chunked mode)
+                let headers = filter_headers_for_streaming(headers);
                 let status = stream_state.status_code;
                 let _ = stream_state
                     .tx
                     .blocking_send(ResponseChunk::Headers { status, headers });
                 stream_state.headers_sent = true;
+                // Mark headers as sent in bridge TLS
+                unsafe { tokio_bridge_mark_headers_sent(); }
             }
 
             // Send End chunk (unless already finished via tokio_finish_request)
@@ -383,11 +418,15 @@ pub fn mark_stream_finished() -> bool {
             // If no output yet, send headers first
             if !stream_state.headers_sent {
                 let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+                // Filter headers for streaming (remove Content-Length if chunked mode)
+                let headers = filter_headers_for_streaming(headers);
                 let status = stream_state.status_code;
                 let _ = stream_state
                     .tx
                     .blocking_send(ResponseChunk::Headers { status, headers });
                 stream_state.headers_sent = true;
+                // Mark headers as sent in bridge TLS
+                unsafe { tokio_bridge_mark_headers_sent(); }
             }
 
             // Send End chunk - client receives response now
@@ -869,12 +908,16 @@ unsafe extern "C" fn custom_send_headers(sapi_headers: *mut SapiHeaders) -> c_in
 
         // Take headers from CAPTURED_HEADERS (populated by header_handler)
         let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+        // Filter headers for streaming (remove Content-Length if chunked mode)
+        let headers = filter_headers_for_streaming(headers);
 
         // Send headers chunk immediately
         let _ = stream_state
             .tx
             .blocking_send(ResponseChunk::Headers { status, headers });
         stream_state.headers_sent = true;
+        // Mark headers as sent in bridge TLS
+        tokio_bridge_mark_headers_sent();
 
         SAPI_HEADER_SENT_SUCCESSFULLY
     })
@@ -1099,3 +1142,4 @@ pub fn register_temp_file(path: PathBuf) {
 pub fn temp_file_count() -> usize {
     TEMP_FILES.with(|files| files.borrow().len())
 }
+

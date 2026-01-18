@@ -498,3 +498,44 @@ int tokio_bridge_trigger_stream_finish(void)
 
     return 0;
 }
+
+/* ============================================================================
+ * Chunked Transfer Encoding API
+ * ============================================================================ */
+
+int tokio_bridge_enable_chunked_mode(void)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+    /* Can only enable chunked mode before headers are sent */
+    if (tls_ctx->headers_sent) {
+        return 0;
+    }
+    tls_ctx->chunked_mode = 1;
+    return 1;
+}
+
+int tokio_bridge_is_chunked_mode(void)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+    return tls_ctx->chunked_mode;
+}
+
+void tokio_bridge_mark_headers_sent(void)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    tls_ctx->headers_sent = 1;
+}
+
+int tokio_bridge_are_headers_sent(void)
+{
+    if (tls_ctx == NULL) {
+        return 0;
+    }
+    return tls_ctx->headers_sent;
+}

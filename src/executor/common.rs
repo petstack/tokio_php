@@ -487,7 +487,7 @@ impl WorkerPool {
         let mut rx = self.submit_streaming(request)?;
 
         // Wait for headers chunk
-        let (status, headers) = match rx.recv().await {
+        let (status, mut headers) = match rx.recv().await {
             Some(ResponseChunk::Headers { status, headers }) => (status, headers),
             Some(ResponseChunk::Error(e)) => return Err(e),
             Some(ResponseChunk::End) => {
@@ -509,12 +509,22 @@ impl WorkerPool {
             None => return Err("Worker dropped connection".to_string()),
         };
 
-        // Check if this is SSE (Content-Type: text/event-stream)
+        // Check if this is streaming mode:
+        // 1. SSE (Content-Type: text/event-stream)
+        // 2. Explicit chunked mode (x-tokio-streaming-mode: chunked from tokio_send_headers)
         let is_sse = headers.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("content-type") && v.contains("text/event-stream")
         });
+        let is_chunked = headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-tokio-streaming-mode"));
 
-        if is_sse {
+        // Remove internal marker header before sending to client
+        if is_chunked {
+            headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-tokio-streaming-mode"));
+        }
+
+        if is_sse || is_chunked {
             // SSE mode: create bridge channel to convert ResponseChunk::Body -> StreamChunk
             let (tx, stream_rx) = tokio_mpsc::channel::<StreamChunk>(32);
 

@@ -1097,6 +1097,9 @@ static char* serialize_sapi_headers(size_t *len, int *count)
  * Streaming API (SSE support)
  * ============================================================================ */
 
+/* Chunked mode is now handled via tokio_bridge shared library.
+ * See tokio_bridge_enable_chunked_mode() in bridge/bridge.h */
+
 /**
  * Read new output from memfd since last stream offset.
  * Returns allocated buffer that caller must free().
@@ -1165,6 +1168,12 @@ void tokio_sapi_flush(void *server_context)
     }
 
     flush_in_progress = 1;
+
+    /* Enable chunked transfer encoding mode for any Content-Type.
+     * When flush() is called before output, we switch to chunked mode
+     * so Content-Length is not calculated (allows streaming for any Content-Type).
+     * This has no effect if headers were already sent. */
+    tokio_bridge_enable_chunked_mode();
 
     /* 1. ALWAYS flush PHP output buffers first.
      * This ensures output reaches the SAPI ub_write callback (stream_ub_write in Rust)
@@ -1326,6 +1335,78 @@ PHP_FUNCTION(tokio_finish_request)
 }
 
 /* ============================================================================
+ * tokio_send_headers() - Send headers and start streaming mode
+ * ============================================================================ */
+
+/**
+ * tokio_send_headers(int $status = 200): bool
+ *
+ * Sends HTTP headers immediately and enables streaming mode.
+ * After calling this function:
+ * - Headers are sent to the client right away
+ * - No Content-Length header is calculated (uses chunked transfer encoding)
+ * - Each flush() sends output immediately to the client
+ *
+ * This is useful for:
+ * - SSE (Server-Sent Events) with any Content-Type
+ * - Long-running scripts that want to send progress updates
+ * - Streaming responses
+ *
+ * Usage:
+ *   header('Content-Type: application/json');
+ *   header('Cache-Control: no-cache');
+ *   tokio_send_headers();  // Headers sent NOW, streaming enabled
+ *
+ *   echo '{"event": 1}' . "\n";
+ *   flush();  // Sent immediately
+ *
+ *   sleep(1);
+ *   echo '{"event": 2}' . "\n";
+ *   flush();  // Sent immediately
+ */
+PHP_FUNCTION(tokio_send_headers)
+{
+    zend_long status = 200;
+
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(status)
+    ZEND_PARSE_PARAMETERS_END();
+
+    /* Validate status code */
+    if (status < 100 || status > 599) {
+        php_error_docref(NULL, E_WARNING, "Invalid HTTP status code: " ZEND_LONG_FMT, status);
+        RETURN_FALSE;
+    }
+
+    /* Headers already sent? */
+    if (tokio_bridge_are_headers_sent()) {
+        RETURN_FALSE;
+    }
+
+    /* Set HTTP status code via PHP's SAPI */
+    SG(sapi_headers).http_response_code = (int)status;
+
+    /* Disable all output buffering */
+    while (php_output_get_level() > 0) {
+        php_output_end();
+    }
+
+    /* Enable chunked transfer encoding mode */
+    tokio_bridge_enable_chunked_mode();
+
+    /* Force headers to be sent by calling sapi_send_headers */
+    if (sapi_send_headers() != SAPI_HEADER_SENT_SUCCESSFULLY) {
+        RETURN_FALSE;
+    }
+
+    /* Enable implicit flush for all subsequent output */
+    php_output_set_implicit_flush(1);
+
+    RETURN_TRUE;
+}
+
+/* ============================================================================
  * Finish Request C API (called from Rust)
  * Now delegates to tokio_bridge shared library.
  * ============================================================================ */
@@ -1385,6 +1466,10 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_is_streaming, 0, 0, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_tokio_send_headers, 0, 0, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, status, IS_LONG, 0, "200")
+ZEND_END_ARG_INFO()
+
 /* ============================================================================
  * PHP Extension registration
  * ============================================================================ */
@@ -1398,6 +1483,7 @@ static const zend_function_entry tokio_sapi_functions[] = {
     PHP_FE(tokio_finish_request, arginfo_tokio_finish_request)
     PHP_FE(tokio_stream_flush, arginfo_tokio_stream_flush)
     PHP_FE(tokio_is_streaming, arginfo_tokio_is_streaming)
+    PHP_FE(tokio_send_headers, arginfo_tokio_send_headers)
     PHP_FE_END
 };
 

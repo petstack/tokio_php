@@ -146,6 +146,10 @@ typedef struct tokio_bridge_ctx {
     void *stream_finish_ctx;                        /* Stream finish callback context */
     tokio_stream_finish_callback_t stream_finish_callback;  /* Stream finish callback */
 
+    /* Chunked transfer encoding mode (set when flush() called before output) */
+    int chunked_mode;                               /* 1 = chunked mode enabled */
+    int headers_sent;                               /* 1 = headers already sent to client */
+
 } tokio_bridge_ctx_t;
 
 /* ============================================================================
@@ -436,6 +440,39 @@ void tokio_bridge_set_stream_finish_callback(void *ctx, tokio_stream_finish_call
  * @return 1 on success, 0 if no callback or already finished
  */
 int tokio_bridge_trigger_stream_finish(void);
+
+/* ============================================================================
+ * Chunked Transfer Encoding API
+ * ============================================================================ */
+
+/**
+ * Enable chunked transfer encoding mode.
+ * Called when flush() is invoked before output to enable streaming for any Content-Type.
+ * When enabled, Content-Length header should be removed from response.
+ *
+ * @return 1 if chunked mode was enabled, 0 if headers already sent
+ */
+int tokio_bridge_enable_chunked_mode(void);
+
+/**
+ * Check if chunked mode is enabled.
+ *
+ * @return 1 if chunked mode, 0 otherwise
+ */
+int tokio_bridge_is_chunked_mode(void);
+
+/**
+ * Mark headers as sent.
+ * Called from Rust after headers are sent to client.
+ */
+void tokio_bridge_mark_headers_sent(void);
+
+/**
+ * Check if headers have been sent.
+ *
+ * @return 1 if headers sent, 0 otherwise
+ */
+int tokio_bridge_are_headers_sent(void);
 
 #ifdef __cplusplus
 }
