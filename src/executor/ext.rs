@@ -12,6 +12,7 @@
 
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, c_void, CString};
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -315,6 +316,10 @@ fn execute_script_with_ffi(
                     file.error as c_int,
                     file.size as usize,
                 );
+                // Register temp file for cleanup after request
+                if !file.tmp_name.is_empty() {
+                    sapi::register_temp_file(PathBuf::from(file.tmp_name.as_str()));
+                }
                 files_count += 1;
             }
         }
@@ -739,6 +744,10 @@ fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_i
                     file.error as c_int,
                     file.size as usize,
                 );
+                // Register temp file for cleanup after request
+                if !file.tmp_name.is_empty() {
+                    sapi::register_temp_file(PathBuf::from(file.tmp_name.as_str()));
+                }
             }
         }
     }

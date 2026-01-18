@@ -23,6 +23,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -235,6 +236,8 @@ thread_local! {
     /// Virtual environment variables for getenv() (cleared per request)
     /// Maps env var name -> cached CString for FFI
     static VIRTUAL_ENV: RefCell<HashMap<String, CString>> = RefCell::new(HashMap::new());
+    /// Temporary files to clean up after request (e.g., $_FILES uploads)
+    static TEMP_FILES: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
 }
 
 // =============================================================================
@@ -757,6 +760,68 @@ unsafe extern "C" fn custom_getenv(name: *const c_char, name_len: usize) -> *mut
     })
 }
 
+/// SAPI callback: activate (request initialization)
+/// Called by PHP after php_request_startup() completes.
+/// Used to initialize per-request resources.
+///
+/// # Returns
+/// * 0 on success (SUCCESS)
+/// * -1 on failure (FAILURE)
+unsafe extern "C" fn custom_activate() -> c_int {
+    // Clear virtual environment variables from previous request
+    // (This is a safety net - ext.rs should call clear_virtual_env() explicitly)
+    VIRTUAL_ENV.with(|env| env.borrow_mut().clear());
+
+    // Clear temp files list (files themselves are cleaned in deactivate)
+    TEMP_FILES.with(|files| files.borrow_mut().clear());
+
+    0 // SUCCESS
+}
+
+/// SAPI callback: deactivate (request cleanup)
+/// Called by PHP before php_request_shutdown() completes.
+/// Used to clean up per-request resources.
+///
+/// # Returns
+/// * 0 on success (SUCCESS)
+/// * -1 on failure (FAILURE)
+unsafe extern "C" fn custom_deactivate() -> c_int {
+    // Clean up temporary files (e.g., uploaded files from $_FILES)
+    cleanup_temp_files();
+
+    // Clear trace context (safety net - ext.rs should also call clear_trace_context)
+    TRACE_CTX.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.request_id.clear();
+        ctx.trace_id.clear();
+        ctx.span_id.clear();
+    });
+
+    0 // SUCCESS
+}
+
+/// Clean up temporary files registered during request processing.
+/// Called during deactivate phase.
+fn cleanup_temp_files() {
+    TEMP_FILES.with(|files| {
+        let files_list = files.borrow();
+        for path in files_list.iter() {
+            if let Err(e) = std::fs::remove_file(path) {
+                // Log but don't fail - file might already be deleted
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to clean up temp file"
+                    );
+                }
+            }
+        }
+    });
+    // Clear the list after cleanup
+    TEMP_FILES.with(|files| files.borrow_mut().clear());
+}
+
 // =============================================================================
 // SAPI Configuration
 // =============================================================================
@@ -789,6 +854,8 @@ pub fn init() -> Result<(), String> {
         php_embed_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
         php_embed_module.log_message = Some(custom_log_message); // Structured logging
         php_embed_module.getenv = Some(custom_getenv); // Virtual environment variables
+        php_embed_module.activate = Some(custom_activate); // Request initialization
+        php_embed_module.deactivate = Some(custom_deactivate); // Request cleanup
         php_embed_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         php_embed_module.ub_write = Some(stream_ub_write); // HTTP streaming output
 
@@ -809,12 +876,14 @@ pub fn init() -> Result<(), String> {
         sapi_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
         sapi_module.log_message = Some(custom_log_message); // Structured logging
         sapi_module.getenv = Some(custom_getenv); // Virtual environment variables
+        sapi_module.activate = Some(custom_activate); // Request initialization
+        sapi_module.deactivate = Some(custom_deactivate); // Request cleanup
         sapi_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         sapi_module.ub_write = Some(stream_ub_write); // HTTP streaming output
     }
 
     tracing::info!(
-        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time, log_message, getenv)"
+        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time, log_message, getenv, activate, deactivate)"
     );
     Ok(())
 }
@@ -946,4 +1015,27 @@ pub fn clear_virtual_env() {
     VIRTUAL_ENV.with(|env| {
         env.borrow_mut().clear();
     });
+}
+
+/// Register a temporary file for cleanup after request processing.
+/// Files registered here will be automatically deleted during the SAPI deactivate phase.
+///
+/// # Arguments
+/// * `path` - Path to the temporary file (e.g., uploaded file from $_FILES)
+///
+/// # Example
+/// ```ignore
+/// // In file upload handling code:
+/// sapi::register_temp_file(PathBuf::from("/tmp/phpXXXXXX"));
+/// ```
+pub fn register_temp_file(path: PathBuf) {
+    TEMP_FILES.with(|files| {
+        files.borrow_mut().push(path);
+    });
+}
+
+/// Get the count of registered temporary files.
+/// Useful for testing and debugging.
+pub fn temp_file_count() -> usize {
+    TEMP_FILES.with(|files| files.borrow().len())
 }

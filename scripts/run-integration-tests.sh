@@ -272,6 +272,27 @@ else
 fi
 
 echo ""
+echo "=== Lifecycle (activate/deactivate) Tests ==="
+
+# Test that each request gets a unique trace_id (env isolation via activate)
+trace1=$(curl -s --max-time "$CURL_TIMEOUT" "$SERVER_URL/test_lifecycle.php?test=env_isolation" 2>/dev/null | tr -d ' \n' | grep -o '"trace_id":"[^"]*"' | cut -d'"' -f4)
+trace2=$(curl -s --max-time "$CURL_TIMEOUT" "$SERVER_URL/test_lifecycle.php?test=env_isolation" 2>/dev/null | tr -d ' \n' | grep -o '"trace_id":"[^"]*"' | cut -d'"' -f4)
+
+if [ -n "$trace1" ] && [ -n "$trace2" ] && [ "$trace1" != "$trace2" ]; then
+    pass "Env isolation: unique trace_id per request"
+else
+    fail "Env isolation" "unique trace_ids" "trace1=$trace1, trace2=$trace2"
+fi
+
+# Test that lifecycle endpoint works
+body=$(curl -s --max-time "$CURL_TIMEOUT" "$SERVER_URL/test_lifecycle.php" 2>/dev/null || echo "")
+if echo "$body" | tr -d ' \n' | grep -q '"status":"ok"'; then
+    pass "Lifecycle test endpoint works"
+else
+    fail "Lifecycle endpoint" "status ok" "failed"
+fi
+
+echo ""
 echo "=== SSE (Server-Sent Events) Tests ==="
 
 # Test SSE headers
