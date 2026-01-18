@@ -556,6 +556,7 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 if startup_ok {
                     // Initialize bridge context (shared TLS for Rust <-> PHP)
                     bridge::init_ctx(request_id, id as u64);
+                    bridge::set_request_time(request.received_at);
 
                     // Set up heartbeat callback via bridge
                     if let Some(ref ctx) = heartbeat_ctx {

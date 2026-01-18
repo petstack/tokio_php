@@ -1355,6 +1355,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 raw_body: raw_body.map(|b: Bytes| b.to_vec()),
                 profile: profiling_enabled,
                 timeout: self.request_timeout.as_duration(),
+                received_at: request_time_float,
             };
 
             // Track pending requests for metrics (guard ensures cleanup on cancel)
@@ -1605,6 +1606,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             raw_body: None,
             profile: false,
             timeout: self.sse_timeout.as_duration(), // Use SSE timeout (longer than regular)
+            received_at: request_time.as_secs_f64(),
         };
 
         // Execute streaming request

@@ -210,3 +210,54 @@ async fn test_concurrent_requests() {
         assert_status(&resp, StatusCode::OK);
     }
 }
+
+/// Test $_SERVER['REQUEST_TIME'] and $_SERVER['REQUEST_TIME_FLOAT']
+/// Verifies the SAPI get_request_time callback works correctly
+#[tokio::test]
+async fn test_request_time() {
+    let server = TestServer::new();
+    let resp = server.get("/test_request_time.php").await;
+
+    assert_status(&resp, StatusCode::OK);
+    let body = resp.text().await.unwrap();
+
+    // Parse JSON response
+    let data: serde_json::Value = serde_json::from_str(&body).expect("Invalid JSON response");
+
+    // REQUEST_TIME should be a positive integer (Unix timestamp)
+    let request_time = data["request_time"].as_i64().unwrap_or(0);
+    assert!(
+        request_time > 0,
+        "REQUEST_TIME should be positive, got: {}",
+        request_time
+    );
+
+    // REQUEST_TIME_FLOAT should be a positive float with microsecond precision
+    let request_time_float = data["request_time_float"].as_f64().unwrap_or(0.0);
+    assert!(
+        request_time_float > 0.0,
+        "REQUEST_TIME_FLOAT should be positive, got: {}",
+        request_time_float
+    );
+
+    // REQUEST_TIME_FLOAT should have fractional component (microseconds)
+    let has_fractional = (request_time_float - request_time_float.floor()).abs() > 0.0;
+    assert!(
+        has_fractional,
+        "REQUEST_TIME_FLOAT should have microseconds, got: {}",
+        request_time_float
+    );
+
+    // delay_ms shows time between request reception and PHP execution
+    // Should be positive and reasonable (< 5000ms)
+    let delay_ms = data["delay_ms"].as_f64().unwrap_or(-1.0);
+    assert!(
+        delay_ms >= 0.0 && delay_ms < 5000.0,
+        "delay_ms should be 0-5000ms, got: {}",
+        delay_ms
+    );
+
+    // is_valid should be true if all checks passed in PHP
+    let is_valid = data["is_valid"].as_bool().unwrap_or(false);
+    assert!(is_valid, "PHP validation failed: {}", body);
+}

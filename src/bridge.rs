@@ -84,6 +84,10 @@ extern "C" {
     fn tokio_bridge_destroy_ctx();
     fn tokio_bridge_get_ctx() -> *mut c_void;
 
+    // Request time
+    fn tokio_bridge_set_request_time(time: f64);
+    fn tokio_bridge_get_request_time() -> f64;
+
     // Finish request
     fn tokio_bridge_is_finished() -> c_int;
     fn tokio_bridge_get_finished_offset() -> usize;
@@ -139,6 +143,30 @@ pub fn destroy_ctx() {
 #[inline]
 pub fn has_ctx() -> bool {
     unsafe { !tokio_bridge_get_ctx().is_null() }
+}
+
+// =============================================================================
+// Request Time API
+// =============================================================================
+
+/// Set the request start time.
+///
+/// Should be called after `init_ctx()` with the Unix timestamp (with microseconds)
+/// when the HTTP request was received by the server.
+#[inline]
+pub fn set_request_time(time: f64) {
+    unsafe {
+        tokio_bridge_set_request_time(time);
+    }
+}
+
+/// Get the request start time.
+///
+/// Returns the Unix timestamp (with microseconds) when the HTTP request was received,
+/// or 0.0 if not set.
+#[inline]
+pub fn get_request_time() -> f64 {
+    unsafe { tokio_bridge_get_request_time() }
 }
 
 /// Check if `tokio_finish_request()` was called.

@@ -114,6 +114,9 @@ typedef struct tokio_bridge_ctx {
     uint64_t request_id;
     uint64_t worker_id;
 
+    /* Request timing (for accurate $_SERVER['REQUEST_TIME_FLOAT']) */
+    double request_time;  /* Unix timestamp with microseconds */
+
     /* Finish request state (fastcgi_finish_request analog) */
     int is_finished;
     size_t output_offset;
@@ -169,6 +172,26 @@ void tokio_bridge_init_ctx(uint64_t request_id, uint64_t worker_id);
  * Should be called after PHP execution completes.
  */
 void tokio_bridge_destroy_ctx(void);
+
+/* ============================================================================
+ * Request Time API
+ * ============================================================================ */
+
+/**
+ * Set the request start time.
+ * Called from Rust when the request is received (before queueing).
+ *
+ * @param time Unix timestamp with microseconds (e.g., 1705591234.123456)
+ */
+void tokio_bridge_set_request_time(double time);
+
+/**
+ * Get the request start time.
+ * Returns the exact time when Rust received the HTTP request.
+ *
+ * @return Unix timestamp with microseconds, or 0.0 if not set
+ */
+double tokio_bridge_get_request_time(void);
 
 /* ============================================================================
  * Finish Request API

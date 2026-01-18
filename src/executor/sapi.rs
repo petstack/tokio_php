@@ -594,6 +594,17 @@ unsafe extern "C" fn custom_read_post(buffer: *mut c_char, count_bytes: usize) -
     })
 }
 
+/// SAPI callback: get request time
+/// Called by PHP for $_SERVER['REQUEST_TIME'] and $_SERVER['REQUEST_TIME_FLOAT'].
+/// Returns the Unix timestamp when the HTTP request was received by tokio_php.
+/// Returns 0 (SUCCESS) always.
+unsafe extern "C" fn custom_get_request_time(request_time: *mut f64) -> c_int {
+    if !request_time.is_null() {
+        *request_time = crate::bridge::get_request_time();
+    }
+    0 // SUCCESS
+}
+
 // =============================================================================
 // SAPI Configuration
 // =============================================================================
@@ -623,6 +634,7 @@ pub fn init() -> Result<(), String> {
         php_embed_module.register_server_variables = Some(custom_register_server_variables);
         php_embed_module.read_cookies = Some(custom_read_cookies);
         php_embed_module.read_post = Some(custom_read_post);
+        php_embed_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
         php_embed_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         php_embed_module.ub_write = Some(stream_ub_write); // HTTP streaming output
 
@@ -640,12 +652,13 @@ pub fn init() -> Result<(), String> {
         sapi_module.register_server_variables = Some(custom_register_server_variables);
         sapi_module.read_cookies = Some(custom_read_cookies);
         sapi_module.read_post = Some(custom_read_post);
+        sapi_module.get_request_time = Some(custom_get_request_time); // REQUEST_TIME_FLOAT
         sapi_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         sapi_module.ub_write = Some(stream_ub_write); // HTTP streaming output
     }
 
     tracing::info!(
-        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables)"
+        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time)"
     );
     Ok(())
 }

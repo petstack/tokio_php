@@ -88,6 +88,9 @@ pub struct ScriptRequest {
     /// Request timeout (None = no timeout)
     #[cfg_attr(not(feature = "php"), allow(dead_code))]
     pub timeout: Option<Duration>,
+    /// Unix timestamp when request was received (for $_SERVER['REQUEST_TIME_FLOAT'])
+    #[cfg_attr(not(feature = "php"), allow(dead_code))]
+    pub received_at: f64,
 }
 
 // =============================================================================

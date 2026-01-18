@@ -200,6 +200,33 @@ else
 fi
 
 echo ""
+echo "=== Request Time Tests ==="
+
+# Test REQUEST_TIME and REQUEST_TIME_FLOAT
+body=$(curl -s --max-time "$CURL_TIMEOUT" "$SERVER_URL/test_request_time.php" 2>/dev/null || echo "")
+if echo "$body" | grep -q '"is_valid": *true'; then
+    pass "REQUEST_TIME_FLOAT is valid"
+else
+    fail "REQUEST_TIME_FLOAT" "is_valid: true" "${body:0:100}..."
+fi
+
+# Check REQUEST_TIME is positive (handles JSON with spaces)
+request_time=$(echo "$body" | tr -d ' \n' | grep -o '"request_time":[0-9]*' | cut -d':' -f2)
+if [ -n "$request_time" ] && [ "$request_time" -gt 0 ] 2>/dev/null; then
+    pass "REQUEST_TIME is positive ($request_time)"
+else
+    fail "REQUEST_TIME" "> 0" "$request_time"
+fi
+
+# Check delay_ms is reasonable (< 1000ms typically)
+delay_ms=$(echo "$body" | tr -d ' \n' | grep -o '"delay_ms":[0-9.]*' | cut -d':' -f2 | cut -d'.' -f1)
+if [ -n "$delay_ms" ] && [ "$delay_ms" -lt 5000 ] 2>/dev/null; then
+    pass "Request processing delay reasonable (${delay_ms}ms)"
+else
+    fail "Request delay" "< 5000ms" "${delay_ms}ms"
+fi
+
+echo ""
 echo "=== SSE (Server-Sent Events) Tests ==="
 
 # Test SSE headers

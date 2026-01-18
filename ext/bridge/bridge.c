@@ -65,6 +65,26 @@ void tokio_bridge_destroy_ctx(void)
 }
 
 /* ============================================================================
+ * Request Time API
+ * ============================================================================ */
+
+void tokio_bridge_set_request_time(double time)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    tls_ctx->request_time = time;
+}
+
+double tokio_bridge_get_request_time(void)
+{
+    if (tls_ctx == NULL) {
+        return 0.0;
+    }
+    return tls_ctx->request_time;
+}
+
+/* ============================================================================
  * Finish Request API
  * ============================================================================ */
 
