@@ -172,3 +172,186 @@ pub async fn assert_body_contains(response: Response, substring: &str) {
         &body[..body.len().min(500)]
     );
 }
+
+// =============================================================================
+// SSE (Server-Sent Events) Testing Helpers
+// =============================================================================
+
+/// SSE event parsed from stream
+#[derive(Debug, Clone)]
+pub struct SseEvent {
+    pub event: Option<String>,
+    pub data: String,
+    pub id: Option<String>,
+}
+
+impl SseEvent {
+    /// Parse SSE events from a raw string
+    pub fn parse_all(input: &str) -> Vec<SseEvent> {
+        let mut events = Vec::new();
+        let mut current_event: Option<String> = None;
+        let mut current_data = String::new();
+        let mut current_id: Option<String> = None;
+
+        for line in input.lines() {
+            if line.is_empty() {
+                // Empty line = end of event
+                if !current_data.is_empty() {
+                    events.push(SseEvent {
+                        event: current_event.take(),
+                        data: std::mem::take(&mut current_data),
+                        id: current_id.take(),
+                    });
+                }
+            } else if let Some(data) = line.strip_prefix("data: ") {
+                if !current_data.is_empty() {
+                    current_data.push('\n');
+                }
+                current_data.push_str(data);
+            } else if let Some(data) = line.strip_prefix("data:") {
+                if !current_data.is_empty() {
+                    current_data.push('\n');
+                }
+                current_data.push_str(data);
+            } else if let Some(event) = line.strip_prefix("event: ") {
+                current_event = Some(event.to_string());
+            } else if let Some(id) = line.strip_prefix("id: ") {
+                current_id = Some(id.to_string());
+            }
+        }
+
+        // Handle case where stream doesn't end with empty line
+        if !current_data.is_empty() {
+            events.push(SseEvent {
+                event: current_event,
+                data: current_data,
+                id: current_id,
+            });
+        }
+
+        events
+    }
+}
+
+impl TestServer {
+    /// Make a streaming GET request with timeout
+    /// Returns the accumulated body up to timeout or connection close
+    pub async fn get_streaming(&self, path: &str, timeout_secs: u64) -> String {
+        use futures_util::StreamExt;
+        use tokio::time::timeout;
+
+        let resp = self
+            .client
+            .get(format!("{}{}", self.base_url, path))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .expect("Streaming GET request failed");
+
+        let mut body = String::new();
+        let mut stream = resp.bytes_stream();
+
+        let _ = timeout(Duration::from_secs(timeout_secs), async {
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                            body.push_str(&text);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .await;
+
+        body
+    }
+
+    /// Collect SSE events for a given duration
+    pub async fn collect_sse_events(&self, path: &str, timeout_secs: u64) -> Vec<SseEvent> {
+        let body = self.get_streaming(path, timeout_secs).await;
+        SseEvent::parse_all(&body)
+    }
+
+    /// Test that SSE events are received incrementally (streaming works)
+    /// Returns (events_received, time_elapsed_ms)
+    pub async fn test_sse_streaming_timing(
+        &self,
+        path: &str,
+        expected_delay_ms: u64,
+        timeout_secs: u64,
+    ) -> (Vec<SseEvent>, Vec<u128>) {
+        use futures_util::StreamExt;
+        use tokio::time::{timeout, Instant};
+
+        let resp = self
+            .client
+            .get(format!("{}{}", self.base_url, path))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .expect("Streaming GET request failed");
+
+        let mut events = Vec::new();
+        let mut timestamps = Vec::new();
+        let mut current_data = String::new();
+        let mut stream = resp.bytes_stream();
+        let start = Instant::now();
+
+        let _ = timeout(Duration::from_secs(timeout_secs), async {
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                            current_data.push_str(&text);
+
+                            // Parse any complete events
+                            while let Some(idx) = current_data.find("\n\n") {
+                                let event_str = &current_data[..idx];
+                                if let Some(data) = event_str.strip_prefix("data: ") {
+                                    events.push(SseEvent {
+                                        event: None,
+                                        data: data.to_string(),
+                                        id: None,
+                                    });
+                                    timestamps.push(start.elapsed().as_millis());
+                                } else if event_str.starts_with("data:") {
+                                    let data = event_str.trim_start_matches("data:").trim();
+                                    events.push(SseEvent {
+                                        event: None,
+                                        data: data.to_string(),
+                                        id: None,
+                                    });
+                                    timestamps.push(start.elapsed().as_millis());
+                                }
+                                current_data = current_data[idx + 2..].to_string();
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .await;
+
+        // Verify streaming behavior by checking timestamps
+        if expected_delay_ms > 0 && timestamps.len() >= 2 {
+            for i in 1..timestamps.len() {
+                let gap = timestamps[i] - timestamps[i - 1];
+                // Allow some tolerance (50% of expected delay)
+                let min_expected = expected_delay_ms as u128 / 2;
+                assert!(
+                    gap >= min_expected,
+                    "Events should be streamed with delay. Gap between event {} and {}: {}ms (expected >= {}ms)",
+                    i - 1,
+                    i,
+                    gap,
+                    min_expected
+                );
+            }
+        }
+
+        (events, timestamps)
+    }
+}

@@ -200,6 +200,44 @@ else
 fi
 
 echo ""
+echo "=== SSE (Server-Sent Events) Tests ==="
+
+# Test SSE headers
+headers=$(curl -sI --max-time "$CURL_TIMEOUT" -H "Accept: text/event-stream" "$SERVER_URL/test_sse_minimal.php" 2>/dev/null || echo "")
+if echo "$headers" | grep -qi "content-type:.*text/event-stream"; then
+    pass "SSE Content-Type header"
+else
+    fail "SSE Content-Type" "text/event-stream" "$(echo "$headers" | grep -i content-type)"
+fi
+
+# Test minimal SSE events
+body=$(curl -sN --max-time 3 -H "Accept: text/event-stream" "$SERVER_URL/test_sse_minimal.php" 2>/dev/null || echo "")
+event_count=$(echo "$body" | grep -c "^data:" || echo "0")
+if [ "$event_count" -ge 3 ]; then
+    pass "Minimal SSE: received $event_count events"
+else
+    fail "Minimal SSE events" ">= 3" "$event_count"
+fi
+
+# Test SSE streaming with delays (critical test for flush fix)
+body=$(curl -sN --max-time 2 -H "Accept: text/event-stream" "$SERVER_URL/test_sse_timed.php?count=4&delay=500" 2>/dev/null || echo "")
+event_count=$(echo "$body" | grep -c "^data:" || echo "0")
+if [ "$event_count" -ge 3 ]; then
+    pass "SSE streaming: received $event_count events in 2s (delay=500ms)"
+else
+    fail "SSE streaming" ">= 3 events in 2s" "$event_count events"
+fi
+
+# Test fast SSE events
+body=$(curl -sN --max-time 2 -H "Accept: text/event-stream" "$SERVER_URL/test_sse_timed.php?count=10&delay=100" 2>/dev/null || echo "")
+event_count=$(echo "$body" | grep -c "^data:" || echo "0")
+if [ "$event_count" -ge 8 ]; then
+    pass "Fast SSE: received $event_count/10 events (delay=100ms)"
+else
+    fail "Fast SSE events" ">= 8" "$event_count"
+fi
+
+echo ""
 echo "=================================="
 echo "  Results"
 echo "=================================="

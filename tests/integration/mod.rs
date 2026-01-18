@@ -15,4 +15,5 @@ mod http_basic;
 mod internal_server;
 mod php_execution;
 mod rate_limiting;
+mod sse;
 mod static_files;
