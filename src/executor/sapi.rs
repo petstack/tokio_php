@@ -822,6 +822,64 @@ fn cleanup_temp_files() {
     TEMP_FILES.with(|files| files.borrow_mut().clear());
 }
 
+/// SAPI send_headers return codes (from PHP SAPI.h)
+const SAPI_HEADER_SENT_SUCCESSFULLY: c_int = 1;
+#[allow(dead_code)]
+const SAPI_HEADER_DO_SEND: c_int = 2;
+#[allow(dead_code)]
+const SAPI_HEADER_SEND_FAILED: c_int = 0;
+
+/// SAPI callback: send_headers
+/// Called by PHP when it's ready to send HTTP headers to the client.
+/// This happens before the first output or when headers are explicitly flushed.
+///
+/// For streaming responses, this allows headers to be sent immediately,
+/// improving time-to-first-byte for SSE and other streaming scenarios.
+///
+/// # Arguments
+/// * `sapi_headers` - Pointer to sapi_headers_struct containing HTTP response code
+///
+/// # Returns
+/// * SAPI_HEADER_SENT_SUCCESSFULLY (1) on success
+/// * SAPI_HEADER_SEND_FAILED (0) on failure
+unsafe extern "C" fn custom_send_headers(sapi_headers: *mut SapiHeaders) -> c_int {
+    STREAM_STATE.with(|state| {
+        let mut state_ref = state.borrow_mut();
+        let stream_state = match state_ref.as_mut() {
+            Some(s) => s,
+            None => return SAPI_HEADER_SENT_SUCCESSFULLY, // No streaming context
+        };
+
+        // If headers already sent, nothing to do
+        if stream_state.headers_sent {
+            return SAPI_HEADER_SENT_SUCCESSFULLY;
+        }
+
+        // Get HTTP status code from sapi_headers struct
+        let status = if !sapi_headers.is_null() {
+            let code = (*sapi_headers).http_response_code as u16;
+            if code > 0 {
+                code
+            } else {
+                stream_state.status_code
+            }
+        } else {
+            stream_state.status_code
+        };
+
+        // Take headers from CAPTURED_HEADERS (populated by header_handler)
+        let headers = CAPTURED_HEADERS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+
+        // Send headers chunk immediately
+        let _ = stream_state
+            .tx
+            .blocking_send(ResponseChunk::Headers { status, headers });
+        stream_state.headers_sent = true;
+
+        SAPI_HEADER_SENT_SUCCESSFULLY
+    })
+}
+
 // =============================================================================
 // SAPI Configuration
 // =============================================================================
@@ -856,6 +914,7 @@ pub fn init() -> Result<(), String> {
         php_embed_module.getenv = Some(custom_getenv); // Virtual environment variables
         php_embed_module.activate = Some(custom_activate); // Request initialization
         php_embed_module.deactivate = Some(custom_deactivate); // Request cleanup
+        php_embed_module.send_headers = Some(custom_send_headers); // Early header sending
         php_embed_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         php_embed_module.ub_write = Some(stream_ub_write); // HTTP streaming output
 
@@ -878,12 +937,13 @@ pub fn init() -> Result<(), String> {
         sapi_module.getenv = Some(custom_getenv); // Virtual environment variables
         sapi_module.activate = Some(custom_activate); // Request initialization
         sapi_module.deactivate = Some(custom_deactivate); // Request cleanup
+        sapi_module.send_headers = Some(custom_send_headers); // Early header sending
         sapi_module.flush = Some(tokio_sapi_flush); // SSE streaming support
         sapi_module.ub_write = Some(stream_ub_write); // HTTP streaming output
     }
 
     tracing::info!(
-        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time, log_message, getenv, activate, deactivate)"
+        "PHP initialized with SAPI 'cli-server' (ub_write, header_handler, flush, register_server_variables, get_request_time, log_message, getenv, activate, deactivate, send_headers)"
     );
     Ok(())
 }

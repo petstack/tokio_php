@@ -293,6 +293,25 @@ else
 fi
 
 echo ""
+echo "=== Send Headers Tests ==="
+
+# Test header timing endpoint works
+body=$(curl -s --max-time "$CURL_TIMEOUT" "$SERVER_URL/test_send_headers.php?test=headers_timing" 2>/dev/null || echo "")
+if echo "$body" | tr -d ' \n' | grep -q '"status":"ok"'; then
+    pass "send_headers test endpoint works"
+else
+    fail "send_headers endpoint" "status ok" "failed"
+fi
+
+# Test that SSE headers via send_headers work
+headers=$(curl -sI --max-time "$CURL_TIMEOUT" "$SERVER_URL/test_send_headers.php?test=sse_headers" 2>/dev/null || echo "")
+if echo "$headers" | grep -qi "content-type:.*text/event-stream"; then
+    pass "send_headers: SSE Content-Type via custom send_headers"
+else
+    fail "send_headers SSE" "text/event-stream" "missing"
+fi
+
+echo ""
 echo "=== SSE (Server-Sent Events) Tests ==="
 
 # Test SSE headers
