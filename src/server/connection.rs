@@ -199,7 +199,7 @@ impl std::fmt::Debug for Iso8601Timestamp {
 /// Check if a year is a leap year.
 #[inline]
 const fn is_leap_year(year: u16) -> bool {
-    (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 /// Write a 4-digit year to buffer (0000-9999).
