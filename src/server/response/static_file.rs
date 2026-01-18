@@ -1,17 +1,21 @@
-//! Static file serving with HTTP caching support.
+//! Static file serving with HTTP caching support and large file streaming.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{Either, Full};
 use hyper::{Response, StatusCode};
 
 use super::compression::{
-    compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE,
+    compress_brotli, should_compress_mime, LARGE_BODY_THRESHOLD, MIN_COMPRESSION_SIZE,
 };
+use super::streaming::{file_streaming_response, open_file_stream, should_stream_file, FileBody};
 use super::EMPTY_BODY;
 use crate::server::config::StaticCacheTtl;
+
+/// Response body type: either in-memory or file streaming.
+type StaticFileBody = Either<Full<Bytes>, Either<super::StreamingBody, FileBody>>;
 
 /// Format SystemTime as HTTP-date (RFC 7231).
 /// Example: "Sun, 06 Nov 1994 08:49:37 GMT"
@@ -200,7 +204,40 @@ fn is_cache_valid(
     false
 }
 
+/// Helper to create 304 Not Modified response.
+fn not_modified_response(
+    etag: &str,
+    last_modified: &str,
+    cache_ttl: &StaticCacheTtl,
+) -> Response<StaticFileBody> {
+    let ttl_secs = cache_ttl.as_secs();
+    let expires_time = SystemTime::now() + std::time::Duration::from_secs(ttl_secs);
+
+    Response::builder()
+        .status(StatusCode::NOT_MODIFIED)
+        .header("Cache-Control", format!("public, max-age={}", ttl_secs))
+        .header("Expires", format_http_date(expires_time))
+        .header("ETag", etag)
+        .header("Last-Modified", last_modified)
+        .header("Server", "tokio_php/0.1.0")
+        .body(Either::Left(Full::new(EMPTY_BODY.clone())))
+        .unwrap()
+}
+
+/// Helper to create 404 Not Found response.
+fn not_found_response() -> Response<StaticFileBody> {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header("Content-Type", "text/plain")
+        .body(Either::Left(Full::new(EMPTY_BODY.clone())))
+        .unwrap()
+}
+
 /// Serve a static file from the filesystem with optional caching headers.
+///
+/// For files larger than 1MB, uses streaming to avoid loading the entire file
+/// into memory. Smaller files are served from memory with optional Brotli compression.
+///
 /// Supports conditional requests (If-None-Match, If-Modified-Since).
 pub async fn serve_static_file(
     file_path: &Path,
@@ -208,17 +245,13 @@ pub async fn serve_static_file(
     cache_ttl: &StaticCacheTtl,
     if_none_match: Option<&str>,
     if_modified_since: Option<&str>,
-) -> Response<Full<Bytes>> {
+) -> Response<StaticFileBody> {
     // Get file metadata for caching headers
     let metadata = match tokio::fs::metadata(file_path).await {
         Ok(m) => m,
         Err(e) => {
             tracing::error!("Failed to read file metadata {:?}: {}", file_path, e);
-            return Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .header("Content-Type", "text/plain")
-                .body(Full::new(EMPTY_BODY.clone()))
-                .unwrap();
+            return not_found_response();
         }
     };
 
@@ -229,32 +262,46 @@ pub async fn serve_static_file(
 
     // Check conditional request headers
     if cache_ttl.is_enabled() && is_cache_valid(if_none_match, if_modified_since, &etag, mtime) {
-        // Return 304 Not Modified
-        let ttl_secs = cache_ttl.as_secs();
-        let expires_time = SystemTime::now() + std::time::Duration::from_secs(ttl_secs);
-
-        return Response::builder()
-            .status(StatusCode::NOT_MODIFIED)
-            .header("Cache-Control", format!("public, max-age={}", ttl_secs))
-            .header("Expires", format_http_date(expires_time))
-            .header("ETag", &etag)
-            .header("Last-Modified", &last_modified)
-            .header("Server", "tokio_php/0.1.0")
-            .body(Full::new(EMPTY_BODY.clone()))
-            .unwrap();
+        return not_modified_response(&etag, &last_modified, cache_ttl);
     }
 
-    // Read and serve the file
+    let mime = mime_guess::from_path(file_path)
+        .first_or_octet_stream()
+        .to_string();
+
+    // Build cache control header if caching enabled
+    let cache_control = if cache_ttl.is_enabled() {
+        Some(format!("public, max-age={}", cache_ttl.as_secs()))
+    } else {
+        None
+    };
+
+    // Large files: use streaming (no compression - too CPU intensive for large files)
+    if should_stream_file(size) {
+        return match open_file_stream(file_path).await {
+            Some(file) => {
+                let resp = file_streaming_response(
+                    file,
+                    &mime,
+                    size,
+                    &etag,
+                    &last_modified,
+                    cache_control.as_deref(),
+                );
+                // Convert FileResponse to StaticFileBody
+                resp.map(|body| Either::Right(Either::Right(body)))
+            }
+            None => not_found_response(),
+        };
+    }
+
+    // Small files: read into memory with optional compression
     match tokio::fs::read(file_path).await {
         Ok(contents) => {
-            let mime = mime_guess::from_path(file_path)
-                .first_or_octet_stream()
-                .to_string();
-
             // Check if we should compress this file
             let should_compress = use_brotli
                 && contents.len() >= MIN_COMPRESSION_SIZE
-                && contents.len() <= MAX_COMPRESSION_SIZE
+                && contents.len() <= LARGE_BODY_THRESHOLD
                 && should_compress_mime(&mime);
 
             let (final_body, is_compressed) = if should_compress {
@@ -294,15 +341,11 @@ pub async fn serve_static_file(
                     .header("Last-Modified", &last_modified);
             }
 
-            builder.body(Full::new(final_body)).unwrap()
+            builder.body(Either::Left(Full::new(final_body))).unwrap()
         }
         Err(e) => {
             tracing::error!("Failed to read file {:?}: {}", file_path, e);
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .header("Content-Type", "text/plain")
-                .body(Full::new(EMPTY_BODY.clone()))
-                .unwrap()
+            not_found_response()
         }
     }
 }

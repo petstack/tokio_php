@@ -1,7 +1,8 @@
-//! Streaming response support for SSE and chunked transfer.
+//! Streaming response support for SSE, chunked transfer, and file streaming.
 //!
 //! This module provides types and utilities for building streaming HTTP responses,
-//! enabling Server-Sent Events (SSE) and chunked transfer encoding.
+//! enabling Server-Sent Events (SSE), chunked transfer encoding, and efficient
+//! large file serving.
 //!
 //! # Example
 //!
@@ -26,11 +27,14 @@ use http_body_util::StreamBody;
 use hyper::body::Frame;
 use hyper::Response;
 use std::convert::Infallible;
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::fs::File;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
+use tokio_util::io::ReaderStream;
 
 /// A chunk of streaming data.
 #[derive(Debug, Clone)]
@@ -231,4 +235,114 @@ pub fn stream_channel(
     buffer_size: usize,
 ) -> (mpsc::Sender<StreamChunk>, mpsc::Receiver<StreamChunk>) {
     mpsc::channel(buffer_size)
+}
+
+// =============================================================================
+// File Streaming Support
+// =============================================================================
+
+use super::compression::LARGE_BODY_THRESHOLD;
+
+/// Chunk size for file streaming (64 KB - optimal for network I/O).
+const FILE_CHUNK_SIZE: usize = 64 * 1024;
+
+/// Wrapper stream that converts `ReaderStream` output to `Frame<Bytes>`.
+///
+/// This stream reads from a file and converts each chunk into HTTP body frames,
+/// handling I/O errors gracefully by logging and terminating the stream.
+pub struct FileFrameStream {
+    inner: ReaderStream<File>,
+}
+
+impl FileFrameStream {
+    /// Create a new file frame stream from a tokio File.
+    pub fn new(file: File) -> Self {
+        Self {
+            inner: ReaderStream::with_capacity(file, FILE_CHUNK_SIZE),
+        }
+    }
+}
+
+impl Stream for FileFrameStream {
+    type Item = Result<Frame<Bytes>, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
+            Poll::Ready(Some(Err(e))) => {
+                // Log the error and terminate the stream
+                tracing::error!("File streaming error: {}", e);
+                Poll::Ready(None)
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// Type alias for file streaming body.
+pub type FileBody = StreamBody<FileFrameStream>;
+
+/// Type alias for file streaming HTTP response.
+pub type FileResponse = Response<FileBody>;
+
+/// Open a file for streaming.
+///
+/// Returns `None` if the file cannot be opened.
+pub async fn open_file_stream(path: &Path) -> Option<File> {
+    match File::open(path).await {
+        Ok(file) => Some(file),
+        Err(e) => {
+            tracing::error!("Failed to open file for streaming {:?}: {}", path, e);
+            None
+        }
+    }
+}
+
+/// Create a streaming response from a file.
+///
+/// # Arguments
+///
+/// * `file` - The opened tokio File
+/// * `mime` - MIME type for Content-Type header
+/// * `size` - File size for Content-Length header
+/// * `etag` - ETag value for caching
+/// * `last_modified` - Last-Modified header value
+/// * `cache_control` - Optional Cache-Control header value
+///
+/// # Returns
+///
+/// A streaming HTTP response that sends file chunks as they are read.
+pub fn file_streaming_response(
+    file: File,
+    mime: &str,
+    size: u64,
+    etag: &str,
+    last_modified: &str,
+    cache_control: Option<&str>,
+) -> FileResponse {
+    let frame_stream = FileFrameStream::new(file);
+    let body = StreamBody::new(frame_stream);
+
+    let mut builder = Response::builder()
+        .status(200)
+        .header("Content-Type", mime)
+        .header("Content-Length", size.to_string())
+        .header("ETag", etag)
+        .header("Last-Modified", last_modified)
+        .header("Accept-Ranges", "bytes")
+        .header("Server", "tokio_php/0.1.0");
+
+    if let Some(cc) = cache_control {
+        builder = builder.header("Cache-Control", cc);
+    }
+
+    builder.body(body).unwrap()
+}
+
+/// Check if a file should be streamed based on its size.
+/// Files larger than LARGE_BODY_THRESHOLD (2MB) are streamed.
+#[inline]
+pub fn should_stream_file(size: u64) -> bool {
+    size > LARGE_BODY_THRESHOLD as u64
 }

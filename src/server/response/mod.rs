@@ -9,24 +9,39 @@ use http_body_util::{Either, Full};
 use hyper::{Response, StatusCode};
 
 use crate::types::ScriptResponse;
-use compression::{
-    compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE,
-};
+use compression::{compress_brotli, should_compress_mime, MIN_COMPRESSION_SIZE};
 
-pub use compression::accepts_brotli;
+pub use compression::{accepts_brotli, LARGE_BODY_THRESHOLD};
 pub use static_file::serve_static_file;
 pub use streaming::{
-    is_sse_accept, is_sse_content_type, sse_response, stream_channel, streaming_response,
-    StreamChunk, StreamingBody, StreamingResponse, DEFAULT_STREAM_BUFFER_SIZE,
+    // File streaming exports
+    file_streaming_response,
+    is_sse_accept,
+    is_sse_content_type,
+    open_file_stream,
+    sse_response,
+    stream_channel,
+    streaming_response,
+    FileBody,
+    FileResponse,
+    StreamChunk,
+    StreamingBody,
+    StreamingResponse,
+    DEFAULT_STREAM_BUFFER_SIZE,
 };
 
-/// Response body that can be either full (buffered) or streaming.
-///
-/// This type allows handlers to return either a complete response or a streaming
-/// response using the same return type.
-pub type FlexibleBody = Either<Full<Bytes>, StreamingBody>;
+/// Inner Either type for streaming bodies (SSE/chunked or file).
+type StreamOrFileBody = Either<StreamingBody, FileBody>;
 
-/// HTTP response with flexible body (full or streaming).
+/// Response body that can be full (buffered), streaming (SSE/chunked), or file streaming.
+///
+/// This type allows handlers to return:
+/// - Complete responses loaded in memory
+/// - Streaming responses for SSE and chunked transfer
+/// - File streaming responses for large files
+pub type FlexibleBody = Either<Full<Bytes>, StreamOrFileBody>;
+
+/// HTTP response with flexible body (full, streaming, or file).
 pub type FlexibleResponse = Response<FlexibleBody>;
 
 /// Convert a full response to a flexible response.
@@ -38,7 +53,13 @@ pub fn full_to_flexible(resp: Response<Full<Bytes>>) -> FlexibleResponse {
 /// Convert a streaming response to a flexible response.
 #[inline]
 pub fn streaming_to_flexible(resp: StreamingResponse) -> FlexibleResponse {
-    resp.map(Either::Right)
+    resp.map(|body| Either::Right(Either::Left(body)))
+}
+
+/// Convert a file streaming response to a flexible response.
+#[inline]
+pub fn file_to_flexible(resp: FileResponse) -> FlexibleResponse {
+    resp.map(|body| Either::Right(Either::Right(body)))
 }
 
 // Pre-allocated static bytes for common responses
@@ -179,7 +200,7 @@ pub fn from_script_response(
     let body_bytes = script_response.body;
     let should_compress = use_brotli
         && body_bytes.len() >= MIN_COMPRESSION_SIZE
-        && body_bytes.len() <= MAX_COMPRESSION_SIZE
+        && body_bytes.len() <= LARGE_BODY_THRESHOLD
         && should_compress_mime(&actual_content_type);
 
     let (final_body, is_compressed) = if should_compress {

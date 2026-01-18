@@ -245,7 +245,7 @@ thread_local! {
     /// Maps env var name -> cached CString for FFI
     static VIRTUAL_ENV: RefCell<HashMap<String, CString>> = RefCell::new(HashMap::new());
     /// Temporary files to clean up after request (e.g., $_FILES uploads)
-    static TEMP_FILES: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
+    static TEMP_FILES: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
 }
 
 // =============================================================================
@@ -388,7 +388,9 @@ pub fn finalize_stream() {
                     .blocking_send(ResponseChunk::Headers { status, headers });
                 stream_state.headers_sent = true;
                 // Mark headers as sent in bridge TLS
-                unsafe { tokio_bridge_mark_headers_sent(); }
+                unsafe {
+                    tokio_bridge_mark_headers_sent();
+                }
             }
 
             // Send End chunk (unless already finished via tokio_finish_request)
@@ -426,7 +428,9 @@ pub fn mark_stream_finished() -> bool {
                     .blocking_send(ResponseChunk::Headers { status, headers });
                 stream_state.headers_sent = true;
                 // Mark headers as sent in bridge TLS
-                unsafe { tokio_bridge_mark_headers_sent(); }
+                unsafe {
+                    tokio_bridge_mark_headers_sent();
+                }
             }
 
             // Send End chunk - client receives response now
@@ -1142,4 +1146,3 @@ pub fn register_temp_file(path: PathBuf) {
 pub fn temp_file_count() -> usize {
     TEMP_FILES.with(|files| files.borrow().len())
 }
-

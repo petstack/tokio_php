@@ -154,7 +154,7 @@ make install    # Install to /usr/local/lib
 Located in `ext/` directory. **Depends on libtokio_bridge.so.**
 
 Provides:
-- PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_request_heartbeat()`, `tokio_finish_request()`
+- PHP functions: `tokio_request_id()`, `tokio_worker_id()`, `tokio_server_info()`, `tokio_request_heartbeat()`, `tokio_send_headers()`, `tokio_finish_request()`
 - Build version tracking: `$_SERVER['TOKIO_SERVER_BUILD_VERSION']` and `tokio_server_info()['build']`
 - C API for FFI superglobals optimization (no eval overhead)
 - Built as both shared library (.so) and static library (.a)
@@ -190,6 +190,43 @@ Returns `false` if:
 - `$time > REQUEST_TIMEOUT` limit (e.g., if `REQUEST_TIMEOUT=5m`, max is 300)
 
 **Note**: Also call `set_time_limit()` to extend PHP's internal timeout.
+
+#### tokio_send_headers(int $status = 200): bool
+
+Sends HTTP headers immediately and enables chunked streaming mode. After calling this function, all output is sent to the client in real-time via `flush()` without buffering.
+
+```php
+<?php
+header('Content-Type: application/json');
+header('Cache-Control: no-cache');
+
+// Send headers now, enable streaming mode
+tokio_send_headers();
+
+// Each output + flush() is sent immediately to client
+echo json_encode(['event' => 1, 'time' => time()]) . "\n";
+flush();
+
+sleep(2);
+
+echo json_encode(['event' => 2, 'time' => time()]) . "\n";
+flush();
+```
+
+**Behavior:**
+- Disables PHP output buffering
+- Enables `Transfer-Encoding: chunked` (no `Content-Length`)
+- Sends headers immediately via `sapi_send_headers()`
+- Enables implicit flush for subsequent output
+- Returns `false` if headers already sent
+
+**Test with curl:**
+```bash
+curl -N http://localhost:8080/streaming.php
+# Output arrives in real-time with delays between chunks
+```
+
+**Use cases:** Long-polling, JSON streaming, progress updates, any Content-Type that needs real-time output.
 
 #### tokio_finish_request(): bool
 
@@ -723,16 +760,61 @@ With `ACCESS_LOG=1`, logs include trace context in `ctx`:
 
 See [docs/distributed-tracing.md](docs/distributed-tracing.md) for full documentation.
 
+## Static File Serving
+
+Static files are served efficiently with automatic optimization based on file size.
+
+### Small Files (≤ 2MB)
+
+Loaded into memory with optional Brotli compression:
+- Fast response (no disk I/O during request)
+- Compression applied if client supports it
+- Caching headers (ETag, Last-Modified, Cache-Control)
+
+### Large Files (> 2MB)
+
+Streamed directly from disk using `ReaderStream`:
+- Constant memory usage (~64KB buffer)
+- Fast time-to-first-byte (starts sending immediately)
+- No compression (too CPU intensive for large files)
+- `Accept-Ranges: bytes` header for range requests
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Static File Serving                       │
+├─────────────────────────────────────────────────────────────┤
+│  File Size    │  Method      │  Compression  │  Memory      │
+├───────────────┼──────────────┼───────────────┼──────────────┤
+│  ≤ 2MB        │  In-memory   │  Brotli (br)  │  O(file)     │
+│  > 2MB        │  Streaming   │  None         │  O(64KB)     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Configuration** (defined in `src/server/response/compression.rs`):
+- `LARGE_BODY_THRESHOLD` = 2MB (single threshold for streaming and compression)
+- `FILE_CHUNK_SIZE` = 64KB (optimal for network I/O, in streaming.rs)
+
+**Headers for streamed files:**
+```
+HTTP/1.1 200 OK
+Content-Type: video/mp4
+Content-Length: 104857600
+Accept-Ranges: bytes
+ETag: "6400000-696d454d"
+Last-Modified: Sun, 18 Jan 2026 20:40:45 GMT
+Cache-Control: public, max-age=86400
+```
+
 ## Compression
 
 Brotli compression is automatically applied when:
 - Client sends `Accept-Encoding: br` header
-- Response body >= 256 bytes and <= 3 MB
+- Response body >= 256 bytes and <= 2 MB
 - Content-Type is compressible (text/html, text/css, application/json, etc.)
 
 Size limits (defined in `src/server/response/compression.rs`):
 - `MIN_COMPRESSION_SIZE` = 256 bytes (smaller files don't benefit)
-- `MAX_COMPRESSION_SIZE` = 3 MB (larger files take too long)
+- `LARGE_BODY_THRESHOLD` = 2 MB (files larger than this are streamed, not compressed)
 
 Compressed responses include:
 - `Content-Encoding: br` header

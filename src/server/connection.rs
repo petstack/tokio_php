@@ -1465,16 +1465,16 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
             response
         } else {
-            full_to_flexible(
-                serve_static_file(
-                    file_path,
-                    use_brotli,
-                    &self.static_cache_ttl,
-                    if_none_match.as_deref(),
-                    if_modified_since.as_deref(),
-                )
-                .await,
+            // serve_static_file returns FlexibleResponse directly
+            // (handles both small in-memory files and large streaming files)
+            serve_static_file(
+                file_path,
+                use_brotli,
+                &self.static_cache_ttl,
+                if_none_match.as_deref(),
+                if_modified_since.as_deref(),
             )
+            .await
         }
     }
 

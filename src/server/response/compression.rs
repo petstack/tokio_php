@@ -3,8 +3,16 @@
 /// Minimum size to consider compression (smaller bodies don't benefit)
 pub const MIN_COMPRESSION_SIZE: usize = 256;
 
-/// Maximum size to compress (larger files take too long, diminishing returns)
-pub const MAX_COMPRESSION_SIZE: usize = 3 * 1024 * 1024; // 3 MB
+/// Threshold for large bodies (2 MB).
+///
+/// Bodies larger than this:
+/// - Are NOT compressed (too CPU intensive)
+/// - Static files are streamed from disk (not loaded into memory)
+///
+/// Bodies smaller than or equal to this:
+/// - May be compressed if client supports it
+/// - Static files are loaded into memory
+pub const LARGE_BODY_THRESHOLD: usize = 2 * 1024 * 1024; // 2 MB
 
 /// Brotli compression quality (0-11, higher = better compression but slower)
 const BROTLI_QUALITY: u32 = 4;
