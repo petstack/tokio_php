@@ -1164,16 +1164,14 @@ void tokio_sapi_flush(void *server_context)
         return;
     }
 
-    /* Only process if streaming mode is enabled */
-    if (!tokio_bridge_is_streaming()) {
-        /* Not streaming - just flush normally */
-        fflush(stdout);
-        return;
-    }
-
     flush_in_progress = 1;
 
-    /* 1. Flush PHP output buffers to stdout (memfd) */
+    /* 1. ALWAYS flush PHP output buffers first.
+     * This ensures output reaches the SAPI ub_write callback (stream_ub_write in Rust)
+     * which handles actual streaming to the HTTP response.
+     *
+     * This is critical for SSE - without this, echo/flush() would buffer data
+     * until the script ends. The ub_write callback is the modern streaming path. */
     int flush_count = 0;
     while (php_output_get_level() > 0) {
         php_output_flush();
@@ -1185,7 +1183,15 @@ void tokio_sapi_flush(void *server_context)
     }
     fflush(stdout);
 
-    /* 2. Get new output since last stream offset */
+    /* 2. If bridge streaming is enabled, also send via bridge callback.
+     * This is the legacy streaming path using memfd polling.
+     * In the new architecture (stream_ub_write), this is not needed. */
+    if (!tokio_bridge_is_streaming()) {
+        flush_in_progress = 0;
+        return;
+    }
+
+    /* Legacy path: read from memfd and send via bridge callback */
     size_t offset = tokio_bridge_get_stream_offset();
     size_t len = 0;
     char *data = get_output_since_offset(&offset, &len);
@@ -1197,13 +1203,13 @@ void tokio_sapi_flush(void *server_context)
         return;
     }
 
-    /* 3. Send chunk via bridge callback */
+    /* Send chunk via bridge callback */
     tokio_bridge_send_chunk(data, len);
 
-    /* 4. Update stream offset */
+    /* Update stream offset */
     tokio_bridge_set_stream_offset(offset);
 
-    /* 5. Free buffer */
+    /* Free buffer */
     free(data);
 
     flush_in_progress = 0;
