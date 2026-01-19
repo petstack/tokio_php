@@ -762,36 +762,32 @@ See [docs/distributed-tracing.md](docs/distributed-tracing.md) for full document
 
 ## Static File Serving
 
-Static files are served efficiently with automatic optimization based on file size.
+Static files are served efficiently with automatic optimization based on file size and MIME type.
 
-### Small Files (≤ 2MB)
+### Compressible Files (text/html, application/json, etc.)
 
-Loaded into memory with optional Brotli compression:
-- Fast response (no disk I/O during request)
-- Compression applied if client supports it
-- Caching headers (ETag, Last-Modified, Cache-Control)
+| Size | Method | Compression |
+|------|--------|-------------|
+| < 256B | In-memory | None (too small) |
+| 256B - 3MB | In-memory | Brotli |
+| > 3MB | Streaming | None |
 
-### Large Files (> 2MB)
+### Non-compressible Files (images, videos, etc.)
 
-Streamed directly from disk using `ReaderStream`:
+| Size | Method | Compression |
+|------|--------|-------------|
+| ≤ 1MB | In-memory | None |
+| > 1MB | Streaming | None |
+
+**Streaming benefits:**
 - Constant memory usage (~64KB buffer)
 - Fast time-to-first-byte (starts sending immediately)
-- No compression (too CPU intensive for large files)
 - `Accept-Ranges: bytes` header for range requests
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Static File Serving                       │
-├─────────────────────────────────────────────────────────────┤
-│  File Size    │  Method      │  Compression  │  Memory      │
-├───────────────┼──────────────┼───────────────┼──────────────┤
-│  ≤ 2MB        │  In-memory   │  Brotli (br)  │  O(file)     │
-│  > 2MB        │  Streaming   │  None         │  O(64KB)     │
-└─────────────────────────────────────────────────────────────┘
-```
-
 **Configuration** (defined in `src/server/response/compression.rs`):
-- `LARGE_BODY_THRESHOLD` = 2MB (single threshold for streaming and compression)
+- `MIN_COMPRESSION_SIZE` = 256B (smaller files don't benefit from compression)
+- `MAX_COMPRESSION_SIZE` = 3MB (compressible files larger than this are streamed)
+- `STREAM_THRESHOLD_NON_COMPRESSIBLE` = 1MB (non-compressible files larger than this are streamed)
 - `FILE_CHUNK_SIZE` = 64KB (optimal for network I/O, in streaming.rs)
 
 **Headers for streamed files:**
@@ -809,12 +805,12 @@ Cache-Control: public, max-age=86400
 
 Brotli compression is automatically applied when:
 - Client sends `Accept-Encoding: br` header
-- Response body >= 256 bytes and <= 2 MB
+- Response body >= 256 bytes and <= 3 MB
 - Content-Type is compressible (text/html, text/css, application/json, etc.)
 
 Size limits (defined in `src/server/response/compression.rs`):
 - `MIN_COMPRESSION_SIZE` = 256 bytes (smaller files don't benefit)
-- `LARGE_BODY_THRESHOLD` = 2 MB (files larger than this are streamed, not compressed)
+- `MAX_COMPRESSION_SIZE` = 3 MB (larger responses are not compressed)
 
 Compressed responses include:
 - `Content-Encoding: br` header

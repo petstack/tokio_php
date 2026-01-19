@@ -10,6 +10,8 @@ Compression is applied when all conditions are met:
 2. Response body is >= 256 bytes and <= 3 MB
 3. Content-Type is compressible (text-based)
 
+Files larger than 3 MB are [streamed from disk](static-files.md#file-streaming) without compression to avoid blocking.
+
 ## Compression Results
 
 Typical compression ratios (approximate values):
@@ -215,23 +217,41 @@ pub fn compress_brotli(data: &[u8]) -> Option<Vec<u8>> {
 
 ## Configuration
 
-Compression settings are defined in `src/middleware/compression.rs`:
+Compression settings are defined in `src/server/response/compression.rs`:
 
 | Setting | Value | Description |
 |---------|-------|-------------|
 | `MIN_COMPRESSION_SIZE` | 256 bytes | Don't compress small responses |
-| `MAX_COMPRESSION_SIZE` | 3 MB | Don't compress large responses (too slow) |
+| `MAX_COMPRESSION_SIZE` | 3 MB | Compress up to this size |
+| `STREAM_THRESHOLD_NON_COMPRESSIBLE` | 1 MB | Stream non-compressible files above this |
 | `BROTLI_QUALITY` | 4 | Brotli quality level (0-11) |
 | `BROTLI_WINDOW` | 20 | Brotli window size |
 
-Files larger than 3 MB are served uncompressed to avoid blocking the response.
+### Size Thresholds
+
+The server uses different thresholds based on file compressibility:
+
+**Compressible files** (text/html, application/json, etc.):
+| Size | Behavior |
+|------|----------|
+| < 256 bytes | In-memory, no compression |
+| 256 bytes - 3 MB | In-memory, Brotli compressed |
+| > 3 MB | [Streamed from disk](static-files.md), no compression |
+
+**Non-compressible files** (images, videos, archives):
+| Size | Behavior |
+|------|----------|
+| <= 1 MB | In-memory |
+| > 1 MB | [Streamed from disk](static-files.md) |
+
+See [Static Files](static-files.md) for details on file streaming.
 
 ## Limitations
 
 - Only Brotli is supported (no gzip fallback)
-- Pre-compressed files are not served directly
-- Compression is not streaming (full response buffered)
-- Files > 3 MB are not compressed (to avoid blocking)
+- Pre-compressed files (`.br`) are not served directly
+- Compression requires full response in memory
+- Files > 3 MB are [streamed](static-files.md) without compression
 
 ## Best Practices
 
@@ -242,7 +262,8 @@ Files larger than 3 MB are served uncompressed to avoid blocking the response.
 
 ## See Also
 
-- [Middleware](middleware.md) - Middleware system overview
+- [Static Files](static-files.md) - Static file serving and streaming
 - [Static Caching](static-caching.md) - Cache-Control headers for static files
+- [Middleware](middleware.md) - Middleware system overview
 - [Configuration](configuration.md) - Environment variables reference
 - [Profiling](profiling.md) - Request timing analysis

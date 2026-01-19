@@ -25,6 +25,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 | [Worker Pool](worker-pool.md) | Multi-threaded PHP execution, scaling                      |
 | [Profiling](profiling.md) | Request timing and performance analysis                    |
 | [Compression](compression.md) | Brotli compression for responses                           |
+| [Static Files](static-files.md) | Static file serving, streaming, optimization               |
 | [Static Caching](static-caching.md) | Cache-Control, ETag, Last-Modified for static files        |
 | [Single Entry Point](single-entry-point.md) | Laravel/Symfony routing mode                               |
 | [Framework Compatibility](framework-compatibility.md) | Symfony, Laravel thread-safety guide                       |

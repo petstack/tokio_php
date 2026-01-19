@@ -1,18 +1,15 @@
 //! Brotli compression utilities.
 
-/// Minimum size to consider compression (smaller bodies don't benefit)
+/// Minimum size to consider compression (smaller bodies don't benefit).
 pub const MIN_COMPRESSION_SIZE: usize = 256;
 
-/// Threshold for large bodies (2 MB).
-///
-/// Bodies larger than this:
-/// - Are NOT compressed (too CPU intensive)
-/// - Static files are streamed from disk (not loaded into memory)
-///
-/// Bodies smaller than or equal to this:
-/// - May be compressed if client supports it
-/// - Static files are loaded into memory
-pub const LARGE_BODY_THRESHOLD: usize = 2 * 1024 * 1024; // 2 MB
+/// Maximum size for compression (3 MB).
+/// Compressible files larger than this are streamed without compression.
+pub const MAX_COMPRESSION_SIZE: usize = 3 * 1024 * 1024; // 3 MB
+
+/// Streaming threshold for non-compressible files (1 MB).
+/// Non-compressible files larger than this are streamed from disk.
+pub const STREAM_THRESHOLD_NON_COMPRESSIBLE: usize = 1024 * 1024; // 1 MB
 
 /// Brotli compression quality (0-11, higher = better compression but slower)
 const BROTLI_QUALITY: u32 = 4;

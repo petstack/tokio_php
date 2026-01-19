@@ -8,7 +8,7 @@ use http_body_util::{Either, Full};
 use hyper::{Response, StatusCode};
 
 use super::compression::{
-    compress_brotli, should_compress_mime, LARGE_BODY_THRESHOLD, MIN_COMPRESSION_SIZE,
+    compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE,
 };
 use super::streaming::{file_streaming_response, open_file_stream, should_stream_file, FileBody};
 use super::EMPTY_BODY;
@@ -235,9 +235,11 @@ fn not_found_response() -> Response<StaticFileBody> {
 
 /// Serve a static file from the filesystem with optional caching headers.
 ///
-/// For files larger than 1MB, uses streaming to avoid loading the entire file
-/// into memory. Smaller files are served from memory with optional Brotli compression.
+/// Streaming decision based on file size and compressibility:
+/// - Compressible files > 3MB → streaming (compression would be too slow)
+/// - Non-compressible files > 1MB → streaming (no benefit from in-memory)
 ///
+/// Smaller files are served from memory with optional Brotli compression.
 /// Supports conditional requests (If-None-Match, If-Modified-Since).
 pub async fn serve_static_file(
     file_path: &Path,
@@ -269,6 +271,9 @@ pub async fn serve_static_file(
         .first_or_octet_stream()
         .to_string();
 
+    // Check if this MIME type is compressible
+    let is_compressible = should_compress_mime(&mime);
+
     // Build cache control header if caching enabled
     let cache_control = if cache_ttl.is_enabled() {
         Some(format!("public, max-age={}", cache_ttl.as_secs()))
@@ -276,8 +281,10 @@ pub async fn serve_static_file(
         None
     };
 
-    // Large files: use streaming (no compression - too CPU intensive for large files)
-    if should_stream_file(size) {
+    // Streaming decision based on file size and compressibility:
+    // - Compressible files > 3MB → streaming (compression would be too slow)
+    // - Non-compressible files > 1MB → streaming (no benefit from in-memory)
+    if should_stream_file(size, is_compressible) {
         return match open_file_stream(file_path).await {
             Some(file) => {
                 let resp = file_streaming_response(
@@ -298,11 +305,12 @@ pub async fn serve_static_file(
     // Small files: read into memory with optional compression
     match tokio::fs::read(file_path).await {
         Ok(contents) => {
-            // Check if we should compress this file
+            // Compress if: client supports brotli, MIME is compressible,
+            // size is between 256 bytes and 3MB
             let should_compress = use_brotli
+                && is_compressible
                 && contents.len() >= MIN_COMPRESSION_SIZE
-                && contents.len() <= LARGE_BODY_THRESHOLD
-                && should_compress_mime(&mime);
+                && contents.len() <= MAX_COMPRESSION_SIZE;
 
             let (final_body, is_compressed) = if should_compress {
                 if let Some(compressed) = compress_brotli(&contents) {

@@ -9,9 +9,11 @@ use http_body_util::{Either, Full};
 use hyper::{Response, StatusCode};
 
 use crate::types::ScriptResponse;
-use compression::{compress_brotli, should_compress_mime, MIN_COMPRESSION_SIZE};
+use compression::{
+    compress_brotli, should_compress_mime, MAX_COMPRESSION_SIZE, MIN_COMPRESSION_SIZE,
+};
 
-pub use compression::{accepts_brotli, LARGE_BODY_THRESHOLD};
+pub use compression::{accepts_brotli, STREAM_THRESHOLD_NON_COMPRESSIBLE};
 pub use static_file::serve_static_file;
 pub use streaming::{
     // File streaming exports
@@ -200,7 +202,7 @@ pub fn from_script_response(
     let body_bytes = script_response.body;
     let should_compress = use_brotli
         && body_bytes.len() >= MIN_COMPRESSION_SIZE
-        && body_bytes.len() <= LARGE_BODY_THRESHOLD
+        && body_bytes.len() <= MAX_COMPRESSION_SIZE
         && should_compress_mime(&actual_content_type);
 
     let (final_body, is_compressed) = if should_compress {

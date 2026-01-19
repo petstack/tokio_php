@@ -241,7 +241,7 @@ pub fn stream_channel(
 // File Streaming Support
 // =============================================================================
 
-use super::compression::LARGE_BODY_THRESHOLD;
+use super::compression::{MAX_COMPRESSION_SIZE, STREAM_THRESHOLD_NON_COMPRESSIBLE};
 
 /// Chunk size for file streaming (64 KB - optimal for network I/O).
 const FILE_CHUNK_SIZE: usize = 64 * 1024;
@@ -340,9 +340,15 @@ pub fn file_streaming_response(
     builder.body(body).unwrap()
 }
 
-/// Check if a file should be streamed based on its size.
-/// Files larger than LARGE_BODY_THRESHOLD (2MB) are streamed.
+/// Check if a file should be streamed based on its size and compressibility.
+///
+/// - Compressible files > 3MB → streaming (compression would be too slow)
+/// - Non-compressible files > 1MB → streaming (no benefit from in-memory)
 #[inline]
-pub fn should_stream_file(size: u64) -> bool {
-    size > LARGE_BODY_THRESHOLD as u64
+pub fn should_stream_file(size: u64, is_compressible: bool) -> bool {
+    if is_compressible {
+        size > MAX_COMPRESSION_SIZE as u64
+    } else {
+        size > STREAM_THRESHOLD_NON_COMPRESSIBLE as u64
+    }
 }

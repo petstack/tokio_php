@@ -12,9 +12,9 @@ use super::{Middleware, MiddlewareResult};
 /// Minimum size to consider compression (smaller bodies don't benefit).
 pub const MIN_COMPRESSION_SIZE: usize = 256;
 
-/// Threshold for large bodies (2 MB).
-/// Bodies larger than this are NOT compressed (too CPU intensive, and static files are streamed).
-pub const LARGE_BODY_THRESHOLD: usize = 2 * 1024 * 1024; // 2 MB
+/// Maximum size to compress (3 MB).
+/// Bodies larger than this are NOT compressed (too CPU intensive).
+pub const MAX_COMPRESSION_SIZE: usize = 3 * 1024 * 1024; // 3 MB
 
 /// Brotli compression quality (0-11, higher = better but slower).
 const BROTLI_QUALITY: u32 = 4;
@@ -125,7 +125,7 @@ impl Default for CompressionMiddleware {
     fn default() -> Self {
         Self {
             min_size: MIN_COMPRESSION_SIZE,
-            max_size: LARGE_BODY_THRESHOLD,
+            max_size: MAX_COMPRESSION_SIZE,
         }
     }
 }

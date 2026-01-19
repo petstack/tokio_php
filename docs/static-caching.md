@@ -162,6 +162,7 @@ Files outside this range are served without compression to avoid overhead (small
 
 ## See Also
 
+- [Static Files](static-files.md) - Static file serving and streaming
 - [Configuration](configuration.md) - `STATIC_CACHE_TTL` environment variable
 - [Middleware](middleware.md) - Middleware system overview
 - [Compression](compression.md) - Brotli compression details
