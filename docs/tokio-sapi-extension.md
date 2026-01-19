@@ -1,13 +1,14 @@
 # tokio_sapi PHP Extension
 
-tokio_php includes an optional PHP extension (`tokio_sapi`) that provides FFI-based superglobals and runtime information.
+tokio_php includes an optional PHP extension (`tokio_sapi`) that provides FFI-based superglobals, streaming support, and runtime information.
 
 ## Overview
 
 The extension provides:
 - **C API**: Functions for setting superglobals directly via FFI
-- **PHP functions**: Access to request/worker information
+- **PHP functions**: Access to request/worker information, streaming, early response
 - **Performance**: Alternative to eval-based superglobals
+- **Streaming**: SSE support and chunked transfer encoding
 
 ## Enabling the Extension
 
@@ -141,6 +142,84 @@ notify_admins($payload);    // Send notifications
 ?>
 ```
 
+### tokio_send_headers()
+
+Sends HTTP headers immediately and enables chunked streaming mode. After calling this function, all output is sent to the client in real-time via `flush()`.
+
+```php
+<?php
+header('Content-Type: application/json');
+header('Cache-Control: no-cache');
+
+// Send headers NOW, enable streaming mode
+tokio_send_headers();
+
+// Each output + flush() is sent immediately to client
+echo json_encode(['event' => 1, 'time' => time()]) . "\n";
+flush();
+
+sleep(2);
+
+echo json_encode(['event' => 2, 'time' => time()]) . "\n";
+flush();
+?>
+```
+
+**Parameters:**
+- `int $status = 200` - HTTP status code to send
+
+**Returns:** `bool` - `true` on success, `false` if headers already sent or invalid status code.
+
+**Behavior:**
+- Disables PHP output buffering
+- Enables `Transfer-Encoding: chunked` (no `Content-Length`)
+- Sends headers immediately via `sapi_send_headers()`
+- Enables implicit flush for subsequent output
+
+**Use cases:**
+- Long-polling responses
+- JSON streaming (NDJSON)
+- Progress updates
+- Any Content-Type that needs real-time output
+
+### tokio_stream_flush()
+
+Flushes output buffer and sends data to client immediately in SSE streaming mode.
+
+```php
+<?php
+// SSE streaming example
+// Client sends: Accept: text/event-stream
+
+while ($has_data) {
+    $data = json_encode(['time' => date('H:i:s'), 'value' => rand()]);
+    echo "data: $data\n\n";
+    tokio_stream_flush();  // Send immediately to client
+    sleep(1);
+}
+?>
+```
+
+**Returns:** `bool` - `true` on success, `false` if streaming mode is not enabled.
+
+**Note:** With the SAPI flush handler installed, standard `flush()` also works for streaming. This function is kept for explicit streaming control and backward compatibility.
+
+### tokio_is_streaming()
+
+Check if streaming mode is enabled for the current request.
+
+```php
+<?php
+if (tokio_is_streaming()) {
+    // Running in SSE mode
+    echo "data: streaming mode active\n\n";
+    tokio_stream_flush();
+}
+?>
+```
+
+**Returns:** `bool` - `true` if streaming mode is enabled.
+
 ### tokio_async_call()
 
 Placeholder for future async PHP-to-Rust calls (not yet implemented).
@@ -261,6 +340,139 @@ void tokio_sapi_set_response_code(int code);
 // Execute PHP script (returns SUCCESS/FAILURE)
 int tokio_sapi_execute_script(const char *path);
 ```
+
+### Finish Request API
+
+```c
+// Check if tokio_finish_request() was called
+int tokio_sapi_is_request_finished(void);
+
+// Get byte offset where output should be truncated
+size_t tokio_sapi_get_finished_offset(void);
+
+// Get header count at finish time
+int tokio_sapi_get_finished_header_count(void);
+
+// Get response code at finish time
+int tokio_sapi_get_finished_response_code(void);
+```
+
+### SAPI Flush Handler
+
+```c
+// Called by PHP's flush() function
+// When streaming mode is enabled, sends new output to client
+void tokio_sapi_flush(void *server_context);
+```
+
+## SAPI Lifecycle
+
+PHP extensions have standard lifecycle callbacks. In tokio_php, the lifecycle is managed differently because Rust controls request timing.
+
+### Standard PHP SAPI Callbacks
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     PHP Extension Lifecycle                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  MINIT (Module Init)     - Once when extension loads             │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                    REQUEST LOOP                          │    │
+│  │                                                          │    │
+│  │  RINIT (activate)    - Start of each request             │    │
+│  │       │                                                  │    │
+│  │       ▼                                                  │    │
+│  │  PHP Script Execution                                    │    │
+│  │       │                                                  │    │
+│  │       ▼                                                  │    │
+│  │  RSHUTDOWN (deactivate) - End of each request            │    │
+│  │                                                          │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│       │                                                          │
+│       ▼                                                          │
+│  MSHUTDOWN (Module Shutdown) - When extension unloads            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### tokio_sapi Implementation
+
+In `tokio_sapi.c`, the standard PHP hooks are minimal:
+
+```c
+PHP_RINIT_FUNCTION(tokio_sapi)   // activate
+{
+    return SUCCESS;  // Empty - Rust manages lifecycle
+}
+
+PHP_RSHUTDOWN_FUNCTION(tokio_sapi)  // deactivate
+{
+    /* Don't free context here - Rust manages lifecycle */
+    return SUCCESS;
+}
+```
+
+**Why?** Rust controls when requests start/end through its own FFI functions.
+
+### Rust-Managed Request Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 tokio_php Request Lifecycle                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Rust Worker Thread                                              │
+│  ───────────────────────────────────────────────────────────    │
+│                                                                  │
+│  1. set_request_data()           // Set data BEFORE startup      │
+│         │                                                        │
+│         ▼                                                        │
+│  2. php_request_startup()        // PHP init (RINIT called)      │
+│         │                         // → register_server_variables │
+│         │                         // → $_SERVER populated        │
+│         ▼                                                        │
+│  3. tokio_sapi_request_init()    // FFI: init TLS context        │
+│         │                                                        │
+│         ▼                                                        │
+│  4. tokio_sapi_set_all_superglobals()  // Batch set variables    │
+│         │                                                        │
+│         ▼                                                        │
+│  5. tokio_sapi_execute_script()  // Execute PHP script           │
+│         │                                                        │
+│         ▼                                                        │
+│  6. tokio_sapi_request_shutdown() // FFI: cleanup TLS context    │
+│         │                          // → Reset superglobal cache  │
+│         ▼                                                        │
+│  7. php_request_shutdown()       // PHP cleanup (RSHUTDOWN)      │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Points
+
+1. **Timing**: Rust sets request data BEFORE `php_request_startup()` so SAPI callbacks can access it
+2. **TLS Ownership**: Thread-local storage is managed by extension, not PHP's TSRM
+3. **Bridge Library**: Shared TLS context between Rust (static) and PHP extension (dynamic)
+4. **Cache Reset**: Superglobal array pointers are reset after `php_request_shutdown()` to prevent use-after-free
+
+### Thread-Local Storage
+
+All request state uses C11 `__thread` storage:
+
+```c
+// ext/tokio_sapi.c
+static __thread tokio_request_context *tls_request_ctx = NULL;
+static __thread uint64_t tls_request_id = 0;
+static __thread zval *cached_superglobal_arrs[6] = {NULL};
+```
+
+This provides:
+- Per-worker-thread isolation
+- No locks between threads
+- Proper ZTS compatibility
 
 ## Performance Comparison
 
@@ -487,21 +699,21 @@ curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep FFI
 ## Limitations
 
 - `tokio_async_call()` is not yet implemented
-- Session handler not implemented
+- Session handler not implemented (`$_SESSION` requires session handler)
 - php://input requires explicit `tokio_sapi_set_post_data()` call
 
 ## Future Plans
 
 1. **HTTP 103 Early Hints**: Pending [hyper support](https://github.com/hyperium/hyper/issues/2426)
 2. **Async PHP-to-Rust calls**: Enable PHP to call async Rust functions
-3. **Session handler**: Implement `$_SESSION` via shared memory
-4. **Output streaming**: Direct output capture without stdout redirect
-5. **Performance optimization**: Reduce bridge overhead further
+3. **Session handler**: Implement `$_SESSION` via shared memory or Redis
+4. **Performance optimization**: Reduce bridge overhead further
 
 ## See Also
 
 - [Configuration](configuration.md) - `USE_EXT` environment variable
 - [Superglobals](superglobals.md) - PHP superglobals support
 - [Request Heartbeat](request-heartbeat.md) - `tokio_request_heartbeat()` documentation
+- [SSE Streaming](sse-streaming.md) - Server-Sent Events streaming
 - [Architecture](architecture.md) - Executor system overview
 - [Profiling](profiling.md) - Performance profiling headers
