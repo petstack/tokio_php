@@ -61,6 +61,13 @@ Each request generates a markdown file with detailed timing breakdown:
 - Method: GET
 - URL: `/index.php?test=123&foo=bar`
 
+## Routing
+
+- Route Type: `php`
+- Resolved Path: `/var/www/html/index.php`
+- Index File Mode: disabled
+- File Cache Hit: yes
+
 ## Connection
 
 - HTTP Version: HTTP/1.1
@@ -100,6 +107,21 @@ Each request generates a markdown file with detailed timing breakdown:
 ## Response Pipeline
 
 ├── Build Response: 0 µs (0.0%)
+└── Middleware Response: 12 µs
+    ├── Static Cache: 5 µs
+    └── Error Pages: 7 µs
+
+## Skipped Actions
+
+The following actions were not executed and why:
+
+| Action | Reason |
+|--------|--------|
+| TLS handshake | Plain HTTP connection |
+| Rate limit check | Rate limiting disabled (RATE_LIMIT=0) |
+| Cookie parsing | No Cookie header present |
+| Body parsing | GET request has no body |
+| Brotli compression | Client doesn't accept br encoding |
 
 ## Summary
 
@@ -130,15 +152,31 @@ For HTTPS requests, the Connection section includes TLS metrics:
 
 ## Profile Data Fields
 
+### Request & Routing
+
 | Field | Description |
 |-------|-------------|
 | `total_us` | Total request time (microseconds) |
 | `request_method` | HTTP method (GET, POST, etc.) |
 | `request_url` | Full request URL (path + query) |
+| `route_type` | Request route type: `php`, `static`, `index_redirect`, `not_found`, etc. |
+| `resolved_path` | Final resolved file path |
+| `index_file_mode` | Whether single entry point mode is active |
+| `file_cache_hit` | Whether file existence check was a cache hit |
+
+### Connection & TLS
+
+| Field | Description |
+|-------|-------------|
 | `http_version` | HTTP protocol version |
 | `tls_handshake_us` | TLS handshake time (HTTPS only) |
 | `tls_protocol` | TLS version (TLSv1_2, TLSv1_3) |
 | `tls_alpn` | ALPN negotiated protocol (h2, http/1.1) |
+
+### Request Parsing
+
+| Field | Description |
+|-------|-------------|
 | `parse_request_us` | Request parsing time |
 | `headers_extract_us` | HTTP headers extraction |
 | `query_parse_us` | Query string parsing ($_GET) |
@@ -148,6 +186,11 @@ For HTTPS requests, the Connection section includes TLS metrics:
 | `server_vars_us` | $_SERVER variables building |
 | `path_resolve_us` | URL decode + path resolution |
 | `file_check_us` | File existence check |
+
+### PHP Execution
+
+| Field | Description |
+|-------|-------------|
 | `queue_wait_us` | Worker queue wait time |
 | `php_startup_us` | php_request_startup() time |
 | `superglobals_us` | Total superglobals injection time |
@@ -161,13 +204,63 @@ For HTTPS requests, the Connection section includes TLS metrics:
 | `ffi_init_eval_us` | Init eval (header_remove, ob_start) |
 | `script_exec_us` | PHP script execution time |
 | `output_capture_us` | Total output capture time |
-| `output_finalize_us` | Finalize eval (flush + headers) |
-| `output_stdout_restore_us` | Stdout restore time |
+| `finalize_eval_us` | Finalize eval (flush + headers) |
+| `stdout_restore_us` | Stdout restore time |
 | `output_read_us` | Output read time |
 | `output_parse_us` | Output parsing time |
 | `php_shutdown_us` | php_request_shutdown() time |
+
+### Response
+
+| Field | Description |
+|-------|-------------|
 | `response_build_us` | HTTP response building time |
 | `compression_us` | Brotli compression time |
+| `middleware_resp_us` | Total response middleware time |
+| `mw_static_cache_us` | Static cache middleware time |
+| `mw_error_pages_us` | Error pages middleware time |
+| `mw_access_log_us` | Access log middleware time |
+
+### Skipped Actions
+
+| Field | Description |
+|-------|-------------|
+| `skipped_actions` | List of actions that were skipped with reasons |
+
+## Route Types
+
+The `route_type` field indicates how the request was handled:
+
+| Route Type | Description |
+|------------|-------------|
+| `php` | PHP script execution |
+| `static` | Static file serving |
+| `index_redirect` | Request routed to index.php via single entry point mode |
+| `blocked_direct_index` | Direct access to index file blocked (404) |
+| `not_found` | File not found (404) |
+| `sse` | SSE streaming request |
+| `rate_limited` | Rate limited (429) |
+| `method_not_allowed` | Method not allowed (405) |
+
+## Skipped Actions
+
+The profiler tracks actions that were skipped during request processing and explains why. This helps identify:
+
+- **Configuration issues** — Rate limiting disabled, etc.
+- **Request characteristics** — GET requests don't have body parsing
+- **Client capabilities** — Browser doesn't support Brotli
+- **Optimization opportunities** — What could be enabled for better performance
+
+Common skipped actions:
+
+| Action | Possible Reasons |
+|--------|------------------|
+| TLS handshake | Plain HTTP connection |
+| Rate limit check | Rate limiting disabled (RATE_LIMIT=0) |
+| Query string parsing | No query string in URL |
+| Cookie parsing | No Cookie header present |
+| Body parsing | GET request has no body |
+| Brotli compression | Client doesn't accept br encoding |
 
 ## Understanding the Metrics
 
@@ -252,9 +345,13 @@ pub struct ProfileData {
     // Request info
     pub request_method: String,
     pub request_url: String,
-
-    // Total time
     pub total_us: u64,
+
+    // Routing decision
+    pub route_type: RouteType,      // php, static, index_redirect, etc.
+    pub resolved_path: String,       // Final resolved file path
+    pub index_file_mode: bool,       // Single entry point mode active
+    pub file_cache_hit: bool,        // File existence cache hit
 
     // Connection & TLS
     pub tls_handshake_us: u64,
@@ -275,11 +372,38 @@ pub struct ProfileData {
     pub output_capture_us: u64,
     pub php_shutdown_us: u64,
 
-    // Response
+    // Response & middleware
     pub response_build_us: u64,
+    pub mw_static_cache_us: u64,
+    pub mw_error_pages_us: u64,
+    pub mw_access_log_us: u64,
+
+    // Skipped actions with reasons
+    pub skipped_actions: Vec<SkippedAction>,
+}
+
+/// A skipped action with explanation
+pub struct SkippedAction {
+    pub action: String,  // Name of the action
+    pub reason: String,  // Why it was skipped
+}
+
+/// Route type for request handling
+pub enum RouteType {
+    Php,                // PHP script execution
+    Static,             // Static file serving
+    IndexRedirect,      // Routed to index.php
+    BlockedDirectIndex, // Direct index access blocked
+    NotFound,           // File not found
+    Sse,                // SSE streaming
+    RateLimited,        // Rate limited
+    MethodNotAllowed,   // Method not allowed
 }
 
 impl ProfileData {
+    /// Add a skipped action with reason
+    pub fn skip(&mut self, action: &str, reason: &str);
+
     /// Generate markdown report with tree structure
     #[cfg(feature = "debug-profile")]
     pub fn to_markdown_report(&self, request_id: &str) -> String;

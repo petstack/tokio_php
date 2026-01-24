@@ -437,19 +437,26 @@ impl FileExistsCache {
     /// Returns true if file exists (cached or verified), false otherwise.
     #[inline]
     pub fn file_exists(&self, path: &Path) -> bool {
+        self.file_exists_with_cache_info(path).0
+    }
+
+    /// Check if file exists, using cache.
+    /// Returns (exists, cache_hit) - whether file exists and whether result was from cache.
+    #[inline]
+    pub fn file_exists_with_cache_info(&self, path: &Path) -> (bool, bool) {
         let path_str = path.to_string_lossy();
 
         // Fast path: check cache (read lock)
         {
             let cache = self.paths.read().unwrap();
             if cache.iter().any(|p| p.as_ref() == path_str) {
-                return true;
+                return (true, true); // exists, cache hit
             }
         }
 
         // Cache miss: check filesystem
         if !path.exists() {
-            return false;
+            return (false, false); // not exists, cache miss
         }
 
         // File exists: add to cache (write lock)
@@ -458,7 +465,7 @@ impl FileExistsCache {
 
             // Double-check it wasn't added while we waited for write lock
             if cache.iter().any(|p| p.as_ref() == path_str) {
-                return true;
+                return (true, true); // exists, cache hit (added by another thread)
             }
 
             // Evict oldest if at capacity
@@ -470,7 +477,7 @@ impl FileExistsCache {
             cache.push_back(path_str.into_owned().into_boxed_str());
         }
 
-        true
+        (true, false) // exists, cache miss
     }
 }
 
@@ -1037,10 +1044,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         // Parse cookies
         let cookies_start = Instant::now();
-        let cookies = if cookie_header_str.is_empty() {
-            Vec::new()
-        } else {
+        let has_cookies = !cookie_header_str.is_empty();
+        let cookies = if has_cookies {
             parse_cookies(&cookie_header_str)
+        } else {
+            Vec::new()
         };
         if profiling_enabled {
             cookies_parse_us = cookies_start.elapsed().as_micros() as u64;
@@ -1135,8 +1143,15 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         // Check if file exists (uses LRU cache for repeated requests)
         let file_check_start = Instant::now();
-        if !self.skip_file_check && !self.file_exists_cache.file_exists(file_path) {
-            return full_to_flexible(not_found_response());
+        let file_cache_hit: bool;
+        if !self.skip_file_check {
+            let (exists, cache_hit) = self.file_exists_cache.file_exists_with_cache_info(file_path);
+            file_cache_hit = cache_hit;
+            if !exists {
+                return full_to_flexible(not_found_response());
+            }
+        } else {
+            file_cache_hit = false; // Skip file check mode doesn't use cache
         }
         if profiling_enabled {
             file_check_us = file_check_start.elapsed().as_micros() as u64;
@@ -1372,13 +1387,23 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                                           // Add parse breakdown to profile data if profiling
                     #[cfg(feature = "debug-profile")]
                     {
+                        use crate::profiler::RouteType;
+
                         if let Some(ref mut profile) = resp.profile {
                             profile.http_version = http_version.to_string();
                             if let Some(ref tls) = tls_info {
                                 profile.tls_handshake_us = tls.handshake_us;
                                 profile.tls_protocol = tls.protocol.clone();
                                 profile.tls_alpn = tls.alpn.clone();
+                            } else {
+                                profile.skip("TLS handshake", "Plain HTTP connection");
                             }
+
+                            // Routing info
+                            profile.route_type = RouteType::Php;
+                            profile.resolved_path = file_path_string.clone();
+                            profile.index_file_mode = self.index_file_path.is_some();
+                            profile.file_cache_hit = file_cache_hit;
 
                             profile.request_method = method.to_string();
                             profile.request_url = uri.to_string();
@@ -1392,6 +1417,23 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             profile.server_vars_us = server_vars_us;
                             profile.path_resolve_us = path_resolve_us;
                             profile.file_check_us = file_check_us;
+
+                            // Add skipped actions based on request
+                            if self.rate_limiter.is_none() {
+                                profile.skip("Rate limit check", "Rate limiting disabled (RATE_LIMIT=0)");
+                            }
+                            if query_string.is_empty() {
+                                profile.skip("Query string parsing", "No query string in URL");
+                            }
+                            if !has_cookies {
+                                profile.skip("Cookie parsing", "No Cookie header present");
+                            }
+                            if !has_body {
+                                profile.skip("Body parsing", format!("{} request has no body", method));
+                            }
+                            if !use_brotli {
+                                profile.skip("Brotli compression", "Client doesn't accept br encoding");
+                            }
                         }
                     }
 

@@ -7,6 +7,61 @@ use std::io::Write;
 // When enabled, single-worker mode is enforced and detailed reports are written
 // to /tmp/tokio_profile_request_{request_id}.md
 
+/// A skipped action with the reason why it was skipped.
+#[derive(Debug, Clone)]
+pub struct SkippedAction {
+    /// Name of the action that was skipped
+    pub action: String,
+    /// Reason why the action was skipped
+    pub reason: String,
+}
+
+impl SkippedAction {
+    pub fn new(action: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            action: action.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+/// Route type for the request
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum RouteType {
+    /// PHP script execution
+    #[default]
+    Php,
+    /// Static file serving
+    Static,
+    /// Request was routed to index.php via single entry point mode
+    IndexRedirect,
+    /// Direct access to index file was blocked (404)
+    BlockedDirectIndex,
+    /// File not found (404)
+    NotFound,
+    /// SSE streaming request
+    Sse,
+    /// Rate limited (429)
+    RateLimited,
+    /// Method not allowed (405)
+    MethodNotAllowed,
+}
+
+impl RouteType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RouteType::Php => "php",
+            RouteType::Static => "static",
+            RouteType::IndexRedirect => "index_redirect",
+            RouteType::BlockedDirectIndex => "blocked_direct_index",
+            RouteType::NotFound => "not_found",
+            RouteType::Sse => "sse",
+            RouteType::RateLimited => "rate_limited",
+            RouteType::MethodNotAllowed => "method_not_allowed",
+        }
+    }
+}
+
 /// Profile data for a single request
 #[derive(Debug, Clone, Default)]
 pub struct ProfileData {
@@ -16,6 +71,12 @@ pub struct ProfileData {
     // === Request info ===
     pub request_method: String, // HTTP method (GET, POST, etc.)
     pub request_url: String,    // Full request URL (path + query)
+
+    // === Routing decision ===
+    pub route_type: RouteType,     // Type of request (php, static, index_redirect, etc.)
+    pub resolved_path: String,     // Final resolved file path
+    pub index_file_mode: bool,     // Whether single entry point mode is active
+    pub file_cache_hit: bool,      // Whether file existence check was a cache hit
 
     // === Connection & TLS (server.rs) ===
     pub tls_handshake_us: u64, // TLS handshake time (0 for plain HTTP)
@@ -94,16 +155,38 @@ pub struct ProfileData {
     pub early_finish: bool, // True if response was sent via tokio_finish_request()
 
     // === Static file serving ===
-    pub static_file_us: u64, // Static file read time (non-PHP)
+    pub static_file_us: u64,   // Static file read time (non-PHP)
     pub static_file_size: u64, // Static file size in bytes
+
+    // === Middleware timing (individual) ===
+    pub mw_static_cache_us: u64, // Static cache middleware (response)
+    pub mw_error_pages_us: u64,  // Error pages middleware (response)
+    pub mw_access_log_us: u64,   // Access log middleware (response)
+
+    // === Skipped actions with reasons ===
+    pub skipped_actions: Vec<SkippedAction>,
 }
 
 impl ProfileData {
+    /// Add a skipped action with its reason.
+    pub fn skip(&mut self, action: impl Into<String>, reason: impl Into<String>) {
+        self.skipped_actions.push(SkippedAction::new(action, reason));
+    }
+
     /// Convert to HTTP header format
     pub fn to_headers(&self) -> Vec<(String, String)> {
         let mut headers = vec![
             // Summary
             ("X-Profile-Total-Us".to_string(), self.total_us.to_string()),
+            // Routing
+            (
+                "X-Profile-Route-Type".to_string(),
+                self.route_type.as_str().to_string(),
+            ),
+            (
+                "X-Profile-File-Cache-Hit".to_string(),
+                if self.file_cache_hit { "1" } else { "0" }.to_string(),
+            ),
             // Connection & TLS
             (
                 "X-Profile-HTTP-Version".to_string(),
@@ -437,6 +520,16 @@ impl ProfileData {
         report.push_str(&format!("- URL: `{}`\n", self.request_url));
         report.push('\n');
 
+        // Routing decision
+        report.push_str("## Routing\n\n");
+        report.push_str(&format!("- Route Type: `{}`\n", self.route_type.as_str()));
+        if !self.resolved_path.is_empty() {
+            report.push_str(&format!("- Resolved Path: `{}`\n", self.resolved_path));
+        }
+        report.push_str(&format!("- Index File Mode: {}\n", if self.index_file_mode { "enabled" } else { "disabled" }));
+        report.push_str(&format!("- File Cache Hit: {}\n", if self.file_cache_hit { "yes" } else { "no (filesystem check)" }));
+        report.push('\n');
+
         // Connection info
         report.push_str("## Connection\n\n");
         report.push_str(&format!("- HTTP Version: {}\n", self.http_version));
@@ -605,11 +698,35 @@ impl ProfileData {
             ));
         }
 
-        if self.middleware_resp_us > 0 {
+        // Individual middleware timing
+        let has_middleware = self.middleware_resp_us > 0
+            || self.mw_static_cache_us > 0
+            || self.mw_error_pages_us > 0
+            || self.mw_access_log_us > 0;
+
+        if has_middleware {
             report.push_str(&format!(
                 "└── Middleware Response: {}\n",
                 fmt_time(self.middleware_resp_us)
             ));
+            if self.mw_static_cache_us > 0 {
+                report.push_str(&format!(
+                    "    ├── Static Cache: {}\n",
+                    fmt_time(self.mw_static_cache_us)
+                ));
+            }
+            if self.mw_error_pages_us > 0 {
+                report.push_str(&format!(
+                    "    ├── Error Pages: {}\n",
+                    fmt_time(self.mw_error_pages_us)
+                ));
+            }
+            if self.mw_access_log_us > 0 {
+                report.push_str(&format!(
+                    "    └── Access Log: {}\n",
+                    fmt_time(self.mw_access_log_us)
+                ));
+            }
         }
         report.push_str("```\n\n");
 
@@ -625,6 +742,18 @@ impl ProfileData {
         if self.early_finish {
             report.push_str("## Notes\n\n");
             report.push_str("- Response was sent early via `tokio_finish_request()`\n");
+            report.push('\n');
+        }
+
+        // Skipped Actions section
+        if !self.skipped_actions.is_empty() {
+            report.push_str("## Skipped Actions\n\n");
+            report.push_str("The following actions were not executed and why:\n\n");
+            report.push_str("| Action | Reason |\n");
+            report.push_str("|--------|--------|\n");
+            for action in &self.skipped_actions {
+                report.push_str(&format!("| {} | {} |\n", action.action, action.reason));
+            }
             report.push('\n');
         }
 
