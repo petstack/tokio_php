@@ -206,8 +206,7 @@ pub fn from_script_response(
     let body_bytes = script_response.body;
     let original_size = body_bytes.len();
     let should_compress = use_brotli
-        && original_size >= MIN_COMPRESSION_SIZE
-        && original_size <= MAX_COMPRESSION_SIZE
+        && (MIN_COMPRESSION_SIZE..=MAX_COMPRESSION_SIZE).contains(&original_size)
         && should_compress_mime(&actual_content_type);
 
     let compression_start = Instant::now();

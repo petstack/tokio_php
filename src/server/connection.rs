@@ -1145,7 +1145,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let file_check_start = Instant::now();
         let file_cache_hit: bool;
         if !self.skip_file_check {
-            let (exists, cache_hit) = self.file_exists_cache.file_exists_with_cache_info(file_path);
+            let (exists, cache_hit) = self
+                .file_exists_cache
+                .file_exists_with_cache_info(file_path);
             file_cache_hit = cache_hit;
             if !exists {
                 return full_to_flexible(not_found_response());
@@ -1420,7 +1422,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
                             // Add skipped actions based on request
                             if self.rate_limiter.is_none() {
-                                profile.skip("Rate limit check", "Rate limiting disabled (RATE_LIMIT=0)");
+                                profile.skip(
+                                    "Rate limit check",
+                                    "Rate limiting disabled (RATE_LIMIT=0)",
+                                );
                             }
                             if query_string.is_empty() {
                                 profile.skip("Query string parsing", "No query string in URL");
@@ -1429,10 +1434,16 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                                 profile.skip("Cookie parsing", "No Cookie header present");
                             }
                             if !has_body {
-                                profile.skip("Body parsing", format!("{} request has no body", method));
+                                profile.skip(
+                                    "Body parsing",
+                                    format!("{} request has no body", method),
+                                );
                             }
                             if !use_brotli {
-                                profile.skip("Brotli compression", "Client doesn't accept br encoding");
+                                profile.skip(
+                                    "Brotli compression",
+                                    "Client doesn't accept br encoding",
+                                );
                             }
                         }
                     }

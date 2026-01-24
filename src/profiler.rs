@@ -73,10 +73,10 @@ pub struct ProfileData {
     pub request_url: String,    // Full request URL (path + query)
 
     // === Routing decision ===
-    pub route_type: RouteType,     // Type of request (php, static, index_redirect, etc.)
-    pub resolved_path: String,     // Final resolved file path
-    pub index_file_mode: bool,     // Whether single entry point mode is active
-    pub file_cache_hit: bool,      // Whether file existence check was a cache hit
+    pub route_type: RouteType, // Type of request (php, static, index_redirect, etc.)
+    pub resolved_path: String, // Final resolved file path
+    pub index_file_mode: bool, // Whether single entry point mode is active
+    pub file_cache_hit: bool,  // Whether file existence check was a cache hit
 
     // === Connection & TLS (server.rs) ===
     pub tls_handshake_us: u64, // TLS handshake time (0 for plain HTTP)
@@ -85,7 +85,7 @@ pub struct ProfileData {
     pub tls_alpn: String,      // ALPN negotiated protocol (h2, http/1.1)
 
     // === Middleware (Rust) ===
-    pub rate_limit_us: u64,    // Rate limiting check
+    pub rate_limit_us: u64,     // Rate limiting check
     pub middleware_req_us: u64, // Total request middleware time
 
     // === Server-side parsing (server.rs) ===
@@ -144,12 +144,12 @@ pub struct ProfileData {
     pub php_shutdown_us: u64, // php_request_shutdown()
 
     // === Response building (server.rs) ===
-    pub response_build_us: u64,   // Build HTTP response from ScriptResponse
-    pub compression_us: u64,      // Brotli compression time
-    pub compression_ratio: f32,   // Compression ratio (compressed/original)
-    pub middleware_resp_us: u64,  // Total response middleware time
-    pub headers_build_us: u64,    // Building response headers
-    pub body_collect_us: u64,     // Collecting body from stream
+    pub response_build_us: u64,  // Build HTTP response from ScriptResponse
+    pub compression_us: u64,     // Brotli compression time
+    pub compression_ratio: f32,  // Compression ratio (compressed/original)
+    pub middleware_resp_us: u64, // Total response middleware time
+    pub headers_build_us: u64,   // Building response headers
+    pub body_collect_us: u64,    // Collecting body from stream
 
     // === Streaming early response ===
     pub early_finish: bool, // True if response was sent via tokio_finish_request()
@@ -170,7 +170,8 @@ pub struct ProfileData {
 impl ProfileData {
     /// Add a skipped action with its reason.
     pub fn skip(&mut self, action: impl Into<String>, reason: impl Into<String>) {
-        self.skipped_actions.push(SkippedAction::new(action, reason));
+        self.skipped_actions
+            .push(SkippedAction::new(action, reason));
     }
 
     /// Convert to HTTP header format
@@ -273,12 +274,10 @@ impl ProfileData {
         }
 
         // Queue
-        headers.extend([
-            (
-                "X-Profile-Queue-Us".to_string(),
-                self.queue_wait_us.to_string(),
-            ),
-        ]);
+        headers.extend([(
+            "X-Profile-Queue-Us".to_string(),
+            self.queue_wait_us.to_string(),
+        )]);
 
         if self.channel_send_us > 0 {
             headers.push((
@@ -526,15 +525,32 @@ impl ProfileData {
         if !self.resolved_path.is_empty() {
             report.push_str(&format!("- Resolved Path: `{}`\n", self.resolved_path));
         }
-        report.push_str(&format!("- Index File Mode: {}\n", if self.index_file_mode { "enabled" } else { "disabled" }));
-        report.push_str(&format!("- File Cache Hit: {}\n", if self.file_cache_hit { "yes" } else { "no (filesystem check)" }));
+        report.push_str(&format!(
+            "- Index File Mode: {}\n",
+            if self.index_file_mode {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ));
+        report.push_str(&format!(
+            "- File Cache Hit: {}\n",
+            if self.file_cache_hit {
+                "yes"
+            } else {
+                "no (filesystem check)"
+            }
+        ));
         report.push('\n');
 
         // Connection info
         report.push_str("## Connection\n\n");
         report.push_str(&format!("- HTTP Version: {}\n", self.http_version));
         if self.tls_handshake_us > 0 {
-            report.push_str(&format!("- TLS Handshake: {}\n", fmt_time(self.tls_handshake_us)));
+            report.push_str(&format!(
+                "- TLS Handshake: {}\n",
+                fmt_time(self.tls_handshake_us)
+            ));
             report.push_str(&format!("- TLS Protocol: {}\n", self.tls_protocol));
             if !self.tls_alpn.is_empty() {
                 report.push_str(&format!("- TLS ALPN: {}\n", self.tls_alpn));
@@ -557,7 +573,10 @@ impl ProfileData {
                 pct(middleware_total)
             ));
             if self.rate_limit_us > 0 {
-                report.push_str(&format!("│   └── Rate Limit: {}\n", fmt_time(self.rate_limit_us)));
+                report.push_str(&format!(
+                    "│   └── Rate Limit: {}\n",
+                    fmt_time(self.rate_limit_us)
+                ));
             }
         }
 
@@ -567,16 +586,43 @@ impl ProfileData {
             fmt_time(self.parse_request_us),
             pct(self.parse_request_us)
         ));
-        report.push_str(&format!("│   ├── Headers: {}\n", fmt_time(self.headers_extract_us)));
-        report.push_str(&format!("│   ├── Query ($_GET): {}\n", fmt_time(self.query_parse_us)));
-        report.push_str(&format!("│   ├── Cookies: {}\n", fmt_time(self.cookies_parse_us)));
-        report.push_str(&format!("│   ├── Body Read: {}\n", fmt_time(self.body_read_us)));
-        report.push_str(&format!("│   ├── Body Parse: {}\n", fmt_time(self.body_parse_us)));
-        report.push_str(&format!("│   ├── $_SERVER Vars: {}\n", fmt_time(self.server_vars_us)));
-        report.push_str(&format!("│   ├── Path Resolve: {}\n", fmt_time(self.path_resolve_us)));
-        report.push_str(&format!("│   └── File Check: {}\n", fmt_time(self.file_check_us)));
+        report.push_str(&format!(
+            "│   ├── Headers: {}\n",
+            fmt_time(self.headers_extract_us)
+        ));
+        report.push_str(&format!(
+            "│   ├── Query ($_GET): {}\n",
+            fmt_time(self.query_parse_us)
+        ));
+        report.push_str(&format!(
+            "│   ├── Cookies: {}\n",
+            fmt_time(self.cookies_parse_us)
+        ));
+        report.push_str(&format!(
+            "│   ├── Body Read: {}\n",
+            fmt_time(self.body_read_us)
+        ));
+        report.push_str(&format!(
+            "│   ├── Body Parse: {}\n",
+            fmt_time(self.body_parse_us)
+        ));
+        report.push_str(&format!(
+            "│   ├── $_SERVER Vars: {}\n",
+            fmt_time(self.server_vars_us)
+        ));
+        report.push_str(&format!(
+            "│   ├── Path Resolve: {}\n",
+            fmt_time(self.path_resolve_us)
+        ));
+        report.push_str(&format!(
+            "│   └── File Check: {}\n",
+            fmt_time(self.file_check_us)
+        ));
         if self.trace_context_us > 0 {
-            report.push_str(&format!("│       └── Trace Context: {}\n", fmt_time(self.trace_context_us)));
+            report.push_str(&format!(
+                "│       └── Trace Context: {}\n",
+                fmt_time(self.trace_context_us)
+            ));
         }
 
         // Queue
@@ -586,7 +632,10 @@ impl ProfileData {
             pct(self.queue_wait_us)
         ));
         if self.channel_send_us > 0 {
-            report.push_str(&format!("│   └── Channel Send: {}\n", fmt_time(self.channel_send_us)));
+            report.push_str(&format!(
+                "│   └── Channel Send: {}\n",
+                fmt_time(self.channel_send_us)
+            ));
         }
 
         // PHP execution
@@ -601,10 +650,16 @@ impl ProfileData {
             fmt_time(php_total),
             pct(php_total)
         ));
-        report.push_str(&format!("    ├── Startup: {}\n", fmt_time(self.php_startup_us)));
+        report.push_str(&format!(
+            "    ├── Startup: {}\n",
+            fmt_time(self.php_startup_us)
+        ));
 
         // Superglobals
-        report.push_str(&format!("    ├── Superglobals: {}\n", fmt_time(self.superglobals_us)));
+        report.push_str(&format!(
+            "    ├── Superglobals: {}\n",
+            fmt_time(self.superglobals_us)
+        ));
 
         // FFI breakdown (if used)
         if self.ffi_clear_us > 0 || self.ffi_server_us > 0 {
@@ -659,7 +714,10 @@ impl ProfileData {
 
         // Memfd setup
         if self.memfd_setup_us > 0 {
-            report.push_str(&format!("    ├── Memfd Setup: {}\n", fmt_time(self.memfd_setup_us)));
+            report.push_str(&format!(
+                "    ├── Memfd Setup: {}\n",
+                fmt_time(self.memfd_setup_us)
+            ));
         }
 
         // Script execution
@@ -670,14 +728,32 @@ impl ProfileData {
         ));
 
         // Output capture
-        report.push_str(&format!("    ├── Output Capture: {}\n", fmt_time(self.output_capture_us)));
-        report.push_str(&format!("    │   ├── Finalize Eval: {}\n", fmt_time(self.finalize_eval_us)));
-        report.push_str(&format!("    │   ├── Stdout Restore: {}\n", fmt_time(self.stdout_restore_us)));
-        report.push_str(&format!("    │   ├── Output Read: {}\n", fmt_time(self.output_read_us)));
-        report.push_str(&format!("    │   └── Output Parse: {}\n", fmt_time(self.output_parse_us)));
+        report.push_str(&format!(
+            "    ├── Output Capture: {}\n",
+            fmt_time(self.output_capture_us)
+        ));
+        report.push_str(&format!(
+            "    │   ├── Finalize Eval: {}\n",
+            fmt_time(self.finalize_eval_us)
+        ));
+        report.push_str(&format!(
+            "    │   ├── Stdout Restore: {}\n",
+            fmt_time(self.stdout_restore_us)
+        ));
+        report.push_str(&format!(
+            "    │   ├── Output Read: {}\n",
+            fmt_time(self.output_read_us)
+        ));
+        report.push_str(&format!(
+            "    │   └── Output Parse: {}\n",
+            fmt_time(self.output_parse_us)
+        ));
 
         // Shutdown
-        report.push_str(&format!("    └── Shutdown: {}\n", fmt_time(self.php_shutdown_us)));
+        report.push_str(&format!(
+            "    └── Shutdown: {}\n",
+            fmt_time(self.php_shutdown_us)
+        ));
 
         report.push_str("```\n\n");
 
@@ -801,7 +877,10 @@ impl ProfileData {
             fmt_time(self.response_build_us),
             pct(self.response_build_us)
         ));
-        report.push_str(&format!("| **Total** | **{}** | **100%** |\n", fmt_time(self.total_us)));
+        report.push_str(&format!(
+            "| **Total** | **{}** | **100%** |\n",
+            fmt_time(self.total_us)
+        ));
 
         report
     }

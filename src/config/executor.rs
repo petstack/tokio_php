@@ -69,7 +69,7 @@ impl ExecutorConfig {
         // Debug profile: force single worker for accurate profiling
         #[cfg(feature = "debug-profile")]
         {
-            return Ok(NonZeroUsize::new(1).unwrap());
+            Ok(NonZeroUsize::new(1).unwrap())
         }
 
         #[cfg(not(feature = "debug-profile"))]
