@@ -35,8 +35,6 @@ mod header_names {
 // Custom headers (lazily initialized)
 static X_REQUEST_ID: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("x-request-id"));
-static X_PROFILE: std::sync::LazyLock<HeaderName> =
-    std::sync::LazyLock::new(|| HeaderName::from_static("x-profile"));
 static X_FORWARDED_FOR: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("x-forwarded-for"));
 static X_RATELIMIT_LIMIT: std::sync::LazyLock<HeaderName> =
@@ -501,7 +499,8 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub request_timeout: super::config::RequestTimeout,
     /// SSE timeout (SSE_TIMEOUT env var, default: 30m).
     pub sse_timeout: super::config::RequestTimeout,
-    /// Profiling enabled (PROFILE=1). Requires X-Profile: 1 header per request.
+    /// Profiling enabled (compile-time with debug-profile feature).
+    #[allow(dead_code)]
     pub profile_enabled: bool,
     /// Access logging enabled (ACCESS_LOG=1).
     pub access_log_enabled: bool,
@@ -899,6 +898,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         Ok(response)
     }
 
+    #[allow(unused_variables, unused_mut, unused_assignments)]
     async fn process_request(
         &self,
         req: Request<IncomingBody>,
@@ -916,7 +916,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
 
         let parse_start = Instant::now();
 
-        // Profile timing variables
+        // Profile timing variables (used when profiling_enabled is true)
         let mut headers_extract_us = 0u64;
         let mut query_parse_us = 0u64;
         let mut cookies_parse_us = 0u64;
@@ -937,15 +937,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             return full_to_flexible(not_found_response());
         }
 
-        // Check for profiling header
-        let profile_requested = req
-            .headers()
-            .get(&*X_PROFILE)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-
-        let profiling_enabled = profile_requested && self.profile_enabled;
+        // Profiling is controlled by compile-time feature, not runtime header
+        #[cfg(feature = "debug-profile")]
+        let profiling_enabled = true;
+        #[cfg(not(feature = "debug-profile"))]
+        let profiling_enabled = false;
 
         // Check if client accepts Brotli compression
         let use_brotli = req
@@ -1374,7 +1370,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 Ok(ExecuteResult::Normal(resp)) => {
                     let mut resp = *resp; // Unbox
                                           // Add parse breakdown to profile data if profiling
-                    if profiling_enabled {
+                    #[cfg(feature = "debug-profile")]
+                    {
                         if let Some(ref mut profile) = resp.profile {
                             profile.http_version = http_version.to_string();
                             if let Some(ref tls) = tls_info {
@@ -1383,6 +1380,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                                 profile.tls_alpn = tls.alpn.clone();
                             }
 
+                            profile.request_method = method.to_string();
+                            profile.request_url = uri.to_string();
                             profile.rate_limit_us = rate_limit_us;
                             profile.parse_request_us = parse_request_us;
                             profile.headers_extract_us = headers_extract_us;
@@ -1395,6 +1394,13 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             profile.file_check_us = file_check_us;
                         }
                     }
+
+                    // Write profile report to file (debug-profile feature only)
+                    #[cfg(feature = "debug-profile")]
+                    if let Some(ref profile) = resp.profile {
+                        profile.write_report(trace_ctx.short_id());
+                    }
+
                     full_to_flexible(from_script_response(resp, profiling_enabled, use_brotli))
                 }
                 Ok(ExecuteResult::Streaming {

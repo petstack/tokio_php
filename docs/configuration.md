@@ -22,7 +22,6 @@ tokio_php is configured via environment variables.
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `1` | **Default.** Use ExtExecutor (2x faster) |
-| `PROFILE` | `0` | Enable request profiling |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate |
@@ -536,21 +535,23 @@ ExtExecutor is **2x faster** than PhpExecutor:
 
 See [Architecture](architecture.md) for executor comparison and [tokio_sapi Extension](tokio-sapi-extension.md) for FFI details.
 
-### PROFILE
+### Profiling (debug-profile feature)
 
-Enable request profiling.
+Request profiling is enabled at **compile time** using the `debug-profile` Cargo feature.
 
 ```bash
-# Disabled (default)
-PROFILE=0
+# Build with profiling
+cargo build --release --features debug-profile
 
-# Enabled
-PROFILE=1
+# Docker build with profiling
+CARGO_FEATURES=debug-profile docker compose build
 ```
 
-When enabled, requests with `X-Profile: 1` header return timing information.
+When built with `debug-profile`:
+- Server runs in **single-worker mode** for accurate timing
+- All requests generate detailed reports to `/tmp/tokio_profile_request_{request_id}.md`
 
-See [Profiling](profiling.md) for available metrics and usage examples.
+See [Profiling](profiling.md) for report format and detailed usage.
 
 ### TLS_CERT / TLS_KEY
 
@@ -650,10 +651,11 @@ docker compose up -d
 
 ```bash
 RUST_LOG=tokio_php=debug \
-PROFILE=1 \
 PHP_WORKERS=2 \
 docker compose up -d
 ```
+
+For profiling, build with `debug-profile` feature (see [Profiling](profiling.md)).
 
 ### Benchmark Mode
 
@@ -681,7 +683,6 @@ INTERNAL_ADDR=0.0.0.0:9090 \
 ERROR_PAGES_DIR=/var/www/html/errors \
 STATIC_CACHE_TTL=1w \
 ACCESS_LOG=1 \
-PROFILE=0 \
 USE_EXT=1 \
 RUST_LOG=tokio_php=info \
 docker compose up -d
@@ -707,7 +708,6 @@ services:
       - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
       - USE_EXT=${USE_EXT:-1}  # Recommended: 2x faster
       - USE_STUB=${USE_STUB:-0}
-      - PROFILE=${PROFILE:-0}
       - INDEX_FILE=${INDEX_FILE:-}
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - INTERNAL_ADDR=0.0.0.0:9090
@@ -735,7 +735,7 @@ services:
 
 ```bash
 # View environment
-docker compose exec app env | grep -E '^(PHP_|QUEUE_|DOCUMENT_|INDEX_|INTERNAL_|USE_|PROFILE|TLS_|RUST_|LISTEN_)'
+docker compose exec app env | grep -E '^(PHP_|QUEUE_|DOCUMENT_|INDEX_|INTERNAL_|USE_|TLS_|RUST_|LISTEN_)'
 
 # View startup logs
 docker compose logs app | head -20
@@ -800,11 +800,18 @@ docker compose exec app ls -la /certs/
 
 ### Low Performance
 
-Enable profiling to identify bottlenecks:
+Build with profiling to identify bottlenecks:
 ```bash
-PROFILE=1 docker compose up -d
-curl -H "X-Profile: 1" http://localhost:8080/index.php
+# Build with profiling (single-worker mode)
+CARGO_FEATURES=debug-profile docker compose build
+docker compose up -d
+
+# Make request and check report
+curl http://localhost:8080/index.php
+docker compose exec tokio_php cat /tmp/tokio_profile_request_*.md
 ```
+
+See [Profiling](profiling.md) for detailed analysis.
 
 ## See Also
 
@@ -925,9 +932,10 @@ pub struct MiddlewareConfig {
     pub rate_limit: Option<u64>,  // RATE_LIMIT (None if 0)
     pub rate_window: u64,         // RATE_WINDOW
     pub access_log: bool,         // ACCESS_LOG
-    pub profile: bool,            // PROFILE
 }
 ```
+
+Note: Profiling is controlled at compile-time via `debug-profile` feature, not at runtime.
 
 ### LoggingConfig
 
@@ -935,7 +943,6 @@ pub struct MiddlewareConfig {
 pub struct LoggingConfig {
     pub filter: String,       // RUST_LOG
     pub service_name: String, // SERVICE_NAME
-    pub profiling: bool,      // PROFILE
 }
 ```
 

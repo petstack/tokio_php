@@ -276,7 +276,8 @@ healthcheck:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RUST_LOG` | `tokio_php=info` | Log level (trace, debug, info, warn, error) |
-| `PROFILE` | `0` | Enable profiling headers |
+
+**Profiling:** Build with `CARGO_FEATURES=debug-profile` for compile-time profiling. See [Profiling](profiling.md).
 
 ## PHP Configuration
 

@@ -38,6 +38,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Log configuration summary
     config.log_summary();
 
+    // Debug profile warning
+    #[cfg(feature = "debug-profile")]
+    {
+        eprintln!();
+        eprintln!("⚠️  DEBUG PROFILE BUILD - Single worker mode, not for production");
+        eprintln!("    Profile reports: /tmp/tokio_profile_request_{{request_id}}.md");
+        eprintln!();
+    }
+
     info!("Starting tokio_php v{}", tokio_php::VERSION);
 
     // Use single-threaded Tokio runtime - PHP workers handle blocking work

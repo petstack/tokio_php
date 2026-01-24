@@ -62,7 +62,6 @@ PHP_VERSION=8.5 docker compose up -d
 | `INDEX_FILE` | — | Single entry point (e.g., `index.php`) |
 | `USE_EXT` | `1` | Use ExtExecutor (recommended) |
 | `USE_STUB` | `0` | Stub mode (no PHP, for benchmarks) |
-| `PROFILE` | `0` | Enable profiling headers |
 | `TLS_CERT` | — | Path to TLS certificate (PEM) |
 | `TLS_KEY` | — | Path to TLS private key (PEM) |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration |
@@ -78,7 +77,7 @@ PHP_VERSION=8.5 docker compose up -d
 
 ```bash
 # Production with tuning
-PHP_WORKERS=8 PROFILE=1 docker compose up -d
+PHP_WORKERS=8 docker compose up -d
 
 # Laravel/Symfony single entry point
 INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d
@@ -88,6 +87,9 @@ docker compose --profile tls up -d
 
 # Benchmark mode (no PHP)
 USE_STUB=1 docker compose up -d
+
+# Build with profiling (single-worker, writes reports to /tmp/)
+CARGO_FEATURES=debug-profile docker compose build
 ```
 
 ## Architecture
@@ -136,19 +138,26 @@ $_SERVER['TOKIO_SERVER_BUILD_VERSION']; // "0.1.0 (abc12345)"
 
 ## Profiling
 
-Enable profiling to measure request timing:
+Enable profiling at compile time with `debug-profile` feature:
 
 ```bash
-PROFILE=1 docker compose up -d
-curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep X-Profile
+# Build with profiling
+CARGO_FEATURES=debug-profile docker compose build
+docker compose up -d
+
+# Make a request
+curl http://localhost:8080/index.php
+
+# View profile report
+docker compose exec tokio_php cat /tmp/tokio_profile_request_*.md
 ```
 
-Response headers include:
-- `X-Profile-Total-Us` — Total request time (microseconds)
-- `X-Profile-Queue-Us` — Worker queue wait time
-- `X-Profile-Script-Us` — PHP script execution time
-- `X-Profile-PHP-Startup-Us` — php_request_startup() time
-- `X-Profile-PHP-Shutdown-Us` — php_request_shutdown() time
+When built with profiling:
+- Server runs in **single-worker mode** (accurate timing)
+- All requests generate detailed markdown reports to `/tmp/`
+- Reports include tree-structured timing breakdown
+
+See [docs/profiling.md](docs/profiling.md) for full documentation.
 
 ## Compression
 

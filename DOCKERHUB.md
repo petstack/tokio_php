@@ -99,7 +99,8 @@ All tags are multi-arch (`amd64` + `arm64`).
 |----------|---------|-------------|
 | `RUST_LOG` | `tokio_php=info` | Log level: `error`, `warn`, `info`, `debug`, `trace` |
 | `ACCESS_LOG` | `0` | Enable access logging. `1` = enabled |
-| `PROFILE` | `0` | Enable request profiling. `1` = enabled (requires `X-Profile: 1` header) |
+
+**Profiling:** Build from source with `CARGO_FEATURES=debug-profile` for detailed timing reports. See [GitHub](https://github.com/petstack/tokio_php/blob/master/docs/profiling.md).
 
 ### Executor Mode
 

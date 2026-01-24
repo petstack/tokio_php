@@ -1,14 +1,21 @@
 use std::time::Instant;
 
-// Note: Global profiling state has been moved to config::MiddlewareConfig.profile.
-// The profiling check is now done at the connection layer using the config value
-// combined with the X-Profile: 1 request header.
+#[cfg(feature = "debug-profile")]
+use std::io::Write;
+
+// Note: Profiling is now controlled by the `debug-profile` compile-time feature.
+// When enabled, single-worker mode is enforced and detailed reports are written
+// to /tmp/tokio_profile_request_{request_id}.md
 
 /// Profile data for a single request
 #[derive(Debug, Clone, Default)]
 pub struct ProfileData {
     // Total time
     pub total_us: u64,
+
+    // === Request info ===
+    pub request_method: String, // HTTP method (GET, POST, etc.)
+    pub request_url: String,    // Full request URL (path + query)
 
     // === Connection & TLS (server.rs) ===
     pub tls_handshake_us: u64, // TLS handshake time (0 for plain HTTP)
@@ -391,6 +398,305 @@ impl ProfileData {
             self.php_shutdown_us,
             self.response_build_us
         )
+    }
+
+    /// Generate detailed markdown report with tree structure.
+    ///
+    /// Only available with `debug-profile` feature.
+    #[cfg(feature = "debug-profile")]
+    pub fn to_markdown_report(&self, request_id: &str) -> String {
+        let mut report = String::with_capacity(4096);
+
+        // Helper for percentage calculation
+        let pct = |us: u64| -> f64 {
+            if self.total_us > 0 {
+                (us as f64 / self.total_us as f64) * 100.0
+            } else {
+                0.0
+            }
+        };
+
+        // Helper for formatting time
+        let fmt_time = |us: u64| -> String {
+            if us >= 1_000_000 {
+                format!("{:.2} s", us as f64 / 1_000_000.0)
+            } else if us >= 1_000 {
+                format!("{:.2} ms", us as f64 / 1_000.0)
+            } else {
+                format!("{} µs", us)
+            }
+        };
+
+        // Header
+        report.push_str(&format!("# Profile Report: {}\n\n", request_id));
+        report.push_str(&format!("**Total: {}**\n\n", fmt_time(self.total_us)));
+
+        // Request info
+        report.push_str("## Request\n\n");
+        report.push_str(&format!("- Method: {}\n", self.request_method));
+        report.push_str(&format!("- URL: `{}`\n", self.request_url));
+        report.push('\n');
+
+        // Connection info
+        report.push_str("## Connection\n\n");
+        report.push_str(&format!("- HTTP Version: {}\n", self.http_version));
+        if self.tls_handshake_us > 0 {
+            report.push_str(&format!("- TLS Handshake: {}\n", fmt_time(self.tls_handshake_us)));
+            report.push_str(&format!("- TLS Protocol: {}\n", self.tls_protocol));
+            if !self.tls_alpn.is_empty() {
+                report.push_str(&format!("- TLS ALPN: {}\n", self.tls_alpn));
+            }
+        } else {
+            report.push_str("- TLS: none (plain HTTP)\n");
+        }
+        report.push('\n');
+
+        // Request pipeline
+        report.push_str("## Request Pipeline\n\n");
+        report.push_str("```\n");
+
+        // Middleware
+        if self.rate_limit_us > 0 || self.middleware_req_us > 0 {
+            let middleware_total = self.rate_limit_us + self.middleware_req_us;
+            report.push_str(&format!(
+                "├── Middleware: {} ({:.1}%)\n",
+                fmt_time(middleware_total),
+                pct(middleware_total)
+            ));
+            if self.rate_limit_us > 0 {
+                report.push_str(&format!("│   └── Rate Limit: {}\n", fmt_time(self.rate_limit_us)));
+            }
+        }
+
+        // Parse request
+        report.push_str(&format!(
+            "├── Parse Request: {} ({:.1}%)\n",
+            fmt_time(self.parse_request_us),
+            pct(self.parse_request_us)
+        ));
+        report.push_str(&format!("│   ├── Headers: {}\n", fmt_time(self.headers_extract_us)));
+        report.push_str(&format!("│   ├── Query ($_GET): {}\n", fmt_time(self.query_parse_us)));
+        report.push_str(&format!("│   ├── Cookies: {}\n", fmt_time(self.cookies_parse_us)));
+        report.push_str(&format!("│   ├── Body Read: {}\n", fmt_time(self.body_read_us)));
+        report.push_str(&format!("│   ├── Body Parse: {}\n", fmt_time(self.body_parse_us)));
+        report.push_str(&format!("│   ├── $_SERVER Vars: {}\n", fmt_time(self.server_vars_us)));
+        report.push_str(&format!("│   ├── Path Resolve: {}\n", fmt_time(self.path_resolve_us)));
+        report.push_str(&format!("│   └── File Check: {}\n", fmt_time(self.file_check_us)));
+        if self.trace_context_us > 0 {
+            report.push_str(&format!("│       └── Trace Context: {}\n", fmt_time(self.trace_context_us)));
+        }
+
+        // Queue
+        report.push_str(&format!(
+            "├── Queue Wait: {} ({:.1}%)\n",
+            fmt_time(self.queue_wait_us),
+            pct(self.queue_wait_us)
+        ));
+        if self.channel_send_us > 0 {
+            report.push_str(&format!("│   └── Channel Send: {}\n", fmt_time(self.channel_send_us)));
+        }
+
+        // PHP execution
+        let php_total = self.php_startup_us
+            + self.superglobals_us
+            + self.memfd_setup_us
+            + self.script_exec_us
+            + self.output_capture_us
+            + self.php_shutdown_us;
+        report.push_str(&format!(
+            "└── PHP Execution: {} ({:.1}%)\n",
+            fmt_time(php_total),
+            pct(php_total)
+        ));
+        report.push_str(&format!("    ├── Startup: {}\n", fmt_time(self.php_startup_us)));
+
+        // Superglobals
+        report.push_str(&format!("    ├── Superglobals: {}\n", fmt_time(self.superglobals_us)));
+
+        // FFI breakdown (if used)
+        if self.ffi_clear_us > 0 || self.ffi_server_us > 0 {
+            report.push_str(&format!(
+                "    │   ├── FFI Clear: {}\n",
+                fmt_time(self.ffi_clear_us)
+            ));
+            report.push_str(&format!(
+                "    │   ├── $_SERVER ({} items): {}\n",
+                self.ffi_server_count,
+                fmt_time(self.ffi_server_us)
+            ));
+            report.push_str(&format!(
+                "    │   ├── $_GET ({} items): {}\n",
+                self.ffi_get_count,
+                fmt_time(self.ffi_get_us)
+            ));
+            report.push_str(&format!(
+                "    │   ├── $_POST ({} items): {}\n",
+                self.ffi_post_count,
+                fmt_time(self.ffi_post_us)
+            ));
+            report.push_str(&format!(
+                "    │   ├── $_COOKIE ({} items): {}\n",
+                self.ffi_cookie_count,
+                fmt_time(self.ffi_cookie_us)
+            ));
+            report.push_str(&format!(
+                "    │   ├── $_FILES ({} items): {}\n",
+                self.ffi_files_count,
+                fmt_time(self.ffi_files_us)
+            ));
+            report.push_str(&format!(
+                "    │   ├── Build Request: {}\n",
+                fmt_time(self.ffi_build_request_us)
+            ));
+            report.push_str(&format!(
+                "    │   └── Init Eval: {}\n",
+                fmt_time(self.ffi_init_eval_us)
+            ));
+        } else if self.superglobals_build_us > 0 || self.superglobals_eval_us > 0 {
+            // Eval mode
+            report.push_str(&format!(
+                "    │   ├── Build Code: {}\n",
+                fmt_time(self.superglobals_build_us)
+            ));
+            report.push_str(&format!(
+                "    │   └── Eval: {}\n",
+                fmt_time(self.superglobals_eval_us)
+            ));
+        }
+
+        // Memfd setup
+        if self.memfd_setup_us > 0 {
+            report.push_str(&format!("    ├── Memfd Setup: {}\n", fmt_time(self.memfd_setup_us)));
+        }
+
+        // Script execution
+        report.push_str(&format!(
+            "    ├── Script Execution: {} ({:.1}%)\n",
+            fmt_time(self.script_exec_us),
+            pct(self.script_exec_us)
+        ));
+
+        // Output capture
+        report.push_str(&format!("    ├── Output Capture: {}\n", fmt_time(self.output_capture_us)));
+        report.push_str(&format!("    │   ├── Finalize Eval: {}\n", fmt_time(self.finalize_eval_us)));
+        report.push_str(&format!("    │   ├── Stdout Restore: {}\n", fmt_time(self.stdout_restore_us)));
+        report.push_str(&format!("    │   ├── Output Read: {}\n", fmt_time(self.output_read_us)));
+        report.push_str(&format!("    │   └── Output Parse: {}\n", fmt_time(self.output_parse_us)));
+
+        // Shutdown
+        report.push_str(&format!("    └── Shutdown: {}\n", fmt_time(self.php_shutdown_us)));
+
+        report.push_str("```\n\n");
+
+        // Response pipeline
+        report.push_str("## Response Pipeline\n\n");
+        report.push_str("```\n");
+        report.push_str(&format!(
+            "├── Build Response: {} ({:.1}%)\n",
+            fmt_time(self.response_build_us),
+            pct(self.response_build_us)
+        ));
+
+        if self.compression_us > 0 {
+            report.push_str(&format!(
+                "├── Compression (Brotli): {} (ratio: {:.0}%)\n",
+                fmt_time(self.compression_us),
+                self.compression_ratio * 100.0
+            ));
+        }
+
+        if self.middleware_resp_us > 0 {
+            report.push_str(&format!(
+                "└── Middleware Response: {}\n",
+                fmt_time(self.middleware_resp_us)
+            ));
+        }
+        report.push_str("```\n\n");
+
+        // Static file (if applicable)
+        if self.static_file_us > 0 {
+            report.push_str("## Static File\n\n");
+            report.push_str(&format!("- Read Time: {}\n", fmt_time(self.static_file_us)));
+            report.push_str(&format!("- File Size: {} bytes\n", self.static_file_size));
+            report.push('\n');
+        }
+
+        // Early finish flag
+        if self.early_finish {
+            report.push_str("## Notes\n\n");
+            report.push_str("- Response was sent early via `tokio_finish_request()`\n");
+            report.push('\n');
+        }
+
+        // Summary table
+        report.push_str("## Summary\n\n");
+        report.push_str("| Phase | Time | % |\n");
+        report.push_str("|-------|------|---|\n");
+        report.push_str(&format!(
+            "| Parse Request | {} | {:.1}% |\n",
+            fmt_time(self.parse_request_us),
+            pct(self.parse_request_us)
+        ));
+        report.push_str(&format!(
+            "| Queue Wait | {} | {:.1}% |\n",
+            fmt_time(self.queue_wait_us),
+            pct(self.queue_wait_us)
+        ));
+        report.push_str(&format!(
+            "| PHP Startup | {} | {:.1}% |\n",
+            fmt_time(self.php_startup_us),
+            pct(self.php_startup_us)
+        ));
+        report.push_str(&format!(
+            "| Superglobals | {} | {:.1}% |\n",
+            fmt_time(self.superglobals_us),
+            pct(self.superglobals_us)
+        ));
+        report.push_str(&format!(
+            "| Script Execution | {} | {:.1}% |\n",
+            fmt_time(self.script_exec_us),
+            pct(self.script_exec_us)
+        ));
+        report.push_str(&format!(
+            "| Output Capture | {} | {:.1}% |\n",
+            fmt_time(self.output_capture_us),
+            pct(self.output_capture_us)
+        ));
+        report.push_str(&format!(
+            "| PHP Shutdown | {} | {:.1}% |\n",
+            fmt_time(self.php_shutdown_us),
+            pct(self.php_shutdown_us)
+        ));
+        report.push_str(&format!(
+            "| Response Build | {} | {:.1}% |\n",
+            fmt_time(self.response_build_us),
+            pct(self.response_build_us)
+        ));
+        report.push_str(&format!("| **Total** | **{}** | **100%** |\n", fmt_time(self.total_us)));
+
+        report
+    }
+
+    /// Write profile report to /tmp/tokio_profile_request_{request_id}.md
+    ///
+    /// Only available with `debug-profile` feature.
+    #[cfg(feature = "debug-profile")]
+    pub fn write_report(&self, request_id: &str) {
+        let report = self.to_markdown_report(request_id);
+        let path = format!("/tmp/tokio_profile_request_{}.md", request_id);
+
+        match std::fs::File::create(&path) {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(report.as_bytes()) {
+                    tracing::error!("Failed to write profile report to {}: {}", path, e);
+                } else {
+                    tracing::debug!("Profile report written to {}", path);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to create profile report file {}: {}", path, e);
+            }
+        }
     }
 }
 

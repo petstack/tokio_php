@@ -26,7 +26,13 @@ docker compose down -v
 PHP_WORKERS=4 docker compose up -d      # Set worker count
 USE_STUB=1 docker compose up -d          # Stub mode (no PHP, for benchmarks)
 USE_EXT=1 docker compose up -d           # ExtExecutor with tokio_sapi extension
-PROFILE=1 docker compose up -d           # Enable profiling
+
+# Build with profiling (debug-profile feature)
+cargo build --release --features debug-profile
+
+# Docker build with profiling
+CARGO_FEATURES=debug-profile docker compose build
+docker compose up -d
 
 # Run with TLS/HTTPS (port 8443)
 docker compose --profile tls up -d
@@ -422,7 +428,6 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
 | `USE_EXT` | `1` | **Recommended.** Use ExtExecutor with tokio_sapi extension (2x faster) |
-| `PROFILE` | `0` | Enable profiling (requires `X-Profile: 1` header) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM). In Docker: `/run/secrets/tls_cert` |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM). In Docker: `/run/secrets/tls_key` |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate file |
@@ -467,31 +472,102 @@ RUST_LOG=tokio_php=debug docker compose up -d
 
 ## Profiling
 
-With `PROFILE=1`, requests with `X-Profile: 1` header return timing data:
+Profiling is enabled at **compile time** using the `debug-profile` Cargo feature. When enabled:
+- Server runs in **single-worker mode** for accurate timing measurements
+- **All requests** are profiled (no header required)
+- Detailed reports are written to `/tmp/tokio_profile_request_{request_id}.md`
+
+### Building with Profiling
 
 ```bash
-# HTTP profiling
-curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep X-Profile
+# Local build with profiling
+cargo build --release --features debug-profile
 
-# HTTPS profiling (includes TLS metrics)
-curl -sIk -H "X-Profile: 1" https://localhost:8443/index.php | grep X-Profile
+# Docker build with profiling
+docker build --build-arg CARGO_FEATURES=debug-profile -t tokio_php:profile .
+
+# Docker Compose with profiling
+CARGO_FEATURES=debug-profile docker compose build
 ```
 
-### Profile Headers
+### Startup Warning
 
-| Header | Description |
-|--------|-------------|
-| `X-Profile-Total-Us` | Total request time (microseconds) |
-| `X-Profile-HTTP-Version` | HTTP/1.0, HTTP/1.1, HTTP/2.0 |
-| `X-Profile-TLS-Handshake-Us` | TLS handshake time (HTTPS only) |
-| `X-Profile-TLS-Protocol` | TLS version (TLSv1_2, TLSv1_3) |
-| `X-Profile-TLS-ALPN` | ALPN negotiated protocol (h2, http/1.1) |
-| `X-Profile-Parse-Us` | Request parsing time |
-| `X-Profile-Queue-Us` | Worker queue wait time |
-| `X-Profile-PHP-Startup-Us` | php_request_startup() time |
-| `X-Profile-Script-Us` | PHP script execution time |
-| `X-Profile-Output-Us` | Output capture time |
-| `X-Profile-PHP-Shutdown-Us` | php_request_shutdown() time |
+When running a debug-profile build, you'll see:
+```
+⚠️  DEBUG PROFILE BUILD - Single worker mode, not for production
+    Profile reports: /tmp/tokio_profile_request_{request_id}.md
+```
+
+### Profile Report Format
+
+Each request generates a markdown file with detailed timing breakdown:
+
+```markdown
+# Profile Report: 65bdbab40000
+
+**Total: 1.23 ms**
+
+## Request
+- Method: GET
+- URL: `/index.php?page=1`
+
+## Connection
+- HTTP Version: HTTP/1.1
+- TLS: none (plain HTTP)
+
+## Request Pipeline
+├── Parse Request: 45 µs (3.6%)
+│   ├── Headers: 12 µs
+│   ├── Query ($_GET): 8 µs
+│   └── Body Parse: 20 µs
+├── Queue Wait: 50 µs (4.1%)
+└── PHP Execution: 1.10 ms (89.1%)
+    ├── Startup: 80 µs
+    ├── Superglobals: 120 µs
+    │   ├── $_SERVER (25 items): 45 µs
+    │   └── $_GET (3 items): 15 µs
+    ├── Script Execution: 850 µs (69.0%)
+    └── Shutdown: 50 µs
+
+## Response Pipeline
+├── Build Response: 30 µs (2.4%)
+└── Compression (Brotli): 0 µs (disabled)
+
+## Summary
+| Phase | Time | % |
+|-------|------|---|
+| Parse Request | 45 µs | 3.6% |
+| Queue Wait | 50 µs | 4.1% |
+| Script Execution | 850 µs | 69.0% |
+| **Total** | **1.23 ms** | **100%** |
+```
+
+### Profile Data Fields
+
+| Field | Description |
+|-------|-------------|
+| `total_us` | Total request time (microseconds) |
+| `parse_request_us` | Request parsing time |
+| `queue_wait_us` | Worker queue wait time |
+| `php_startup_us` | php_request_startup() time |
+| `superglobals_us` | Time to set $_SERVER, $_GET, $_POST, etc. |
+| `script_exec_us` | PHP script execution time |
+| `output_capture_us` | Output capture time |
+| `php_shutdown_us` | php_request_shutdown() time |
+| `response_build_us` | HTTP response building time |
+| `compression_us` | Brotli compression time (if enabled) |
+| `tls_handshake_us` | TLS handshake time (HTTPS only) |
+
+### Production vs Debug Builds
+
+| Aspect | Production | Debug Profile |
+|--------|------------|---------------|
+| Workers | Auto (CPU cores) | **1 (forced)** |
+| Profiling | Disabled | **Always on** |
+| Output | None | `/tmp/tokio_profile_request_*.md` |
+| Use case | Production | Performance analysis |
+
+**Important:** Never use debug-profile builds in production. They are single-threaded and write files for every request.
 
 ## Logging
 

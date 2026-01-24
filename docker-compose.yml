@@ -6,6 +6,8 @@ services:
       args:
         # PHP version: 8.4 or 8.5
         PHP_VERSION: ${PHP_VERSION:-8.5}
+        # Cargo features (e.g., "debug-profile" for profiling build)
+        CARGO_FEATURES: ${CARGO_FEATURES:-}
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -18,8 +20,6 @@ services:
       - USE_STUB=${USE_STUB:-0}
       # USE_EXT: recommended for production - 2x faster via php_execute_script()
       - USE_EXT=${USE_EXT:-1}
-      # PROFILE: set to 1 or true to enable profiling (requires X-Profile: 1 header)
-      - PROFILE=${PROFILE:-0}
       # QUEUE_CAPACITY: max pending requests in queue (0 = workers * 100)
       - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
       # INDEX_FILE: single entry point mode (e.g., index.php)
@@ -61,6 +61,7 @@ services:
       dockerfile: Dockerfile
       args:
         PHP_VERSION: ${PHP_VERSION:-8.5}
+        CARGO_FEATURES: ${CARGO_FEATURES:-}
     ports:
       - "8443:8443"
       - "9090:9090"
@@ -70,7 +71,6 @@ services:
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - USE_STUB=${USE_STUB:-0}
       - USE_EXT=${USE_EXT:-1}
-      - PROFILE=${PROFILE:-0}
       - INDEX_FILE=${INDEX_FILE:-}
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - TLS_CERT=/run/secrets/tls_cert

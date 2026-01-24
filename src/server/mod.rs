@@ -148,7 +148,7 @@ pub struct Server<E: ScriptExecutor> {
     shutdown_rx: watch::Receiver<bool>,
     /// Shutdown initiated flag
     shutdown_initiated: Arc<AtomicBool>,
-    /// Profiling enabled (PROFILE=1)
+    /// Profiling enabled (compile-time with debug-profile feature)
     profile_enabled: bool,
     /// Access logging enabled (ACCESS_LOG=1)
     access_log_enabled: bool,
@@ -234,12 +234,14 @@ impl<E: ScriptExecutor + 'static> Server<E> {
     }
 
     /// Enable profiling for this server.
-    /// Requests with X-Profile: 1 header will include timing data.
+    ///
+    /// Note: With `debug-profile` feature, profiling is always enabled at compile time.
+    /// This method is kept for API compatibility but the `enabled` parameter is ignored.
+    #[allow(unused_variables)]
     pub fn with_profile_enabled(mut self, enabled: bool) -> Self {
         self.profile_enabled = enabled;
-        if enabled {
-            info!("Profiler enabled (PROFILE=1)");
-        }
+        #[cfg(feature = "debug-profile")]
+        info!("Profiler enabled (debug-profile build)");
         self
     }
 

@@ -671,30 +671,32 @@ phpinfo();
 
 ### FFI Profiling
 
-With `PROFILE=1`, FFI timing is included:
+When built with `debug-profile` feature, FFI timing is included in profile reports:
 
 ```bash
-curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep FFI
+# Build with profiling
+CARGO_FEATURES=debug-profile docker compose build
+docker compose up -d
+
+# Make request and view report
+curl http://localhost:8080/index.php
+docker compose exec tokio_php cat /tmp/tokio_profile_request_*.md
 ```
 
-**Available FFI profile headers:**
+**FFI timing in profile reports:**
 
-| Header | Description |
-|--------|-------------|
-| `X-Profile-FFI-Request-Init-Us` | Request initialization time |
-| `X-Profile-FFI-Clear-Us` | Superglobals clear time |
-| `X-Profile-FFI-Server-Us` | $_SERVER set time |
-| `X-Profile-FFI-Server-Count` | $_SERVER variable count |
-| `X-Profile-FFI-Get-Us` | $_GET set time |
-| `X-Profile-FFI-Get-Count` | $_GET variable count |
-| `X-Profile-FFI-Post-Us` | $_POST set time |
-| `X-Profile-FFI-Post-Count` | $_POST variable count |
-| `X-Profile-FFI-Cookie-Us` | $_COOKIE set time |
-| `X-Profile-FFI-Cookie-Count` | $_COOKIE variable count |
-| `X-Profile-FFI-Files-Us` | $_FILES set time |
-| `X-Profile-FFI-Files-Count` | $_FILES count |
-| `X-Profile-FFI-Build-Request-Us` | $_REQUEST build time |
-| `X-Profile-FFI-Init-Eval-Us` | Init eval time |
+| Field | Description |
+|-------|-------------|
+| `FFI Clear` | Superglobals clear time |
+| `$_SERVER (N items)` | $_SERVER set time and count |
+| `$_GET (N items)` | $_GET set time and count |
+| `$_POST (N items)` | $_POST set time and count |
+| `$_COOKIE (N items)` | $_COOKIE set time and count |
+| `$_FILES (N items)` | $_FILES set time and count |
+| `Build Request` | $_REQUEST build time |
+| `Init Eval` | Init eval time |
+
+See [Profiling](profiling.md) for full report format.
 
 ## Limitations
 
@@ -716,4 +718,4 @@ curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep FFI
 - [Request Heartbeat](request-heartbeat.md) - `tokio_request_heartbeat()` documentation
 - [SSE Streaming](sse-streaming.md) - Server-Sent Events streaming
 - [Architecture](architecture.md) - Executor system overview
-- [Profiling](profiling.md) - Performance profiling headers
+- [Profiling](profiling.md) - Compile-time profiling with markdown reports

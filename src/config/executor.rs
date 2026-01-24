@@ -66,24 +66,33 @@ impl ExecutorConfig {
     }
 
     fn parse_worker_count() -> Result<NonZeroUsize, ConfigError> {
-        let raw = env_or("PHP_WORKERS", "0");
-        let workers: usize = raw.parse().map_err(|e| ConfigError::Parse {
-            key: "PHP_WORKERS".into(),
-            value: raw,
-            error: format!("{e}"),
-        })?;
+        // Debug profile: force single worker for accurate profiling
+        #[cfg(feature = "debug-profile")]
+        {
+            return Ok(NonZeroUsize::new(1).unwrap());
+        }
 
-        // Resolve 0 to CPU count
-        let count = if workers == 0 {
-            num_cpus::get()
-        } else {
-            workers
-        };
+        #[cfg(not(feature = "debug-profile"))]
+        {
+            let raw = env_or("PHP_WORKERS", "0");
+            let workers: usize = raw.parse().map_err(|e| ConfigError::Parse {
+                key: "PHP_WORKERS".into(),
+                value: raw,
+                error: format!("{e}"),
+            })?;
 
-        NonZeroUsize::new(count).ok_or_else(|| ConfigError::Invalid {
-            key: "PHP_WORKERS".into(),
-            message: "worker count cannot be zero".into(),
-        })
+            // Resolve 0 to CPU count
+            let count = if workers == 0 {
+                num_cpus::get()
+            } else {
+                workers
+            };
+
+            NonZeroUsize::new(count).ok_or_else(|| ConfigError::Invalid {
+                key: "PHP_WORKERS".into(),
+                message: "worker count cannot be zero".into(),
+            })
+        }
     }
 
     fn parse_queue_capacity(workers: NonZeroUsize) -> Result<NonZeroUsize, ConfigError> {

@@ -65,7 +65,6 @@ curl http://localhost:9090/config
   "RATE_WINDOW": "60",
   "USE_STUB": "0",
   "USE_EXT": "1",
-  "PROFILE": "0",
   "TLS_CERT": "",
   "TLS_KEY": "",
   "RUST_LOG": "tokio_php=info",
@@ -91,7 +90,6 @@ curl http://localhost:9090/config
 | `RATE_WINDOW` | `60` | Rate limit window (seconds) |
 | `USE_STUB` | `0` | Stub executor (`0`/`1`) |
 | `USE_EXT` | `1` | ExtExecutor (`0`/`1`) |
-| `PROFILE` | `0` | Profiling enabled (`0`/`1`) |
 | `TLS_CERT` | _(empty)_ | TLS certificate path |
 | `TLS_KEY` | _(empty)_ | TLS private key path |
 | `RUST_LOG` | `tokio_php=info` | Log level filter |

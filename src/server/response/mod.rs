@@ -252,7 +252,7 @@ pub fn from_script_response(
         builder = builder.header(name, value);
     }
 
-    // Add profiling headers if profiling is enabled
+    // Update profile data if profiling is enabled
     if profiling {
         if let Some(ref mut profile) = script_response.profile {
             // Add response building timing
@@ -263,9 +263,8 @@ pub fn from_script_response(
             // Recalculate total including response build time
             profile.total_us = profile.total_us.saturating_add(profile.response_build_us);
 
-            for (name, value) in profile.to_headers() {
-                builder = builder.header(name, value);
-            }
+            // Note: With debug-profile feature, profile data is written to file
+            // in connection.rs instead of being added as headers.
         }
     }
 

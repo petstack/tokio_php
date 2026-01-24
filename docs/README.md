@@ -23,7 +23,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 | [OPcache & JIT](opcache-jit.md) | Bytecode caching and JIT compilation                       |
 | [OPcache Internals](opcache-internals.md) | Deep dive into OPcache architecture                        |
 | [Worker Pool](worker-pool.md) | Multi-threaded PHP execution, scaling                      |
-| [Profiling](profiling.md) | Request timing and performance analysis                    |
+| [Profiling](profiling.md) | Compile-time profiling with detailed markdown reports      |
 | [Compression](compression.md) | Brotli compression for responses                           |
 | [Static Files](static-files.md) | Static file serving, streaming, optimization               |
 | [Static Caching](static-caching.md) | Cache-Control, ETag, Last-Modified for static files        |

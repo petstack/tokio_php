@@ -36,8 +36,6 @@ pub struct MiddlewareConfig {
     rate_limit: Option<RateLimitConfig>,
     /// Access logging enabled.
     access_log: bool,
-    /// Profiling enabled.
-    profile: bool,
 }
 
 impl MiddlewareConfig {
@@ -46,7 +44,6 @@ impl MiddlewareConfig {
         Ok(Self {
             rate_limit: Self::parse_rate_limit()?,
             access_log: env_bool("ACCESS_LOG", false),
-            profile: env_bool("PROFILE", false),
         })
     }
 
@@ -69,9 +66,12 @@ impl MiddlewareConfig {
     }
 
     /// Check if profiling is enabled.
+    ///
+    /// With `debug-profile` feature: always true.
+    /// Without: always false (profiling code is compiled out).
     #[inline]
     pub const fn is_profile_enabled(&self) -> bool {
-        self.profile
+        cfg!(feature = "debug-profile")
     }
 
     fn parse_rate_limit() -> Result<Option<RateLimitConfig>, ConfigError> {
@@ -107,7 +107,6 @@ mod tests {
         let config = MiddlewareConfig {
             rate_limit: None,
             access_log: false,
-            profile: false,
         };
         assert!(!config.is_rate_limiting_enabled());
         assert!(config.rate_limit().is_none());
@@ -121,7 +120,6 @@ mod tests {
                 window_secs: 60,
             }),
             access_log: false,
-            profile: false,
         };
         assert!(config.is_rate_limiting_enabled());
         let rl = config.rate_limit().unwrap();
@@ -144,19 +142,18 @@ mod tests {
         let config = MiddlewareConfig {
             rate_limit: None,
             access_log: true,
-            profile: false,
         };
         assert!(config.is_access_log_enabled());
     }
 
     #[test]
-    fn test_profile_flag() {
+    fn test_profile_enabled_depends_on_feature() {
         let config = MiddlewareConfig {
             rate_limit: None,
             access_log: false,
-            profile: true,
         };
-        assert!(config.is_profile_enabled());
+        // With debug-profile feature: true, without: false
+        assert_eq!(config.is_profile_enabled(), cfg!(feature = "debug-profile"));
     }
 
     #[test]
@@ -164,7 +161,6 @@ mod tests {
         let config = MiddlewareConfig {
             rate_limit: None,
             access_log: true,
-            profile: false,
         };
         let copy = config; // Copy
         assert!(copy.is_access_log_enabled());

@@ -350,7 +350,6 @@ See [Configuration](configuration.md) for full environment variable reference.
 | `ACCESS_LOG` | `0` | Enable access logs |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration |
 | `ERROR_PAGES_DIR` | _(empty)_ | Custom error pages directory |
-| `PROFILE` | `0` | Enable profiling headers |
 
 ## See Also
 
@@ -361,5 +360,5 @@ See [Configuration](configuration.md) for full environment variable reference.
 - [Static Caching](static-caching.md) - Static file caching
 - [Logging](logging.md) - Access log format
 - [Distributed Tracing](distributed-tracing.md) - W3C Trace Context
-- [Profiling](profiling.md) - Request timing headers
+- [Profiling](profiling.md) - Compile-time profiling with markdown reports
 - [Configuration](configuration.md) - All environment variables

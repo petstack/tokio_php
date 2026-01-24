@@ -1,5 +1,7 @@
 # PHP version: 8.4 or 8.5
 ARG PHP_VERSION=8.4
+# Cargo features (e.g., "debug-profile" for profiling build)
+ARG CARGO_FEATURES=""
 
 FROM php:${PHP_VERSION}-zts-alpine AS builder
 
@@ -91,13 +93,27 @@ RUN echo "=== Library locations ===" && \
     echo "=== ld-musl paths ===" && \
     cat /etc/ld-musl-*.path 2>/dev/null || echo "No ld-musl path files"
 
+# Re-declare ARG after FROM (Docker requirement)
+ARG CARGO_FEATURES
+
 # Run unit tests before building (fail fast if tests don't pass)
 # Note: --lib runs library unit tests, --bin tokio_php runs binary tests
 # Both exclude integration tests which require running server
-RUN cargo test --release --lib && cargo test --release --bin tokio_php
+RUN if [ -n "$CARGO_FEATURES" ]; then \
+        echo "=== Running tests with features: $CARGO_FEATURES ===" && \
+        cargo test --release --lib --features "$CARGO_FEATURES" && \
+        cargo test --release --bin tokio_php --features "$CARGO_FEATURES"; \
+    else \
+        cargo test --release --lib && cargo test --release --bin tokio_php; \
+    fi
 
 # Build the application
-RUN cargo build --release
+RUN if [ -n "$CARGO_FEATURES" ]; then \
+        echo "=== Building with features: $CARGO_FEATURES ===" && \
+        cargo build --release --features "$CARGO_FEATURES"; \
+    else \
+        cargo build --release; \
+    fi
 
 # Runtime stage - use same ZTS image
 ARG PHP_VERSION=8.4

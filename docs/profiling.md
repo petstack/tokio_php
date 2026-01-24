@@ -1,153 +1,173 @@
 # Request Profiling
 
-tokio_php includes a built-in request profiler for detailed performance analysis.
+tokio_php includes a built-in request profiler for detailed performance analysis. Profiling is enabled at **compile time** using the `debug-profile` Cargo feature.
 
 ## Enabling Profiler
 
-Set `PROFILE=1` environment variable (see [Configuration](configuration.md)):
+Build with the `debug-profile` feature:
 
 ```bash
-PROFILE=1 docker compose up -d
+# Local build
+cargo build --release --features debug-profile
+
+# Docker build
+CARGO_FEATURES=debug-profile docker compose build
+
+# Docker run
+docker compose up -d
 ```
 
-## Usage
+## How It Works
 
-Send requests with `X-Profile: 1` header to get timing data:
+When built with `debug-profile`:
+
+1. **Single-worker mode** — Server runs with 1 worker for accurate timing (no thread contention)
+2. **All requests profiled** — No header required, every request generates a report
+3. **Markdown reports** — Detailed reports written to `/tmp/tokio_profile_request_{request_id}.md`
+
+### Startup Warning
+
+When running a debug-profile build, you'll see:
+
+```
+⚠️  DEBUG PROFILE BUILD - Single worker mode, not for production
+    Profile reports: /tmp/tokio_profile_request_{request_id}.md
+```
+
+## Viewing Reports
 
 ```bash
-# HTTP profiling
-curl -sI -H "X-Profile: 1" http://localhost:8080/index.php
+# Make a request
+curl http://localhost:8080/index.php
 
-# HTTPS profiling (includes TLS metrics)
-curl -sIk -H "X-Profile: 1" https://localhost:8443/index.php
+# View all reports
+docker compose exec tokio_php cat /tmp/tokio_profile_request_*.md
+
+# View most recent report
+docker compose exec tokio_php ls -t /tmp/tokio_profile_request_*.md | head -1 | xargs cat
 ```
 
-## Profile Headers
+## Report Format
 
-All times are in microseconds (µs).
+Each request generates a markdown file with detailed timing breakdown:
 
-### Summary
+```markdown
+# Profile Report: 65bdbab40000-a1b2
 
-| Header | Description |
-|--------|-------------|
-| `X-Profile-Total-Us` | Total request processing time |
-| `X-Profile-HTTP-Version` | HTTP protocol version (HTTP/1.0, HTTP/1.1, HTTP/2.0) |
+**Total: 2.93 ms**
 
-### TLS Metrics (HTTPS only)
+## Request
 
-| Header | Description |
-|--------|-------------|
-| `X-Profile-TLS-Handshake-Us` | TLS handshake time |
-| `X-Profile-TLS-Protocol` | TLS version (TLSv1_2, TLSv1_3) |
-| `X-Profile-TLS-ALPN` | ALPN negotiated protocol (h2, http/1.1) |
+- Method: GET
+- URL: `/index.php?test=123&foo=bar`
 
-### Parse Breakdown
+## Connection
 
-| Header | Description |
-|--------|-------------|
-| `X-Profile-Parse-Us` | Total parse time |
-| `X-Profile-Parse-Headers-Us` | Extract HTTP headers |
-| `X-Profile-Parse-Query-Us` | Parse query string ($_GET) |
-| `X-Profile-Parse-Cookies-Us` | Parse cookies |
-| `X-Profile-Parse-Body-Read-Us` | Read POST body |
-| `X-Profile-Parse-Body-Parse-Us` | Parse POST body (form/multipart) |
-| `X-Profile-Parse-ServerVars-Us` | Build $_SERVER vars |
-| `X-Profile-Parse-Path-Us` | URL decode + path resolution |
-| `X-Profile-Parse-FileCheck-Us` | Path::exists() check |
+- HTTP Version: HTTP/1.1
+- TLS: none (plain HTTP)
 
-### Queue & PHP Startup
+## Request Pipeline
 
-| Header | Description |
-|--------|-------------|
-| `X-Profile-Queue-Us` | Time waiting in worker queue |
-| `X-Profile-PHP-Startup-Us` | php_request_startup() time |
+├── Parse Request: 186 µs (6.4%)
+│   ├── Headers: 3 µs
+│   ├── Query ($_GET): 3 µs
+│   ├── Cookies: 0 µs
+│   ├── Body Read: 0 µs
+│   ├── Body Parse: 0 µs
+│   ├── $_SERVER Vars: 42 µs
+│   ├── Path Resolve: 65 µs
+│   └── File Check: 66 µs
+├── Queue Wait: 77 µs (2.6%)
+└── PHP Execution: 2.84 ms (97.1%)
+    ├── Startup: 196 µs
+    ├── Superglobals: 45 µs
+    │   ├── FFI Clear: 41 µs
+    │   ├── $_SERVER (0 items): 0 µs
+    │   ├── $_GET (2 items): 4 µs
+    │   ├── $_POST (0 items): 0 µs
+    │   ├── $_COOKIE (0 items): 0 µs
+    │   ├── $_FILES (0 items): 0 µs
+    │   ├── Build Request: 0 µs
+    │   └── Init Eval: 8 µs
+    ├── Script Execution: 2.48 ms (84.8%)
+    ├── Output Capture: 10 µs
+    │   ├── Finalize Eval: 10 µs
+    │   ├── Stdout Restore: 0 µs
+    │   ├── Output Read: 0 µs
+    │   └── Output Parse: 0 µs
+    └── Shutdown: 110 µs
 
-### Superglobals
+## Response Pipeline
 
-| Header | Description |
-|--------|-------------|
-| `X-Profile-Superglobals-Us` | Total superglobals injection time |
-| `X-Profile-Superglobals-Build-Us` | Build PHP code string (eval mode) |
-| `X-Profile-Superglobals-Eval-Us` | zend_eval_string execution (eval mode) |
+├── Build Response: 0 µs (0.0%)
 
-### FFI Metrics (USE_EXT=1 only)
+## Summary
 
-When using ExtExecutor, detailed FFI timing is available:
-
-| Header | Description |
-|--------|-------------|
-| `X-Profile-FFI-Request-Init-Us` | tokio_sapi_request_init() |
-| `X-Profile-FFI-Clear-Us` | tokio_sapi_clear_superglobals() |
-| `X-Profile-FFI-Server-Us` | All $_SERVER FFI calls |
-| `X-Profile-FFI-Server-Count` | Number of $_SERVER entries |
-| `X-Profile-FFI-Get-Us` | All $_GET FFI calls |
-| `X-Profile-FFI-Get-Count` | Number of $_GET entries |
-| `X-Profile-FFI-Post-Us` | All $_POST FFI calls |
-| `X-Profile-FFI-Post-Count` | Number of $_POST entries |
-| `X-Profile-FFI-Cookie-Us` | All $_COOKIE FFI calls |
-| `X-Profile-FFI-Cookie-Count` | Number of $_COOKIE entries |
-| `X-Profile-FFI-Files-Us` | All $_FILES FFI calls |
-| `X-Profile-FFI-Files-Count` | Number of $_FILES entries |
-| `X-Profile-FFI-Build-Request-Us` | tokio_sapi_build_request() |
-| `X-Profile-FFI-Init-Eval-Us` | Init eval (header_remove, ob_start) |
-
-### Script Execution
-
-| Header | Description |
-|--------|-------------|
-| `X-Profile-Script-Us` | php_execute_script time |
-
-### Output Capture
-
-| Header | Description |
-|--------|-------------|
-| `X-Profile-Output-Us` | Total output capture time |
-| `X-Profile-Output-Finalize-Us` | Finalize eval (flush + headers) |
-| `X-Profile-Output-Parse-Us` | Parse body + headers from output |
-
-### Shutdown & Response
-
-| Header | Description |
-|--------|-------------|
-| `X-Profile-PHP-Shutdown-Us` | php_request_shutdown() time |
-| `X-Profile-Response-Us` | Build HTTP response |
-
-## Example Output
-
-### HTTP Request
-
-```bash
-$ curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep X-Profile
-
-X-Profile-Total-Us: 1735
-X-Profile-HTTP-Version: HTTP/1.1
-X-Profile-Parse-Us: 45
-X-Profile-Queue-Us: 169
-X-Profile-PHP-Startup-Us: 205
-X-Profile-Superglobals-Us: 85
-X-Profile-Script-Us: 124
-X-Profile-Output-Us: 91
-X-Profile-PHP-Shutdown-Us: 56
-X-Profile-Response-Us: 12
+| Phase | Time | % |
+|-------|------|---|
+| Parse Request | 186 µs | 6.4% |
+| Queue Wait | 77 µs | 2.6% |
+| PHP Startup | 196 µs | 6.7% |
+| Superglobals | 45 µs | 1.5% |
+| Script Execution | 2.48 ms | 84.8% |
+| Output Capture | 10 µs | 0.3% |
+| PHP Shutdown | 110 µs | 3.8% |
+| Response Build | 0 µs | 0.0% |
+| **Total** | **2.93 ms** | **100%** |
 ```
 
-### HTTPS Request with HTTP/2
+### TLS Requests
 
-```bash
-$ curl -sIk -H "X-Profile: 1" https://localhost:8443/index.php | grep X-Profile
+For HTTPS requests, the Connection section includes TLS metrics:
 
-X-Profile-Total-Us: 228
-X-Profile-HTTP-Version: HTTP/2.0
-X-Profile-TLS-Handshake-Us: 10916
-X-Profile-TLS-Protocol: TLSv1_3
-X-Profile-TLS-ALPN: h2
-X-Profile-Parse-Us: 32
-X-Profile-Queue-Us: 45
-X-Profile-PHP-Startup-Us: 198
-X-Profile-Script-Us: 115
-X-Profile-Output-Us: 85
-X-Profile-PHP-Shutdown-Us: 52
+```markdown
+## Connection
+
+- HTTP Version: HTTP/2.0
+- TLS: TLSv1_3 (ALPN: h2)
+- TLS Handshake: 10.92 ms
 ```
+
+## Profile Data Fields
+
+| Field | Description |
+|-------|-------------|
+| `total_us` | Total request time (microseconds) |
+| `request_method` | HTTP method (GET, POST, etc.) |
+| `request_url` | Full request URL (path + query) |
+| `http_version` | HTTP protocol version |
+| `tls_handshake_us` | TLS handshake time (HTTPS only) |
+| `tls_protocol` | TLS version (TLSv1_2, TLSv1_3) |
+| `tls_alpn` | ALPN negotiated protocol (h2, http/1.1) |
+| `parse_request_us` | Request parsing time |
+| `headers_extract_us` | HTTP headers extraction |
+| `query_parse_us` | Query string parsing ($_GET) |
+| `cookies_parse_us` | Cookie parsing |
+| `body_read_us` | Request body read time |
+| `body_parse_us` | Body parsing (form/multipart) |
+| `server_vars_us` | $_SERVER variables building |
+| `path_resolve_us` | URL decode + path resolution |
+| `file_check_us` | File existence check |
+| `queue_wait_us` | Worker queue wait time |
+| `php_startup_us` | php_request_startup() time |
+| `superglobals_us` | Total superglobals injection time |
+| `ffi_clear_us` | FFI superglobals clear |
+| `ffi_server_us` | $_SERVER FFI calls |
+| `ffi_get_us` | $_GET FFI calls |
+| `ffi_post_us` | $_POST FFI calls |
+| `ffi_cookie_us` | $_COOKIE FFI calls |
+| `ffi_files_us` | $_FILES FFI calls |
+| `ffi_build_request_us` | tokio_sapi_build_request() |
+| `ffi_init_eval_us` | Init eval (header_remove, ob_start) |
+| `script_exec_us` | PHP script execution time |
+| `output_capture_us` | Total output capture time |
+| `output_finalize_us` | Finalize eval (flush + headers) |
+| `output_stdout_restore_us` | Stdout restore time |
+| `output_read_us` | Output read time |
+| `output_parse_us` | Output parsing time |
+| `php_shutdown_us` | php_request_shutdown() time |
+| `response_build_us` | HTTP response building time |
+| `compression_us` | Brotli compression time |
 
 ## Understanding the Metrics
 
@@ -155,50 +175,71 @@ X-Profile-PHP-Shutdown-Us: 52
 
 | High Metric | Likely Cause | Solution |
 |-------------|--------------|----------|
-| Queue-Us | Workers overloaded | Increase PHP_WORKERS |
-| PHP-Startup-Us | Extensions loading | Reduce loaded extensions |
-| Superglobals-Us | Eval overhead (USE_EXT=0) | Use default FFI mode (USE_EXT=1) |
-| Script-Us | Slow PHP code | Optimize code, enable OPcache/JIT |
-| Output-Us | Large output | Reduce output size |
-| TLS-Handshake-Us | TLS overhead | Use keep-alive connections |
+| Queue Wait | Workers overloaded | N/A (single-worker in debug mode) |
+| PHP Startup | Extensions loading | Reduce loaded extensions |
+| Superglobals | Many variables | Reduce $_SERVER entries |
+| Script Execution | Slow PHP code | Optimize code, enable OPcache/JIT |
+| Output Capture | Large output | Reduce output size |
+| TLS Handshake | TLS overhead | Use keep-alive connections |
 
-### Comparing FFI vs Eval Mode
+### Typical Distribution
 
-```bash
-# FFI-based (default, USE_EXT=1) - shows individual timing
-X-Profile-FFI-Server-Us: 45
-X-Profile-FFI-Server-Count: 25
-X-Profile-FFI-Get-Us: 1
-X-Profile-FFI-Get-Count: 2
+For a well-optimized application:
 
-# Eval-based (USE_EXT=0)
-X-Profile-Superglobals-Us: 236
-```
+| Phase | Expected % |
+|-------|------------|
+| Parse Request | 2-5% |
+| Queue Wait | < 5% |
+| PHP Startup | 5-15% |
+| Superglobals | 1-5% |
+| Script Execution | 60-85% |
+| Output Capture | < 1% |
+| PHP Shutdown | 3-10% |
+| Response Build | < 1% |
 
-FFI mode (default) provides granular timing for each superglobal, useful for debugging.
+If Script Execution is < 50%, there's optimization potential in the server overhead.
+
+## Production vs Debug Builds
+
+| Aspect | Production | Debug Profile |
+|--------|------------|---------------|
+| Workers | Auto (CPU cores) | **1 (forced)** |
+| Profiling | Disabled | **Always on** |
+| Output | None | `/tmp/tokio_profile_request_*.md` |
+| Overhead | None | ~5-10% per request |
+| Use case | Production traffic | Performance analysis |
+
+**Important:** Never use debug-profile builds in production:
+- Single-threaded = limited throughput
+- File writes for every request = disk I/O overhead
+- Timing overhead affects measurements slightly
 
 ## Benchmarking
 
-### Without Profiling (Recommended for Benchmarks)
+### Without Profiling (Recommended)
 
 ```bash
-# Disable profiling for accurate benchmarks
-PROFILE=0 docker compose up -d
+# Production build for accurate benchmarks
+docker compose build
+docker compose up -d
 
 wrk -t4 -c100 -d10s http://localhost:8080/index.php
 ```
 
-### With Profiling
-
-Profiling adds ~5-10% overhead due to timing measurements:
+### With Profiling (Analysis)
 
 ```bash
-PROFILE=1 docker compose up -d
+# Debug build for timing analysis
+CARGO_FEATURES=debug-profile docker compose build
+docker compose up -d
 
-# Profile 10 requests
+# Run a few requests
 for i in {1..10}; do
-  curl -sI -H "X-Profile: 1" http://localhost:8080/index.php | grep X-Profile-Total
+  curl -s http://localhost:8080/index.php > /dev/null
 done
+
+# Analyze reports
+docker compose exec tokio_php sh -c 'cat /tmp/tokio_profile_request_*.md'
 ```
 
 ## Implementation
@@ -208,6 +249,11 @@ done
 ```rust
 // src/profiler.rs
 pub struct ProfileData {
+    // Request info
+    pub request_method: String,
+    pub request_url: String,
+
+    // Total time
     pub total_us: u64,
 
     // Connection & TLS
@@ -231,6 +277,28 @@ pub struct ProfileData {
 
     // Response
     pub response_build_us: u64,
+}
+
+impl ProfileData {
+    /// Generate markdown report with tree structure
+    #[cfg(feature = "debug-profile")]
+    pub fn to_markdown_report(&self, request_id: &str) -> String;
+
+    /// Write report to /tmp/tokio_profile_request_{id}.md
+    #[cfg(feature = "debug-profile")]
+    pub fn write_report(&self, request_id: &str);
+}
+```
+
+### Conditional Compilation
+
+Profiling code is completely removed from production builds:
+
+```rust
+// Only compiled with debug-profile feature
+#[cfg(feature = "debug-profile")]
+if let Some(ref profile) = resp.profile {
+    profile.write_report(request_id);
 }
 ```
 
@@ -262,18 +330,17 @@ impl Timer {
 
 ## Best Practices
 
-1. **Disable in production** - Profiling adds overhead
-2. **Sample requests** - Don't profile every request under load
-3. **Compare consistently** - Profile same endpoint multiple times
-4. **Watch queue time** - High queue time indicates worker bottleneck
-5. **Check TLS impact** - First request has handshake, subsequent don't
-6. **FFI mode is default** - `USE_EXT=1` provides detailed superglobal timing
+1. **Use for analysis only** — Profile when investigating performance issues
+2. **Run multiple requests** — Single requests have variance; look at patterns
+3. **Compare before/after** — Profile before and after optimizations
+4. **Check script vs overhead** — If PHP execution is < 60%, investigate server overhead
+5. **Profile with realistic data** — Use production-like request payloads
+6. **Clean up reports** — Delete old reports: `rm /tmp/tokio_profile_request_*.md`
 
 ## See Also
 
-- [Configuration](configuration.md) - PROFILE environment variable
-- [tokio_sapi Extension](tokio-sapi-extension.md) - FFI profiling details
-- [Internal Server](internal-server.md) - Prometheus metrics for monitoring
-- [Worker Pool](worker-pool.md) - Queue and worker configuration
-- [HTTP/2 & TLS](http2-tls.md) - TLS configuration
+- [Configuration](configuration.md) - Environment variables reference
+- [tokio_sapi Extension](tokio-sapi-extension.md) - FFI superglobals implementation
+- [Internal Server](internal-server.md) - Prometheus metrics for runtime monitoring
+- [Worker Pool](worker-pool.md) - Worker configuration
 - [Architecture](architecture.md) - System overview
