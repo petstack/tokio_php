@@ -598,18 +598,9 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                         tokio_sapi_request_init(request_id);
                     }
 
-                    // Profiling: script execution (includes superglobals + script + finalize)
-                    let script_start = Instant::now();
-
                     // Execute script via FFI (output goes through ub_write -> stream_tx)
                     // Note: StdoutCapture is no longer used - ub_write handles output
-                    execute_script_streaming(&request, request_id, id);
-
-                    let script_exec_us = if profiling {
-                        script_start.elapsed().as_micros() as u64
-                    } else {
-                        0
-                    };
+                    let exec_timing = execute_script_streaming(&request, request_id, id, profiling);
 
                     // Profiling: PHP shutdown
                     let shutdown_start = Instant::now();
@@ -632,14 +623,40 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                     // Send profile data before finalize (which clears the state)
                     if profiling {
                         if let Some(tx) = sapi::get_stream_sender() {
+                            let total_script_us = exec_timing.superglobals_build_us
+                                + exec_timing.ffi_init_eval_us
+                                + exec_timing.script_exec_us
+                                + exec_timing.finalize_us;
                             let profile = ProfileData {
                                 total_us: queue_wait_us
                                     + php_startup_us
-                                    + script_exec_us
+                                    + total_script_us
                                     + php_shutdown_us,
                                 queue_wait_us,
                                 php_startup_us,
-                                script_exec_us,
+                                // Superglobals breakdown
+                                superglobals_us: exec_timing.superglobals_build_us,
+                                superglobals_build_us: exec_timing.superglobals_build_us,
+                                superglobals_eval_us: 0,
+                                // FFI breakdown
+                                ffi_request_init_us: exec_timing.ffi_request_init_us,
+                                ffi_clear_us: exec_timing.ffi_clear_us,
+                                ffi_server_us: exec_timing.ffi_server_us,
+                                ffi_server_count: exec_timing.ffi_server_count,
+                                ffi_get_us: exec_timing.ffi_get_us,
+                                ffi_get_count: exec_timing.ffi_get_count,
+                                ffi_post_us: exec_timing.ffi_post_us,
+                                ffi_post_count: exec_timing.ffi_post_count,
+                                ffi_cookie_us: exec_timing.ffi_cookie_us,
+                                ffi_cookie_count: exec_timing.ffi_cookie_count,
+                                ffi_files_us: exec_timing.ffi_files_us,
+                                ffi_files_count: exec_timing.ffi_files_count,
+                                ffi_build_request_us: exec_timing.ffi_build_request_us,
+                                ffi_init_eval_us: exec_timing.ffi_init_eval_us,
+                                // Script & output
+                                script_exec_us: exec_timing.script_exec_us,
+                                output_capture_us: exec_timing.finalize_us,
+                                finalize_eval_us: exec_timing.finalize_us,
                                 php_shutdown_us,
                                 ..Default::default()
                             };
@@ -669,13 +686,26 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
 
 /// Execute PHP script with streaming output (no StdoutCapture).
 /// Output goes through SAPI ub_write callback to stream_tx.
-fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_id: usize) {
+/// Returns timing data for profiling.
+fn execute_script_streaming(
+    request: &ScriptRequest,
+    _request_id: u64,
+    _worker_id: usize,
+    profiling: bool,
+) -> ExtExecutionTiming {
+    let mut timing = ExtExecutionTiming::default();
+
     // Initialize superglobal array caches (for $_GET, $_POST, $_FILES)
+    let phase_start = Instant::now();
     unsafe {
         tokio_sapi_init_superglobals();
     }
+    if profiling {
+        timing.ffi_clear_us = phase_start.elapsed().as_micros() as u64;
+    }
 
     // Set $_GET variables (batch)
+    let phase_start = Instant::now();
     let (buf_len, count) = GET_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
         pack_into_buffer(
@@ -689,8 +719,13 @@ fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_i
             tokio_sapi_set_get_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
         });
     }
+    if profiling {
+        timing.ffi_get_us = phase_start.elapsed().as_micros() as u64;
+        timing.ffi_get_count = count as u64;
+    }
 
     // Set $_POST variables (batch)
+    let phase_start = Instant::now();
     let (buf_len, count) = POST_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
         pack_into_buffer(
@@ -704,6 +739,10 @@ fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_i
             tokio_sapi_set_post_vars_batch(buf.borrow().as_ptr() as *const c_char, buf_len, count);
         });
     }
+    if profiling {
+        timing.ffi_post_us = phase_start.elapsed().as_micros() as u64;
+        timing.ffi_post_count = count as u64;
+    }
 
     // Set raw request body for php://input
     if let Some(ref body) = request.raw_body {
@@ -713,6 +752,7 @@ fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_i
     }
 
     // Set $_COOKIE variables (batch)
+    let phase_start = Instant::now();
     let (buf_len, count) = COOKIE_BUFFER.with(|buf| {
         let mut buf = buf.borrow_mut();
         pack_into_buffer(&mut buf, request.cookies.iter().map(|(k, v)| (k, v)), &[])
@@ -726,8 +766,14 @@ fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_i
             );
         });
     }
+    if profiling {
+        timing.ffi_cookie_us = phase_start.elapsed().as_micros() as u64;
+        timing.ffi_cookie_count = count as u64;
+    }
 
     // Set $_FILES variables
+    let phase_start = Instant::now();
+    let mut files_count: u64 = 0;
     unsafe {
         for (field_name, files_vec) in &request.files {
             for file in files_vec {
@@ -748,27 +794,45 @@ fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_i
                 if !file.tmp_name.is_empty() {
                     sapi::register_temp_file(PathBuf::from(file.tmp_name.as_str()));
                 }
+                files_count += 1;
             }
         }
     }
+    if profiling {
+        timing.ffi_files_us = phase_start.elapsed().as_micros() as u64;
+        timing.ffi_files_count = files_count;
+    }
 
     // Build $_REQUEST from $_GET + $_POST
+    let phase_start = Instant::now();
     unsafe {
         tokio_sapi_build_request();
     }
+    if profiling {
+        timing.ffi_build_request_us = phase_start.elapsed().as_micros() as u64;
+    }
 
     // Initialize PHP state (headers, output buffering) via FFI
+    let phase_start = Instant::now();
     unsafe {
         tokio_sapi_init_request_state();
     }
+    if profiling {
+        timing.ffi_init_eval_us = phase_start.elapsed().as_micros() as u64;
+    }
 
     // Execute script via FFI
+    let phase_start = Instant::now();
     unsafe {
         let path_c = CString::new(request.script_path.as_str()).unwrap_or_default();
         tokio_sapi_execute_script(path_c.as_ptr());
     }
+    if profiling {
+        timing.script_exec_us = phase_start.elapsed().as_micros() as u64;
+    }
 
     // Finalize (flush PHP buffers) - output goes through ub_write
+    let phase_start = Instant::now();
     unsafe {
         zend_eval_string(
             FINALIZE_CODE.as_ptr() as *mut c_char,
@@ -776,6 +840,18 @@ fn execute_script_streaming(request: &ScriptRequest, _request_id: u64, _worker_i
             FINALIZE_NAME.as_ptr() as *mut c_char,
         );
     }
+    if profiling {
+        timing.finalize_us = phase_start.elapsed().as_micros() as u64;
+        // Calculate total superglobals time
+        timing.superglobals_build_us = timing.ffi_clear_us
+            + timing.ffi_get_us
+            + timing.ffi_post_us
+            + timing.ffi_cookie_us
+            + timing.ffi_files_us
+            + timing.ffi_build_request_us;
+    }
+
+    timing
 }
 
 // =============================================================================

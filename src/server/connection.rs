@@ -695,7 +695,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .as_deref()
             .unwrap_or_else(|| trace_ctx.short_id());
 
-        // Check rate limit (per-IP)
+        // Check rate limit (per-IP) with timing
+        let rate_limit_start = Instant::now();
         if let Some(ref limiter) = self.rate_limiter {
             let (allowed, _remaining, reset_after) = limiter.check(remote_addr.ip());
             if !allowed {
@@ -717,6 +718,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 return Ok(full_to_flexible(response));
             }
         }
+        let rate_limit_us = rate_limit_start.elapsed().as_micros() as u64;
 
         // Increment request method metrics
         self.request_metrics.increment_method(req.method());
@@ -764,7 +766,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let mut response = match req.method().as_str() {
             "GET" | "POST" | "HEAD" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "QUERY" => {
                 let mut resp = self
-                    .process_request(req, remote_addr, tls_info, &trace_ctx)
+                    .process_request(req, remote_addr, tls_info, &trace_ctx, rate_limit_us)
                     .await;
 
                 // HEAD: return headers only, no body
@@ -903,6 +905,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
         trace_ctx: &TraceContext,
+        rate_limit_us: u64,
     ) -> FlexibleResponse {
         // Capture request timestamp at the very start
         let request_time = std::time::SystemTime::now()
@@ -1380,6 +1383,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                                 profile.tls_alpn = tls.alpn.clone();
                             }
 
+                            profile.rate_limit_us = rate_limit_us;
                             profile.parse_request_us = parse_request_us;
                             profile.headers_extract_us = headers_extract_us;
                             profile.query_parse_us = query_parse_us;

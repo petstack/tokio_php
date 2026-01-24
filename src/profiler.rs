@@ -16,6 +16,10 @@ pub struct ProfileData {
     pub tls_protocol: String,  // TLS 1.2, TLS 1.3, or empty for plain HTTP
     pub tls_alpn: String,      // ALPN negotiated protocol (h2, http/1.1)
 
+    // === Middleware (Rust) ===
+    pub rate_limit_us: u64,    // Rate limiting check
+    pub middleware_req_us: u64, // Total request middleware time
+
     // === Server-side parsing (server.rs) ===
     pub parse_request_us: u64,   // Total parse time
     pub headers_extract_us: u64, // Extract HTTP headers from request
@@ -26,9 +30,11 @@ pub struct ProfileData {
     pub server_vars_us: u64,     // Build $_SERVER vars
     pub path_resolve_us: u64,    // URL decode + path resolution
     pub file_check_us: u64,      // Path::exists() check
+    pub trace_context_us: u64,   // W3C trace context parsing
 
     // === Executor queue ===
-    pub queue_wait_us: u64, // Time waiting in worker queue
+    pub queue_wait_us: u64,   // Time waiting in worker queue
+    pub channel_send_us: u64, // Time to send request to worker channel
 
     // === PHP execution (php.rs) ===
     pub php_startup_us: u64, // php_request_startup()
@@ -70,10 +76,19 @@ pub struct ProfileData {
     pub php_shutdown_us: u64, // php_request_shutdown()
 
     // === Response building (server.rs) ===
-    pub response_build_us: u64, // Build HTTP response
+    pub response_build_us: u64,   // Build HTTP response from ScriptResponse
+    pub compression_us: u64,      // Brotli compression time
+    pub compression_ratio: f32,   // Compression ratio (compressed/original)
+    pub middleware_resp_us: u64,  // Total response middleware time
+    pub headers_build_us: u64,    // Building response headers
+    pub body_collect_us: u64,     // Collecting body from stream
 
     // === Streaming early response ===
     pub early_finish: bool, // True if response was sent via tokio_finish_request()
+
+    // === Static file serving ===
+    pub static_file_us: u64, // Static file read time (non-PHP)
+    pub static_file_size: u64, // Static file size in bytes
 }
 
 impl ProfileData {
@@ -104,6 +119,20 @@ impl ProfileData {
         }
         if !self.tls_alpn.is_empty() {
             headers.push(("X-Profile-TLS-ALPN".to_string(), self.tls_alpn.clone()));
+        }
+
+        // Middleware (Rust-side)
+        if self.rate_limit_us > 0 {
+            headers.push((
+                "X-Profile-RateLimit-Us".to_string(),
+                self.rate_limit_us.to_string(),
+            ));
+        }
+        if self.middleware_req_us > 0 {
+            headers.push((
+                "X-Profile-Middleware-Req-Us".to_string(),
+                self.middleware_req_us.to_string(),
+            ));
         }
 
         // Parse breakdown
@@ -144,11 +173,31 @@ impl ProfileData {
                 "X-Profile-Parse-FileCheck-Us".to_string(),
                 self.file_check_us.to_string(),
             ),
-            // Queue
+        ]);
+
+        if self.trace_context_us > 0 {
+            headers.push((
+                "X-Profile-Parse-TraceCtx-Us".to_string(),
+                self.trace_context_us.to_string(),
+            ));
+        }
+
+        // Queue
+        headers.extend([
             (
                 "X-Profile-Queue-Us".to_string(),
                 self.queue_wait_us.to_string(),
             ),
+        ]);
+
+        if self.channel_send_us > 0 {
+            headers.push((
+                "X-Profile-Channel-Send-Us".to_string(),
+                self.channel_send_us.to_string(),
+            ));
+        }
+
+        headers.extend([
             // PHP startup
             (
                 "X-Profile-PHP-Startup-Us".to_string(),
@@ -274,6 +323,48 @@ impl ProfileData {
                 self.response_build_us.to_string(),
             ),
         ]);
+
+        // Response-side details
+        if self.compression_us > 0 {
+            headers.push((
+                "X-Profile-Compression-Us".to_string(),
+                self.compression_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-Compression-Ratio".to_string(),
+                format!("{:.2}", self.compression_ratio),
+            ));
+        }
+        if self.middleware_resp_us > 0 {
+            headers.push((
+                "X-Profile-Middleware-Resp-Us".to_string(),
+                self.middleware_resp_us.to_string(),
+            ));
+        }
+        if self.headers_build_us > 0 {
+            headers.push((
+                "X-Profile-Headers-Build-Us".to_string(),
+                self.headers_build_us.to_string(),
+            ));
+        }
+        if self.body_collect_us > 0 {
+            headers.push((
+                "X-Profile-Body-Collect-Us".to_string(),
+                self.body_collect_us.to_string(),
+            ));
+        }
+
+        // Static file serving
+        if self.static_file_us > 0 {
+            headers.push((
+                "X-Profile-Static-File-Us".to_string(),
+                self.static_file_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-Static-File-Size".to_string(),
+                self.static_file_size.to_string(),
+            ));
+        }
 
         headers
     }

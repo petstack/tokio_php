@@ -129,10 +129,12 @@ pub fn not_found_response() -> Response<Full<Bytes>> {
 /// Create a response from a PHP script execution result.
 #[inline]
 pub fn from_script_response(
-    script_response: ScriptResponse,
+    mut script_response: ScriptResponse,
     profiling: bool,
     use_brotli: bool,
 ) -> Response<Full<Bytes>> {
+    use std::time::Instant;
+
     // Fast path: no headers to process, no profiling, no compression
     if script_response.headers.is_empty() && !profiling && !use_brotli {
         return Response::builder()
@@ -146,6 +148,8 @@ pub fn from_script_response(
             }))
             .unwrap();
     }
+
+    let response_build_start = Instant::now();
 
     // Full header processing
     let mut status = StatusCode::OK;
@@ -200,11 +204,13 @@ pub fn from_script_response(
 
     // Determine body and compression
     let body_bytes = script_response.body;
+    let original_size = body_bytes.len();
     let should_compress = use_brotli
-        && body_bytes.len() >= MIN_COMPRESSION_SIZE
-        && body_bytes.len() <= MAX_COMPRESSION_SIZE
+        && original_size >= MIN_COMPRESSION_SIZE
+        && original_size <= MAX_COMPRESSION_SIZE
         && should_compress_mime(&actual_content_type);
 
+    let compression_start = Instant::now();
     let (final_body, is_compressed) = if should_compress {
         match compress_brotli(body_bytes.as_bytes()) {
             Some(compressed) => (Bytes::from(compressed), true),
@@ -214,6 +220,16 @@ pub fn from_script_response(
         (EMPTY_BODY.clone(), false)
     } else {
         (Bytes::from(body_bytes), false)
+    };
+    let compression_us = if profiling && should_compress {
+        compression_start.elapsed().as_micros() as u64
+    } else {
+        0
+    };
+    let compression_ratio = if is_compressed && original_size > 0 {
+        final_body.len() as f32 / original_size as f32
+    } else {
+        0.0
     };
 
     let mut builder = Response::builder()
@@ -238,7 +254,15 @@ pub fn from_script_response(
 
     // Add profiling headers if profiling is enabled
     if profiling {
-        if let Some(ref profile) = script_response.profile {
+        if let Some(ref mut profile) = script_response.profile {
+            // Add response building timing
+            profile.response_build_us = response_build_start.elapsed().as_micros() as u64;
+            profile.compression_us = compression_us;
+            profile.compression_ratio = compression_ratio;
+
+            // Recalculate total including response build time
+            profile.total_us = profile.total_us.saturating_add(profile.response_build_us);
+
             for (name, value) in profile.to_headers() {
                 builder = builder.header(name, value);
             }
