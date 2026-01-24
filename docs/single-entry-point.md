@@ -269,9 +269,100 @@ Both:
 - Route other requests to index.php
 - Block direct access to index.php
 
+## Using HTML Index File (SPA Mode)
+
+`INDEX_FILE` can point to an HTML file for Single Page Applications (SPA) like React, Vue, or Angular.
+
+### Configuration
+
+```bash
+# SPA mode - serve index.html for all routes
+INDEX_FILE=index.html docker compose up -d
+```
+
+### Behavior
+
+When `INDEX_FILE` points to an HTML file:
+
+```
+Request              Resolved Path                  Action
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/                    /var/www/html/index.html       Static serve
+/about               /var/www/html/index.html       Static serve
+/api/users           /var/www/html/index.html       Static serve
+/style.css           /var/www/html/style.css        Static serve (exists)
+/app.js              /var/www/html/app.js           Static serve (exists)
+```
+
+**Important:** PHP is **not executed** when `INDEX_FILE` is an HTML file. The file is served as static content.
+
+### How It Works
+
+The routing decision is based on file extension:
+
+```rust
+// routing.rs - resolve to index file
+if file_not_found || extension == "php" {
+    return index_file_path;  // e.g., index.html
+}
+
+// connection.rs - serve based on extension
+if extension == "php" {
+    // Execute PHP
+} else {
+    // Serve as static file ← HTML goes here
+}
+```
+
+### When to Use
+
+| Use Case | INDEX_FILE | Result |
+|----------|------------|--------|
+| Laravel, Symfony | `index.php` | PHP routing |
+| React, Vue, Angular SPA | `index.html` | Client-side routing |
+| Static site | `index.html` | Static HTML |
+
+### SPA Example
+
+```bash
+# Build your SPA
+npm run build
+
+# Serve with tokio_php
+docker run -d -p 8080:8080 \
+  -e INDEX_FILE=index.html \
+  -v $(pwd)/dist:/var/www/html:ro \
+  tokio_php
+```
+
+All routes serve `index.html`, JavaScript handles routing on the client.
+
+### Mixing PHP and SPA
+
+If you need both PHP API and SPA frontend, use separate paths:
+
+```
+/var/www/html/
+├── api/
+│   └── index.php      # PHP API (accessed directly)
+├── index.html         # SPA entry point
+├── app.js
+└── style.css
+```
+
+```bash
+# Don't use INDEX_FILE - access files directly
+docker run -d -p 8080:8080 \
+  -v $(pwd)/dist:/var/www/html:ro \
+  tokio_php
+```
+
+Or use a reverse proxy (nginx) to route `/api/*` to PHP and other routes to SPA.
+
 ## See Also
 
 - [Configuration](configuration.md) - Environment variables reference
 - [Architecture](architecture.md) - System design overview
 - [Framework Compatibility](framework-compatibility.md) - Laravel, Symfony setup and caveats
-- [Static Caching](static-caching.md) - Cache headers for static files (normal mode)
+- [Static Caching](static-caching.md) - Cache headers for static files
+- [Static Files](static-files.md) - Static file serving details

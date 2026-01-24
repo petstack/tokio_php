@@ -143,6 +143,27 @@ curl -I -H 'If-Modified-Since: Sun, 28 Dec 2025 21:42:49 GMT' http://localhost:8
 
 Caching headers are **only applied to static files**. PHP responses are not cached by this mechanism - use PHP's `header()` function to set caching for dynamic content.
 
+## INDEX_FILE with HTML
+
+When `INDEX_FILE` points to an HTML file (e.g., `INDEX_FILE=index.html` for SPA), the HTML file is served as a static file with caching headers applied:
+
+```bash
+# SPA mode with caching
+INDEX_FILE=index.html STATIC_CACHE_TTL=1h docker compose up -d
+```
+
+Response headers:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: text/html
+Cache-Control: public, max-age=3600
+ETag: "abc123-65a51a2d"
+Last-Modified: Sun, 29 Dec 2024 12:00:00 GMT
+```
+
+**Note:** For SPAs, consider shorter TTL for `index.html` (e.g., `1h`) while using versioned assets with longer TTL. Use a CDN or separate cache configuration for optimal SPA caching.
+
 ## Compression
 
 Static file caching works together with Brotli compression. Compressed responses include:

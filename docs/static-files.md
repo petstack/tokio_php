@@ -310,6 +310,43 @@ pub fn should_stream_file(size: u64, is_compressible: bool) -> bool {
 }
 ```
 
+## INDEX_FILE with HTML (SPA Mode)
+
+When `INDEX_FILE` points to an HTML file, the server operates in SPA (Single Page Application) mode:
+
+```bash
+# SPA mode - all non-existent paths serve index.html
+INDEX_FILE=index.html docker compose up -d
+```
+
+### Routing Behavior
+
+```
+Request              File Exists?    Action
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/                    —               Serve index.html (static)
+/about               No              Serve index.html (static)
+/users/123           No              Serve index.html (static)
+/style.css           Yes             Serve style.css (static)
+/api.php             Yes             Execute PHP ✓
+```
+
+**Key point:** The HTML index file is served as a static file, not executed as PHP. PHP execution only happens for `.php` files that exist on disk.
+
+### SPA Optimization
+
+HTML index files benefit from static file optimizations:
+
+| Feature | Applies to HTML |
+|---------|-----------------|
+| In-memory serving | ✓ (if < 3 MB) |
+| Brotli compression | ✓ |
+| ETag / Last-Modified | ✓ |
+| Cache-Control headers | ✓ |
+| 304 Not Modified | ✓ |
+
+See [Single Entry Point](single-entry-point.md#using-html-index-file-spa-mode) for full SPA documentation.
+
 ## Limitations
 
 - No range request support for streaming (Accept-Ranges header is informational)
