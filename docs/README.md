@@ -91,7 +91,8 @@ tokio_php/
 │   │   ├── config.rs        # Server configuration
 │   │   ├── connection.rs    # Connection handling
 │   │   ├── internal.rs      # Health/metrics server
-│   │   ├── routing.rs       # URL routing
+│   │   ├── routing.rs       # URL routing (RouteConfig, RouteResult)
+│   │   ├── file_cache.rs    # LRU file cache (FileType, FileCache)
 │   │   ├── request/         # Request parsing
 │   │   └── response/        # Response building, compression
 │   ├── listener/            # Connection listeners

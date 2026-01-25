@@ -47,6 +47,7 @@ brotli = "7"
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 tokio-test = "0.4"
+tempfile = "3"
 
 # Integration tests run against a Docker container, not linked with PHP
 [[test]]

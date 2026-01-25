@@ -387,7 +387,7 @@ use super::response::{
     stub_response_with_profile, FlexibleResponse, BAD_REQUEST_BODY, EMPTY_BODY,
     METHOD_NOT_ALLOWED_BODY,
 };
-use super::routing::{is_direct_index_access, is_php_uri, resolve_file_path};
+use super::routing::is_php_uri;
 use crate::executor::{ExecuteResult, ScriptExecutor, DEFAULT_STREAM_BUFFER_SIZE};
 use crate::middleware::rate_limit::RateLimiter;
 use crate::types::{ScriptRequest, UploadedFile};
@@ -405,87 +405,8 @@ fn is_connection_error(err_str: &str) -> bool {
 }
 
 use super::internal::RequestMetrics;
+use super::routing::{resolve_request, RouteResult};
 use crate::trace_context::TraceContext;
-
-// ============================================================================
-// File Existence Cache (LRU with max 20 entries)
-// ============================================================================
-
-use std::collections::VecDeque;
-use std::sync::RwLock;
-
-/// Maximum number of cached file paths.
-const FILE_CACHE_CAPACITY: usize = 20;
-
-/// Simple LRU cache for file existence checks.
-/// Thread-safe with RwLock, stores up to 20 file paths known to exist.
-/// When full, oldest entry is evicted (FIFO).
-pub struct FileExistsCache {
-    /// Cached paths (most recently used at back).
-    paths: RwLock<VecDeque<Box<str>>>,
-}
-
-impl FileExistsCache {
-    /// Create a new empty cache.
-    pub fn new() -> Self {
-        Self {
-            paths: RwLock::new(VecDeque::with_capacity(FILE_CACHE_CAPACITY)),
-        }
-    }
-
-    /// Check if file exists, using cache.
-    /// Returns true if file exists (cached or verified), false otherwise.
-    #[inline]
-    pub fn file_exists(&self, path: &Path) -> bool {
-        self.file_exists_with_cache_info(path).0
-    }
-
-    /// Check if file exists, using cache.
-    /// Returns (exists, cache_hit) - whether file exists and whether result was from cache.
-    #[inline]
-    pub fn file_exists_with_cache_info(&self, path: &Path) -> (bool, bool) {
-        let path_str = path.to_string_lossy();
-
-        // Fast path: check cache (read lock)
-        {
-            let cache = self.paths.read().unwrap();
-            if cache.iter().any(|p| p.as_ref() == path_str) {
-                return (true, true); // exists, cache hit
-            }
-        }
-
-        // Cache miss: check filesystem
-        if !path.exists() {
-            return (false, false); // not exists, cache miss
-        }
-
-        // File exists: add to cache (write lock)
-        {
-            let mut cache = self.paths.write().unwrap();
-
-            // Double-check it wasn't added while we waited for write lock
-            if cache.iter().any(|p| p.as_ref() == path_str) {
-                return (true, true); // exists, cache hit (added by another thread)
-            }
-
-            // Evict oldest if at capacity
-            if cache.len() >= FILE_CACHE_CAPACITY {
-                cache.pop_front();
-            }
-
-            // Add new entry
-            cache.push_back(path_str.into_owned().into_boxed_str());
-        }
-
-        (true, false) // exists, cache miss
-    }
-}
-
-impl Default for FileExistsCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// Connection handler context.
 pub struct ConnectionContext<E: ScriptExecutor> {
@@ -494,10 +415,9 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     /// Cached document root as Cow::Borrowed with 'static lifetime (zero allocation per request).
     /// Created by leaking the document_root string at server startup.
     pub document_root_static: std::borrow::Cow<'static, str>,
-    pub skip_file_check: bool,
     pub is_stub_mode: bool,
-    pub index_file_path: Option<Arc<str>>,
-    pub index_file_name: Option<Arc<str>>,
+    /// Route configuration (INDEX_FILE handling)
+    pub route_config: Arc<super::routing::RouteConfig>,
     pub active_connections: Arc<AtomicUsize>,
     pub request_metrics: Arc<RequestMetrics>,
     pub error_pages: ErrorPages,
@@ -511,8 +431,8 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub profile_enabled: bool,
     /// Access logging enabled (ACCESS_LOG=1).
     pub access_log_enabled: bool,
-    /// Cache for file existence checks (max 20 entries, FIFO eviction).
-    pub file_exists_cache: Arc<FileExistsCache>,
+    /// File cache (LRU, max 200 entries).
+    pub file_cache: Arc<super::file_cache::FileCache>,
 }
 
 impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
@@ -939,11 +859,6 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let uri_path = uri.path();
         let query_string = uri.query().unwrap_or("");
 
-        // Block direct access to index file in single entry point mode
-        if is_direct_index_access(uri_path, self.index_file_name.as_ref()) {
-            return full_to_flexible(not_found_response());
-        }
-
         // Profiling is controlled by compile-time feature, not runtime header
         #[cfg(feature = "debug-profile")]
         let profiling_enabled = true;
@@ -1130,33 +1045,30 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             (Vec::new(), Vec::new(), None)
         };
 
-        // Resolve file path
+        // Resolve route (routing + file existence check combined)
         let path_start = Instant::now();
-        let file_path_string =
-            resolve_file_path(uri_path, &self.document_root, self.index_file_path.as_ref());
-        let file_path = Path::new(&file_path_string);
+        let route_result = if self.is_stub_mode {
+            // Stub mode: route to PHP without file checks
+            RouteResult::Execute(format!("{}/index.php", self.document_root))
+        } else {
+            resolve_request(uri_path, &self.route_config, &self.file_cache)
+        };
 
-        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if profiling_enabled {
-            path_resolve_us = path_start.elapsed().as_micros() as u64;
-        }
-
-        // Check if file exists (uses LRU cache for repeated requests)
-        let file_check_start = Instant::now();
-        let file_cache_hit: bool;
-        if !self.skip_file_check {
-            let (exists, cache_hit) = self
-                .file_exists_cache
-                .file_exists_with_cache_info(file_path);
-            file_cache_hit = cache_hit;
-            if !exists {
+        // Handle routing result
+        let file_path_string = match &route_result {
+            RouteResult::Execute(path) | RouteResult::Serve(path) => path.clone(),
+            RouteResult::NotFound => {
                 return full_to_flexible(not_found_response());
             }
-        } else {
-            file_cache_hit = false; // Skip file check mode doesn't use cache
-        }
+        };
+        let file_path = Path::new(&file_path_string);
+        let is_php = matches!(route_result, RouteResult::Execute(_));
+
+        // For profiling compatibility
+        let file_cache_hit = false; // Cache hit info is now internal to resolve_request
         if profiling_enabled {
-            file_check_us = file_check_start.elapsed().as_micros() as u64;
+            path_resolve_us = path_start.elapsed().as_micros() as u64;
+            file_check_us = 0; // Combined with path resolution
         }
 
         // Build server variables
@@ -1346,7 +1258,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             server_vars_us = server_vars_start.elapsed().as_micros() as u64;
         }
 
-        if extension == "php" {
+        if is_php {
             let temp_files: Vec<String> = files
                 .iter()
                 .flat_map(|(_, file_vec): &(String, Vec<UploadedFile>)| {
@@ -1404,7 +1316,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             // Routing info
                             profile.route_type = RouteType::Php;
                             profile.resolved_path = file_path_string.clone();
-                            profile.index_file_mode = self.index_file_path.is_some();
+                            profile.index_file_mode = self.route_config.index_file.is_some();
                             profile.file_cache_hit = file_cache_hit;
 
                             profile.request_method = method.to_string();
@@ -1572,32 +1484,35 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let uri_path = uri.path();
         let query_string = uri.query().unwrap_or("");
 
-        // Resolve file path
-        let file_path_string =
-            resolve_file_path(uri_path, &self.document_root, self.index_file_path.as_ref());
+        // Resolve route
+        let route_result = if self.is_stub_mode {
+            RouteResult::Execute(format!("{}/index.php", self.document_root))
+        } else {
+            resolve_request(uri_path, &self.route_config, &self.file_cache)
+        };
+
+        // SSE only works for PHP scripts (RouteResult::Execute)
+        let file_path_string = match route_result {
+            RouteResult::Execute(path) => path,
+            RouteResult::Serve(_) => {
+                // Return error for non-PHP SSE requests
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header(
+                        header_names::CONTENT_TYPE.clone(),
+                        header_values::TEXT_PLAIN.clone(),
+                    )
+                    .body(Full::new(Bytes::from_static(
+                        b"SSE only supported for PHP scripts",
+                    )))
+                    .unwrap();
+                return Ok(full_to_flexible(response));
+            }
+            RouteResult::NotFound => {
+                return Ok(full_to_flexible(not_found_response()));
+            }
+        };
         let file_path = Path::new(&file_path_string);
-        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        // SSE only works for PHP scripts
-        if extension != "php" {
-            // Return error for non-PHP SSE requests
-            let response = Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header(
-                    header_names::CONTENT_TYPE.clone(),
-                    header_values::TEXT_PLAIN.clone(),
-                )
-                .body(Full::new(Bytes::from_static(
-                    b"SSE only supported for PHP scripts",
-                )))
-                .unwrap();
-            return Ok(full_to_flexible(response));
-        }
-
-        // Check file exists (uses LRU cache for repeated requests)
-        if !self.skip_file_check && !self.file_exists_cache.file_exists(file_path) {
-            return Ok(full_to_flexible(not_found_response()));
-        }
 
         // Build minimal server vars for SSE (optimized with static values)
         let request_time = std::time::SystemTime::now()

@@ -901,19 +901,110 @@ Supported MIME types:
 
 Note: WOFF/WOFF2 fonts are not compressed (already use internal compression).
 
-## Single Entry Point Mode
+## Routing System
 
-For Laravel/Symfony-style routing, set `INDEX_FILE` to route all requests through a single script:
+The routing system supports three modes based on the `INDEX_FILE` environment variable.
 
-```bash
-INDEX_FILE=index.php docker compose up -d
+### Routing Components
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| `RouteConfig` | `src/server/routing.rs` | Configuration: document_root, index_file, index_file_path, index_file_is_php |
+| `RouteResult` | `src/server/routing.rs` | Enum: Execute(path), Serve(path), NotFound |
+| `FileCache` | `src/server/file_cache.rs` | LRU cache (200 entries) storing FileType: File, Dir, or None |
+
+### Routing Modes
+
+| Mode | INDEX_FILE | Behavior |
+|------|------------|----------|
+| **Traditional** | _(empty)_ | Direct file mapping, index.php → index.html → 404 |
+| **Framework** | `index.php` | All requests → index.php, blocks all .php direct access |
+| **SPA** | `index.html` | All requests → index.html (static), PHP files still work |
+
+### Routing Logic
+
+```
+1. Decode URI and sanitize (remove "..")
+2. Direct access to INDEX_FILE → 404
+3. INDEX_FILE=*.php and uri=*.php → 404
+4. Root path "/" → resolve with index file
+5. Trailing slash → directory mode
+6. File exists → serve/execute
+7. File not found + INDEX_FILE set → fallback to INDEX_FILE
+8. → 404
 ```
 
-Behavior (nginx `try_files` equivalent):
-- Static files served directly if they exist (e.g., `/style.css` -> served)
-- Other requests route to index file (e.g., `/api/users` -> `index.php`)
-- Direct access to the index file returns 404 (e.g., `/index.php` -> 404)
-- Index file existence validated at startup (server exits if missing)
+### Traditional Mode (INDEX_FILE='')
+
+```bash
+docker compose up -d  # No INDEX_FILE set
+```
+
+| Request | File Exists | Result |
+|---------|-------------|--------|
+| `/` | — | index.php → index.html → 404 |
+| `/about/` | — | about/index.php → about/index.html → 404 |
+| `/script.php` | Yes | Execute PHP |
+| `/script.php` | No | 404 |
+| `/style.css` | Yes | Serve static |
+| `/style.css` | No | 404 |
+
+### Framework Mode (INDEX_FILE=index.php)
+
+```bash
+INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d
+```
+
+| Request | Result |
+|---------|--------|
+| `/` | Execute index.php |
+| `/api/users` | Execute index.php |
+| `/about/` | Execute index.php |
+| `/index.php` | **404** (direct access blocked) |
+| `/admin.php` | **404** (all .php blocked) |
+| `/style.css` (exists) | Serve static |
+| `/missing.css` | Execute index.php |
+
+**Key behavior:** When INDEX_FILE is a PHP file, ALL `.php` requests are blocked with 404.
+
+### SPA Mode (INDEX_FILE=index.html)
+
+```bash
+INDEX_FILE=index.html docker compose up -d
+```
+
+| Request | File Exists | Result |
+|---------|-------------|--------|
+| `/` | — | Serve index.html |
+| `/about` | No | Serve index.html |
+| `/users/123` | No | Serve index.html |
+| `/index.html` | — | **404** (direct access blocked) |
+| `/api.php` | Yes | Execute PHP |
+| `/api.php` | No | Serve index.html |
+| `/style.css` | Yes | Serve static |
+
+**Key behavior:** PHP files still execute if they exist. Only missing files fallback to index.html.
+
+### File Cache (LRU)
+
+The `FileCache` reduces filesystem syscalls:
+
+- **Capacity:** 200 entries
+- **Stores:** `Option<FileType>` where FileType is File, Dir, or None (doesn't exist)
+- **Thread-safe:** RwLock for concurrent access
+- **Eviction:** Least Recently Used when full
+
+```rust
+pub fn check(&self, path: &str) -> (Option<FileType>, bool)  // (type, cache_hit)
+pub fn is_file(&self, path: &str) -> bool
+pub fn is_dir(&self, path: &str) -> bool
+```
+
+### Directory Handling
+
+- Trailing slash (`/about/`) = directory mode, looks for index file in directory
+- No trailing slash (`/about`) = file mode, checks if path is a file
+- **No redirect** from `/about` to `/about/` — strict path distinction
 
 ## Internal Server
 

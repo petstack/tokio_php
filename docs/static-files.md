@@ -321,17 +321,23 @@ INDEX_FILE=index.html docker compose up -d
 
 ### Routing Behavior
 
-```
-Request              File Exists?    Action
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/                    —               Serve index.html (static)
-/about               No              Serve index.html (static)
-/users/123           No              Serve index.html (static)
-/style.css           Yes             Serve style.css (static)
-/api.php             Yes             Execute PHP ✓
-```
+| Request | File Exists | Result |
+|---------|-------------|--------|
+| `/` | — | Serve index.html |
+| `/about` | No | Serve index.html |
+| `/users/123` | No | Serve index.html |
+| `/index.html` | — | **404** (direct access blocked) |
+| `/style.css` | Yes | Serve style.css |
+| `/api.php` | Yes | Execute PHP |
+| `/api.php` | No | Serve index.html |
 
-**Key point:** The HTML index file is served as a static file, not executed as PHP. PHP execution only happens for `.php` files that exist on disk.
+### Key Differences from Framework Mode
+
+| Aspect | Framework (`index.php`) | SPA (`index.html`) |
+|--------|-------------------------|---------------------|
+| PHP files | ALL blocked with 404 | Execute if exists |
+| Missing files | Fallback to index.php | Fallback to index.html |
+| Index access | `/index.php` → 404 | `/index.html` → 404 |
 
 ### SPA Optimization
 
@@ -345,7 +351,28 @@ HTML index files benefit from static file optimizations:
 | Cache-Control headers | ✓ |
 | 304 Not Modified | ✓ |
 
-See [Single Entry Point](single-entry-point.md#using-html-index-file-spa-mode) for full SPA documentation.
+### Hybrid PHP API + SPA
+
+SPA mode allows PHP endpoints alongside client-side routing:
+
+```
+/var/www/html/
+├── api.php            # PHP API (executed)
+├── webhook.php        # PHP webhook (executed)
+├── index.html         # SPA entry point
+├── app.js
+└── style.css
+```
+
+```bash
+INDEX_FILE=index.html docker compose up -d
+```
+
+- `/api.php` → Execute PHP (file exists)
+- `/webhook.php` → Execute PHP (file exists)
+- `/users/123` → Serve index.html (client-side route)
+
+See [Single Entry Point](single-entry-point.md#spa-mode-index_fileindexhtml) for full SPA documentation.
 
 ## Limitations
 

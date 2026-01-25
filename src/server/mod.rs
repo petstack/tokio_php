@@ -72,6 +72,7 @@ pub mod access_log;
 pub mod config;
 pub mod connection;
 pub mod error_pages;
+pub mod file_cache;
 mod internal;
 pub mod request;
 pub mod response;
@@ -93,9 +94,11 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 pub use config::ServerConfig;
-use connection::{ConnectionContext, FileExistsCache};
+use connection::ConnectionContext;
 use error_pages::ErrorPages;
+use file_cache::FileCache;
 use internal::{run_internal_server, RequestMetrics, ServerConfigInfo};
+use routing::RouteConfig;
 
 use crate::config::RateLimitConfig;
 use crate::executor::ScriptExecutor;
@@ -128,8 +131,8 @@ pub struct Server<E: ScriptExecutor> {
     config: ServerConfig,
     executor: Arc<E>,
     tls_acceptor: Option<TlsAcceptor>,
-    /// Pre-validated index file path (full path, validated at startup)
-    index_file_path: Option<Arc<str>>,
+    /// Route configuration (INDEX_FILE handling)
+    route_config: Arc<RouteConfig>,
     /// Active connections counter
     active_connections: Arc<AtomicUsize>,
     /// Request metrics by HTTP method
@@ -138,8 +141,8 @@ pub struct Server<E: ScriptExecutor> {
     error_pages: ErrorPages,
     /// Per-IP rate limiter
     rate_limiter: Option<Arc<RateLimiter>>,
-    /// File existence cache (LRU, max 20 entries)
-    file_exists_cache: Arc<FileExistsCache>,
+    /// File cache (LRU, max 200 entries)
+    file_cache: Arc<FileCache>,
     /// Cached document root as static str (zero allocation per request)
     document_root_static: std::borrow::Cow<'static, str>,
     /// Shutdown signal sender
@@ -160,31 +163,43 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         config: ServerConfig,
         executor: E,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Create route configuration
+        let route_config = RouteConfig::new(&config.document_root, config.index_file.as_deref());
+
         // Validate index file at startup if configured
-        let index_file_path = if let Some(ref index_file) = config.index_file {
-            let full_path = format!("{}/{}", config.document_root, index_file);
-            if !Path::new(&full_path).exists() {
+        if let Some(ref index_file_path) = route_config.index_file_path {
+            if !Path::new(index_file_path.as_ref()).exists() {
                 return Err(format!(
                     "Index file not found: {} (INDEX_FILE={})",
-                    full_path, index_file
+                    index_file_path,
+                    route_config
+                        .index_file
+                        .as_ref()
+                        .map(|s| s.as_ref())
+                        .unwrap_or("")
                 )
                 .into());
             }
-            info!("Single entry point mode: all requests -> {}", index_file);
-            Some(Arc::from(full_path.as_str()))
+            info!(
+                "Single entry point mode: all requests -> {}",
+                route_config
+                    .index_file
+                    .as_ref()
+                    .map(|s| s.as_ref())
+                    .unwrap_or("")
+            );
         } else {
             // Warn if no index.php exists in document root (common misconfiguration)
             if !executor.skip_file_check() {
                 let index_path = format!("{}/index.php", config.document_root);
                 if !Path::new(&index_path).exists() {
-                    warn!(
-                        "No index.php found in document root: {}. Server will return 404 for /",
+                    debug!(
+                        "No index.php in document root: {}. Traditional mode: index.php -> index.html -> 404",
                         config.document_root
                     );
                 }
             }
-            None
-        };
+        }
 
         let tls_acceptor = if config.has_tls() {
             match Self::load_tls_config(&config) {
@@ -218,12 +233,12 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             config,
             executor: Arc::new(executor),
             tls_acceptor,
-            index_file_path,
+            route_config: Arc::new(route_config),
             active_connections: Arc::new(AtomicUsize::new(0)),
             request_metrics: Arc::new(RequestMetrics::new()),
             error_pages,
             rate_limiter: None,
-            file_exists_cache: Arc::new(FileExistsCache::new()),
+            file_cache: Arc::new(FileCache::new()),
             document_root_static,
             shutdown_tx,
             shutdown_rx,
@@ -428,13 +443,6 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             info!("Internal server listening on http://{}", internal_addr);
         }
 
-        // Index file name for blocking direct access
-        let index_file_name = self
-            .config
-            .index_file
-            .as_ref()
-            .map(|s| Arc::from(s.as_str()));
-
         for worker_id in 0..num_workers {
             let addr = self.config.addr;
             let tls_acceptor = self.tls_acceptor.clone();
@@ -446,10 +454,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 executor: Arc::clone(&self.executor),
                 document_root: Arc::clone(&self.config.document_root),
                 document_root_static: self.document_root_static.clone(),
-                skip_file_check: self.executor.skip_file_check() || self.index_file_path.is_some(),
                 is_stub_mode: self.executor.skip_file_check(),
-                index_file_path: self.index_file_path.clone(),
-                index_file_name: index_file_name.clone(),
+                route_config: Arc::clone(&self.route_config),
                 active_connections: Arc::clone(&self.active_connections),
                 request_metrics: Arc::clone(&self.request_metrics),
                 error_pages: self.error_pages.clone(),
@@ -459,7 +465,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 sse_timeout: self.config.sse_timeout,
                 profile_enabled: self.profile_enabled,
                 access_log_enabled: self.access_log_enabled,
-                file_exists_cache: Arc::clone(&self.file_exists_cache),
+                file_cache: Arc::clone(&self.file_cache),
             });
 
             let handle = tokio::spawn(async move {

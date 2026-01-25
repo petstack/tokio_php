@@ -59,7 +59,7 @@ PHP_VERSION=8.5 docker compose up -d
 | `QUEUE_CAPACITY` | `0` | Max pending requests (0 = workers × 100) |
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
-| `INDEX_FILE` | — | Single entry point (e.g., `index.php`) |
+| `INDEX_FILE` | — | Routing mode: `index.php` (framework), `index.html` (SPA), empty (traditional) |
 | `USE_EXT` | `1` | Use ExtExecutor (recommended) |
 | `USE_STUB` | `0` | Stub mode (no PHP, for benchmarks) |
 | `TLS_CERT` | — | Path to TLS certificate (PEM) |
@@ -79,8 +79,11 @@ PHP_VERSION=8.5 docker compose up -d
 # Production with tuning
 PHP_WORKERS=8 docker compose up -d
 
-# Laravel/Symfony single entry point
+# Laravel/Symfony (framework mode - all .php blocked, routes through index.php)
 INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d
+
+# React/Vue SPA (all non-existent paths serve index.html, PHP still works)
+INDEX_FILE=index.html docker compose up -d
 
 # With TLS/HTTPS
 docker compose --profile tls up -d

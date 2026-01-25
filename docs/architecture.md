@@ -64,7 +64,8 @@ src/
 │   ├── mod.rs           # Server struct, main loop
 │   ├── config.rs        # ServerConfig
 │   ├── connection.rs    # Connection handling, request processing
-│   ├── routing.rs       # URL routing, static files
+│   ├── routing.rs       # URL routing (RouteConfig, RouteResult)
+│   ├── file_cache.rs    # LRU file cache (FileType, FileCache)
 │   ├── internal.rs      # Internal server (/health, /metrics)
 │   ├── access_log.rs    # Structured access logging
 │   ├── error_pages.rs   # Custom error pages cache
@@ -155,6 +156,44 @@ Built-in middleware:
 | Error Pages | 90 | Custom HTML error pages |
 | Compression | 100 | Brotli compression |
 
+### Routing System
+
+The routing system determines how requests are handled based on `INDEX_FILE` configuration.
+
+#### Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| `RouteConfig` | `routing.rs` | Configuration with document_root, index_file, is_php flag |
+| `RouteResult` | `routing.rs` | Enum: `Execute(path)`, `Serve(path)`, `NotFound` |
+| `FileCache` | `file_cache.rs` | LRU cache (200 entries) for file metadata |
+| `FileType` | `file_cache.rs` | Enum: `File`, `Dir` |
+
+#### Routing Modes
+
+| Mode | INDEX_FILE | Behavior |
+|------|------------|----------|
+| **Traditional** | _(empty)_ | Direct mapping, index.php → index.html → 404 |
+| **Framework** | `index.php` | All → index.php, blocks all .php access |
+| **SPA** | `index.html` | All → index.html (static), PHP still works |
+
+#### FileCache (LRU)
+
+Reduces filesystem `stat()` syscalls:
+
+```rust
+pub struct FileCache {
+    entries: RwLock<HashMap<Box<str>, Option<FileType>>>,  // path → type
+    order: RwLock<Vec<Box<str>>>,                          // LRU order
+    capacity: usize,                                        // 200
+}
+```
+
+- **Cache hit**: Returns cached `FileType` (File, Dir, or None)
+- **Cache miss**: Calls `stat()`, caches result, returns
+- **Eviction**: Removes oldest entry when at capacity
+- **Thread-safe**: `RwLock` for concurrent access
+
 ### Request Queue
 
 Bounded `sync_channel` connecting async server to blocking PHP workers:
@@ -219,11 +258,14 @@ Client Request
                            │
                            ▼
 ┌─────────────────────────────────────────────────────┐
-│                     Routing                         │
-│  - Static file? → serve directly (with caching)     │
-│  - PHP script? → queue to worker                    │
-│  - INDEX_FILE mode? → route all to index.php        │
-│  - Not found? → 404                                 │
+│              Routing (resolve_request)              │
+│  1. Decode URI, sanitize path                       │
+│  2. Direct INDEX_FILE access? → 404                 │
+│  3. INDEX_FILE=*.php and uri=*.php? → 404           │
+│  4. Check FileCache (LRU, 200 entries)              │
+│  5. File exists → Execute(php) or Serve(static)     │
+│  6. INDEX_FILE set → fallback to index file         │
+│  7. Not found → 404                                 │
 └──────────────────────────┬──────────────────────────┘
                            │ PHP
                            ▼
