@@ -81,8 +81,8 @@ COPY src ./src
 COPY build.rs ./
 
 # Set library paths for linking with tokio_bridge
-ENV LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib:$LIBRARY_PATH
-ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib:$LD_LIBRARY_PATH
+ENV LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib
 ENV RUSTFLAGS="-C target-feature=-crt-static -L/usr/local/lib -L/usr/lib -L/lib"
 
 # Verify tokio_bridge library exists in expected locations
