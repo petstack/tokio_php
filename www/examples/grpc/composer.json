@@ -1,0 +1,20 @@
+{
+    "name": "tokio-php/grpc-client-example",
+    "description": "Example PHP client for tokio_php gRPC service",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "grpc/grpc": "^1.57",
+        "google/protobuf": "^3.25"
+    },
+    "autoload": {
+        "psr-4": {
+            "TokioPhp\\": "generated/"
+        }
+    },
+    "scripts": {
+        "generate": [
+            "protoc --proto_path=../../../proto --php_out=generated --grpc_out=generated --plugin=protoc-gen-grpc=$(which grpc_php_plugin) ../../../proto/php_service.proto"
+        ]
+    }
+}

@@ -102,6 +102,7 @@ use routing::RouteConfig;
 
 use crate::config::RateLimitConfig;
 use crate::executor::ScriptExecutor;
+use crate::health::HealthChecker;
 use crate::middleware::rate_limit::RateLimiter;
 
 /// HTTP server with pluggable script executor.
@@ -137,6 +138,8 @@ pub struct Server<E: ScriptExecutor> {
     active_connections: Arc<AtomicUsize>,
     /// Request metrics by HTTP method
     request_metrics: Arc<RequestMetrics>,
+    /// Health checker for Kubernetes probes
+    health_checker: Arc<HealthChecker>,
     /// Cached custom error pages
     error_pages: ErrorPages,
     /// Per-IP rate limiter
@@ -229,13 +232,23 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             Box::leak(config.document_root.to_string().into_boxed_str()),
         );
 
+        // Create health checker for Kubernetes probes
+        let active_connections = Arc::new(AtomicUsize::new(0));
+        let queue_capacity = config.num_workers * 100; // Default capacity
+        let health_checker = Arc::new(HealthChecker::new(
+            config.num_workers,
+            queue_capacity,
+            Arc::clone(&active_connections),
+        ));
+
         Ok(Self {
             config,
             executor: Arc::new(executor),
             tls_acceptor,
             route_config: Arc::new(route_config),
-            active_connections: Arc::new(AtomicUsize::new(0)),
+            active_connections,
             request_metrics: Arc::new(RequestMetrics::new()),
+            health_checker,
             error_pages,
             rate_limiter: None,
             file_cache: Arc::new(FileCache::new()),
@@ -366,6 +379,10 @@ impl<E: ScriptExecutor + 'static> Server<E> {
             num_workers
         );
 
+        // Mark PHP as initialized and startup complete
+        self.health_checker.mark_php_initialized();
+        self.health_checker.mark_startup_complete();
+
         // Spawn accept loops on multiple threads
         let mut handles = Vec::with_capacity(num_workers + 1);
 
@@ -418,9 +435,12 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                     .unwrap_or_else(|_| "tokio_php".to_string()),
             });
 
+            // Clone health_checker for internal server
+            let health_checker = Arc::clone(&self.health_checker);
+
             let handle = tokio::spawn(async move {
                 tokio::select! {
-                    result = run_internal_server(internal_addr, active_connections, request_metrics, config_info) => {
+                    result = run_internal_server(internal_addr, active_connections, request_metrics, config_info, Some(health_checker)) => {
                         if let Err(e) = result {
                             error!("Internal server error: {}", e);
                         }

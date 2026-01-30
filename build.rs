@@ -4,6 +4,23 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Compile gRPC protos when the grpc feature is enabled
+    #[cfg(feature = "grpc")]
+    {
+        // Create output directory for generated code
+        let out_dir = "src/grpc/generated";
+        std::fs::create_dir_all(out_dir).expect("Failed to create generated code directory");
+
+        tonic_build::configure()
+            .build_server(true)
+            .build_client(false) // We only need the server
+            .out_dir(out_dir)
+            .compile_protos(&["proto/php_service.proto"], &["proto"])
+            .expect("Failed to compile protos");
+
+        println!("cargo:rerun-if-changed=proto/php_service.proto");
+    }
+
     // Set empty build version (git hash not available in Docker builds)
     println!("cargo:rustc-env=BUILD_VERSION=");
 

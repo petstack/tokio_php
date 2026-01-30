@@ -17,6 +17,8 @@ php = []
 stub = []
 # Debug profiling: single-worker mode, writes detailed reports to /tmp/tokio_profile_request_{id}.md
 debug-profile = []
+# gRPC server for microservices architecture
+grpc = ["tonic", "prost", "tonic-build"]
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "net", "io-util", "fs", "sync", "signal", "macros"] }
@@ -43,6 +45,13 @@ async-trait = "0.1"
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 brotli = "7"
+
+# gRPC (optional)
+tonic = { version = "0.12", optional = true }
+prost = { version = "0.13", optional = true }
+
+[build-dependencies]
+tonic-build = { version = "0.12", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }

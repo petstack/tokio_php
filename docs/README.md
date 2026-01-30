@@ -40,6 +40,8 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 | [Distributed Tracing](distributed-tracing.md) | W3C Trace Context for request correlation                  |
 | [Logging](logging.md) | JSON logs, Monolog integration, log aggregation            |
 | [tokio_sapi Extension](tokio-sapi-extension.md) | PHP extension for FFI superglobals                         |
+| [gRPC](grpc.md) | gRPC server for microservices, Protobuf, client examples   |
+| [gRPC for Beginners](grpc-introduction.md) | Simple gRPC explanation with examples                      |
 
 ## Quick Start
 
@@ -115,6 +117,17 @@ tokio_php/
 │   │   └── sapi.rs          # SAPI initialization
 │   ├── core/                # Core types and context
 │   ├── config/              # Configuration parsing
+│   ├── grpc/                # gRPC server (optional, --features grpc)
+│   │   ├── mod.rs           # Module exports
+│   │   ├── server.rs        # GrpcServer implementation
+│   │   ├── service.rs       # PhpServiceImpl (Execute, Check)
+│   │   └── conversion.rs    # Request/Response conversion
+│   ├── health/              # Kubernetes health probes
+│   │   ├── checker.rs       # HealthChecker (live/ready/startup)
+│   │   └── status.rs        # HealthStatus, ProbeType
+│   ├── system/              # System resource detection
+│   │   ├── cgroup.rs        # cgroup v1/v2 detection
+│   │   └── memory.rs        # Memory pressure monitoring
 │   ├── logging.rs           # Structured JSON logging
 │   ├── trace_context.rs     # W3C Trace Context
 │   ├── profiler.rs          # Request timing
@@ -126,8 +139,11 @@ tokio_php/
 │   │   └── Makefile         # Build rules
 │   ├── tokio_sapi.c         # tokio_sapi PHP extension
 │   └── tokio_sapi.h         # Extension headers
+├── proto/                   # Protobuf definitions
+│   └── php_service.proto    # gRPC service definition
 ├── docs/                    # Documentation
 ├── www/                     # Document root
+│   └── examples/grpc/       # gRPC client examples
 │   └── errors/              # Custom error pages
 ├── certs/                   # TLS certificates
 ├── Dockerfile               # Development build (with tests)

@@ -6,11 +6,14 @@ services:
       args:
         # PHP version: 8.4 or 8.5
         PHP_VERSION: ${PHP_VERSION:-8.5}
-        # Cargo features (e.g., "debug-profile" for profiling build)
+        # Cargo features (e.g., "debug-profile" for profiling, "grpc" for gRPC support)
+        # For gRPC: CARGO_FEATURES=grpc docker compose build
         CARGO_FEATURES: ${CARGO_FEATURES:-}
     ports:
       - "8080:8080"
       - "9090:9090"
+      # gRPC port (requires CARGO_FEATURES=grpc build)
+      - "50051:50051"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
       - RUST_LOG=tokio_php=info
@@ -41,6 +44,9 @@ services:
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       # REQUEST_TIMEOUT: request timeout (30s, 2m, 5m, off). Returns 504 on timeout
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      # GRPC_ADDR: gRPC server address (requires --features grpc build)
+      # Example: GRPC_ADDR=0.0.0.0:50051
+      - GRPC_ADDR=${GRPC_ADDR:-}
     volumes:
       - ./www:/var/www/html:ro
       # PHP configuration (OPcache, JIT, etc.)
@@ -82,6 +88,7 @@ services:
       - RATE_WINDOW=${RATE_WINDOW:-60}
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      - GRPC_ADDR=${GRPC_ADDR:-}
     secrets:
       - tls_cert
       - tls_key

@@ -39,7 +39,18 @@ docker compose --profile tls up -d
 
 # Benchmark
 wrk -t4 -c100 -d10s http://localhost:8080/index.php
+
+# Build with gRPC support (optional)
+cargo build --release --features grpc
 ```
+
+## Cargo Features
+
+| Feature | Description |
+|---------|-------------|
+| `php` | Enable PHP execution (default) |
+| `grpc` | Enable gRPC server for microservices |
+| `debug-profile` | Enable single-worker profiling mode |
 
 ## Architecture
 
@@ -1017,9 +1028,39 @@ INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 
 | Endpoint | Description |
 |----------|-------------|
-| `/health` | Health check with timestamp and active connections (JSON) |
+| `/health/live` | Kubernetes liveness probe - is the process alive? |
+| `/health/ready` | Kubernetes readiness probe - can we serve traffic? |
+| `/health/startup` | Kubernetes startup probe - has initialization completed? |
+| `/health` | Legacy health endpoint (maps to readiness) |
 | `/metrics` | Prometheus-compatible metrics |
 | `/config` | Current server configuration (JSON) |
+
+### Kubernetes Probes
+
+```yaml
+# Example Kubernetes deployment
+spec:
+  containers:
+  - name: tokio-php
+    livenessProbe:
+      httpGet:
+        path: /health/live
+        port: 9090
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /health/ready
+        port: 9090
+      initialDelaySeconds: 5
+      periodSeconds: 5
+    startupProbe:
+      httpGet:
+        path: /health/startup
+        port: 9090
+      failureThreshold: 30
+      periodSeconds: 2
+```
 
 ### Available Metrics
 
@@ -1044,9 +1085,17 @@ INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 ### Example responses
 
 ```bash
-# Health check
-curl http://localhost:9090/health
-{"status":"ok","timestamp":1703361234,"active_connections":5,"total_requests":1000}
+# Liveness probe
+curl http://localhost:9090/health/live
+{"status":"healthy","checks":[{"name":"php_initialized","status":"pass","duration_ms":0},{"name":"workers_alive","status":"pass","duration_ms":0}]}
+
+# Readiness probe (with details)
+curl http://localhost:9090/health/ready
+{"status":"healthy","checks":[{"name":"startup_complete","status":"pass","duration_ms":0},{"name":"queue_capacity","status":"pass","duration_ms":0}],"details":{"uptime_seconds":45,"version":"0.1.0","workers":14,"queue_depth":0,"queue_capacity":1400,"active_connections":0}}
+
+# Startup probe
+curl http://localhost:9090/health/startup
+{"status":"healthy","checks":[{"name":"php_initialized","status":"pass","duration_ms":0},{"name":"workers_ready","status":"pass","duration_ms":0}],"details":{"uptime_seconds":45,"version":"0.1.0","workers":14,"queue_depth":0,"queue_capacity":1400,"active_connections":0}}
 
 # Configuration
 curl http://localhost:9090/config
@@ -1159,6 +1208,62 @@ APP_ENV=production PHP_WORKERS=0 docker compose up -d
 ```
 
 See [docs/framework-compatibility.md](docs/framework-compatibility.md) for full documentation.
+
+## gRPC Support (Optional)
+
+Enable gRPC for microservices architecture:
+
+```bash
+# Build with gRPC feature
+CARGO_FEATURES=grpc docker compose build
+
+# Run with gRPC enabled
+GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+```
+
+### gRPC Service
+
+The `PhpService` provides three methods:
+
+| Method | Description |
+|--------|-------------|
+| `Execute` | Unary RPC - execute PHP script and return response |
+| `ExecuteStream` | Server streaming - for SSE/long-polling |
+| `Check` | Health check (gRPC health checking protocol) |
+
+### Testing with grpcurl
+
+```bash
+# Install grpcurl
+brew install grpcurl
+
+# Execute PHP script
+grpcurl -plaintext -d '{
+  "script_path": "index.php",
+  "method": "GET",
+  "query_params": {"page": "1"}
+}' localhost:50051 tokio_php.v1.PhpService/Execute
+
+# Health check
+grpcurl -plaintext localhost:50051 tokio_php.v1.PhpService/Check
+
+# List services
+grpcurl -plaintext localhost:50051 list
+```
+
+### Client Examples
+
+See `www/examples/grpc/` for client examples in:
+- PHP (`php_client.php`)
+- Python (`python_client.py`)
+- Go (`go_client.go`)
+- Shell/grpcurl (`test_grpc.sh`)
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRPC_ADDR` | _(empty)_ | gRPC server address (e.g., `0.0.0.0:50051`) |
 
 ## Limitations
 

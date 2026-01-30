@@ -1,4 +1,12 @@
 //! Internal HTTP server for health and metrics endpoints.
+//!
+//! Provides Kubernetes-compatible health check endpoints:
+//! - `/health/live` - Liveness probe
+//! - `/health/ready` - Readiness probe
+//! - `/health/startup` - Startup probe
+//! - `/health` - Legacy endpoint (maps to readiness)
+//! - `/metrics` - Prometheus metrics
+//! - `/config` - Server configuration
 
 use std::convert::Infallible;
 use std::fs;
@@ -16,6 +24,8 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::Serialize;
 use tokio::net::TcpListener;
+
+use crate::health::{HealthChecker, ProbeType};
 
 // =============================================================================
 // Server Configuration Info (for /config endpoint)
@@ -319,6 +329,7 @@ pub async fn run_internal_server(
     active_connections: Arc<AtomicUsize>,
     request_metrics: Arc<RequestMetrics>,
     config_info: Arc<ServerConfigInfo>,
+    health_checker: Option<Arc<HealthChecker>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(addr).await?;
 
@@ -328,13 +339,15 @@ pub async fn run_internal_server(
         let connections = Arc::clone(&active_connections);
         let metrics = Arc::clone(&request_metrics);
         let config = Arc::clone(&config_info);
+        let health = health_checker.clone();
 
         tokio::spawn(async move {
             let service = service_fn(move |req| {
                 let conns = connections.load(Ordering::Relaxed);
                 let m = Arc::clone(&metrics);
                 let c = Arc::clone(&config);
-                async move { handle_internal_request(req, conns, m, c).await }
+                let h = health.clone();
+                async move { handle_internal_request(req, conns, m, c, h).await }
             });
 
             let io = TokioIo::new(stream);
@@ -349,6 +362,7 @@ async fn handle_internal_request(
     active_connections: usize,
     metrics: Arc<RequestMetrics>,
     config: Arc<ServerConfigInfo>,
+    health_checker: Option<Arc<HealthChecker>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let path = req.uri().path();
 
@@ -361,21 +375,114 @@ async fn handle_internal_request(
                 .body(Full::new(Bytes::from(body)))
                 .unwrap()
         }
+        // Kubernetes liveness probe
+        "/health/live" => {
+            if let Some(ref checker) = health_checker {
+                let status = checker.check(ProbeType::Liveness);
+                let code = if status.is_healthy() {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                let body =
+                    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string());
+                Response::builder()
+                    .status(code)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap()
+            } else {
+                // Fallback when health checker is not configured
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(r#"{"status":"healthy"}"#)))
+                    .unwrap()
+            }
+        }
+        // Kubernetes readiness probe
+        "/health/ready" => {
+            if let Some(ref checker) = health_checker {
+                let status = checker.check(ProbeType::Readiness);
+                let code = if status.is_healthy() {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                let body =
+                    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string());
+                Response::builder()
+                    .status(code)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap()
+            } else {
+                // Fallback when health checker is not configured
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(r#"{"status":"healthy"}"#)))
+                    .unwrap()
+            }
+        }
+        // Kubernetes startup probe
+        "/health/startup" => {
+            if let Some(ref checker) = health_checker {
+                let status = checker.check(ProbeType::Startup);
+                let code = if status.is_healthy() {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                let body =
+                    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string());
+                Response::builder()
+                    .status(code)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap()
+            } else {
+                // Fallback when health checker is not configured
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(r#"{"status":"healthy"}"#)))
+                    .unwrap()
+            }
+        }
+        // Legacy health endpoint (maps to readiness for backward compatibility)
         "/health" => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            let body = format!(
-                r#"{{"status":"ok","timestamp":{},"active_connections":{},"total_requests":{}}}"#,
-                now.as_secs(),
-                active_connections,
-                metrics.total()
-            );
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(Full::new(Bytes::from(body)))
-                .unwrap()
+            if let Some(ref checker) = health_checker {
+                let status = checker.check(ProbeType::Readiness);
+                let code = if status.is_healthy() {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                let body =
+                    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string());
+                Response::builder()
+                    .status(code)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap()
+            } else {
+                // Fallback: legacy format
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                let body = format!(
+                    r#"{{"status":"ok","timestamp":{},"active_connections":{},"total_requests":{}}}"#,
+                    now.as_secs(),
+                    active_connections,
+                    metrics.total()
+                );
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap()
+            }
         }
         "/metrics" => {
             let sys = SystemMetrics::read();

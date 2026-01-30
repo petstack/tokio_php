@@ -20,6 +20,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 - **Rate Limiting** — Per-IP request throttling with fixed window
 - **Distributed Tracing** — W3C Trace Context propagation
 - **Graceful Shutdown** — Connection draining for zero-downtime deployments
+- **gRPC Support** — Optional gRPC server for microservices (compile-time feature)
 
 ## Quick Start
 
@@ -71,6 +72,7 @@ PHP_VERSION=8.5 docker compose up -d
 | `ACCESS_LOG` | `0` | Enable access logs (0 = disabled) |
 | `RATE_LIMIT` | `0` | Max requests per IP (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window (seconds) |
+| `GRPC_ADDR` | — | gRPC server address (requires `--features grpc`) |
 
 ## Examples
 
@@ -92,6 +94,10 @@ EXECUTOR=stub docker compose up -d
 
 # Build with profiling (single-worker, writes reports to /tmp/)
 CARGO_FEATURES=debug-profile docker compose build
+
+# Build with gRPC support
+CARGO_FEATURES=grpc docker compose build
+GRPC_ADDR=0.0.0.0:50051 docker compose up -d
 ```
 
 ## Architecture
@@ -178,6 +184,25 @@ INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 curl http://localhost:9090/health
 curl http://localhost:9090/metrics
 ```
+
+## gRPC Server
+
+Optional gRPC server for microservices (requires `--features grpc` build):
+
+```bash
+# Build with gRPC
+CARGO_FEATURES=grpc docker compose build
+
+# Run with gRPC enabled
+GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+
+# Test with grpcurl
+grpcurl -plaintext localhost:50051 list
+grpcurl -plaintext -d '{"script_path": "index.php", "method": "GET"}' \
+  localhost:50051 tokio_php.v1.PhpService/Execute
+```
+
+See [docs/grpc.md](docs/grpc.md) for client examples (Go, Python, PHP) and full documentation.
 
 ## Benchmark
 

@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package tokio_php.v1;
+
+// PHP script execution service for microservices architecture.
+// Allows executing PHP scripts via gRPC for service-to-service communication.
+service PhpService {
+  // Execute a PHP script (unary RPC)
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+
+  // Execute with server-streaming response (for SSE/long-polling)
+  rpc ExecuteStream(ExecuteRequest) returns (stream StreamChunk);
+
+  // gRPC health checking protocol
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Request to execute a PHP script
+message ExecuteRequest {
+  // Script path relative to document root
+  string script_path = 1;
+
+  // HTTP method simulation (GET, POST, etc.)
+  string method = 2;
+
+  // Query parameters ($_GET)
+  map<string, string> query_params = 3;
+
+  // Form data ($_POST) - for POST/PUT requests
+  map<string, string> form_data = 4;
+
+  // Raw request body (for JSON, etc.)
+  bytes body = 5;
+
+  // Content-Type of the body
+  string content_type = 6;
+
+  // Server variables ($_SERVER)
+  map<string, string> server_vars = 7;
+
+  // Cookies ($_COOKIE)
+  map<string, string> cookies = 8;
+
+  // Request options
+  RequestOptions options = 9;
+}
+
+// Request options for execution control
+message RequestOptions {
+  // Request timeout in milliseconds (0 = use default)
+  int64 timeout_ms = 1;
+
+  // Enable profiling for this request
+  bool enable_profiling = 2;
+
+  // W3C Trace Context (traceparent header value)
+  string trace_parent = 3;
+
+  // Custom trace state
+  string trace_state = 4;
+}
+
+// Response from PHP script execution
+message ExecuteResponse {
+  // HTTP status code
+  int32 status_code = 1;
+
+  // Response headers
+  map<string, string> headers = 2;
+
+  // Response body
+  bytes body = 3;
+
+  // Execution metadata
+  ExecutionMetadata metadata = 4;
+}
+
+// Execution metadata for observability
+message ExecutionMetadata {
+  // Request ID (for distributed tracing)
+  string request_id = 1;
+
+  // Worker ID that processed the request
+  int32 worker_id = 2;
+
+  // Execution time in microseconds
+  int64 execution_time_us = 3;
+
+  // Queue wait time in microseconds
+  int64 queue_wait_us = 4;
+
+  // Profiling data (if enabled)
+  ProfileData profile = 5;
+}
+
+// Profiling data for performance analysis
+message ProfileData {
+  int64 php_startup_us = 1;
+  int64 script_exec_us = 2;
+  int64 php_shutdown_us = 3;
+  int64 superglobals_us = 4;
+  map<string, int64> custom_timings = 5;
+}
+
+// Streaming response chunk for SSE/streaming
+message StreamChunk {
+  // Chunk data
+  bytes data = 1;
+
+  // Is this the final chunk?
+  bool is_final = 2;
+
+  // Chunk sequence number
+  int32 sequence = 3;
+}
+
+// gRPC Health Checking Protocol (standard)
+message HealthCheckRequest {
+  // Service name (empty = overall health)
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+  ServingStatus status = 1;
+}
