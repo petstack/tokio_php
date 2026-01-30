@@ -32,11 +32,7 @@
 
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{
-    runtime,
-    trace::Sampler,
-    Resource,
-};
+use opentelemetry_sdk::{runtime, trace::Sampler, Resource};
 use std::time::Duration;
 use tracing::info;
 
