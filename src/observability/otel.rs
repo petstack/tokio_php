@@ -34,7 +34,7 @@ use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     runtime,
-    trace::{Config, Sampler},
+    trace::Sampler,
     Resource,
 };
 use std::time::Duration;
@@ -155,11 +155,8 @@ pub fn init_tracing(config: &OtelConfig) -> Result<(), Box<dyn std::error::Error
     // Build tracer provider with batching
     let tracer_provider = opentelemetry_sdk::trace::TracerProvider::builder()
         .with_batch_exporter(exporter, runtime::Tokio)
-        .with_config(
-            Config::default()
-                .with_resource(resource)
-                .with_sampler(Sampler::TraceIdRatioBased(config.sampling_ratio)),
-        )
+        .with_resource(resource)
+        .with_sampler(Sampler::TraceIdRatioBased(config.sampling_ratio))
         .build();
 
     // Set global tracer provider
