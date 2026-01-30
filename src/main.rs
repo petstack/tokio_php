@@ -1,9 +1,17 @@
+use std::sync::Arc;
+
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use tokio_php::config::{Config, ExecutorType};
+use tokio_php::executor::ScriptExecutor;
 use tokio_php::logging;
 use tokio_php::server::{Server, ServerConfig};
+
+#[cfg(feature = "grpc")]
+use tokio_php::grpc::GrpcServer;
+#[cfg(feature = "grpc")]
+use tokio_php::health::HealthChecker;
 
 #[cfg(feature = "php")]
 use tokio_php::executor::PhpExecutor;
@@ -14,6 +22,11 @@ use tokio_php::executor::ExtExecutor;
 use tokio_php::executor::StubExecutor;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Install the crypto provider for TLS (required when both HTTP and gRPC TLS are used)
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     // Load configuration from environment
     let config = Config::from_env().map_err(|e| {
         eprintln!("Configuration error: {}", e);
@@ -115,6 +128,13 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     let access_log_enabled = config.middleware.is_access_log_enabled();
     let rate_limit_config = config.middleware.rate_limit();
 
+    // gRPC configuration
+    #[cfg(feature = "grpc")]
+    let grpc_ctx = config.grpc.addr.map(|addr| GrpcContext {
+        addr,
+        tls_config: config.grpc.tls.clone(),
+    });
+
     // Create executor based on type
     match config.executor.executor_type {
         ExecutorType::Stub => {
@@ -124,7 +144,12 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 .with_profile_enabled(profile_enabled)
                 .with_access_log_enabled(access_log_enabled)
                 .with_rate_limiter(rate_limit_config);
-            run_server(server).await
+            run_server(
+                    server,
+                    #[cfg(feature = "grpc")]
+                    grpc_ctx.clone(),
+                )
+                .await
         }
         ExecutorType::Ext => {
             #[cfg(feature = "php")]
@@ -149,7 +174,12 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
                     .with_rate_limiter(rate_limit_config);
-                run_server(server).await
+                run_server(
+                    server,
+                    #[cfg(feature = "grpc")]
+                    grpc_ctx.clone(),
+                )
+                .await
             }
 
             #[cfg(not(feature = "php"))]
@@ -160,7 +190,12 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
                     .with_rate_limiter(rate_limit_config);
-                run_server(server).await
+                run_server(
+                    server,
+                    #[cfg(feature = "grpc")]
+                    grpc_ctx.clone(),
+                )
+                .await
             }
         }
         ExecutorType::Php => {
@@ -183,7 +218,12 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
                     .with_rate_limiter(rate_limit_config);
-                run_server(server).await
+                run_server(
+                    server,
+                    #[cfg(feature = "grpc")]
+                    grpc_ctx.clone(),
+                )
+                .await
             }
 
             #[cfg(not(feature = "php"))]
@@ -194,7 +234,12 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                     .with_profile_enabled(profile_enabled)
                     .with_access_log_enabled(access_log_enabled)
                     .with_rate_limiter(rate_limit_config);
-                run_server(server).await
+                run_server(
+                    server,
+                    #[cfg(feature = "grpc")]
+                    grpc_ctx.clone(),
+                )
+                .await
             }
         }
     }
@@ -225,10 +270,38 @@ async fn shutdown_signal() {
     }
 }
 
-async fn run_server<E: tokio_php::executor::ScriptExecutor + 'static>(
+/// gRPC configuration passed to run_server.
+#[cfg(feature = "grpc")]
+#[derive(Clone)]
+struct GrpcContext {
+    addr: std::net::SocketAddr,
+    tls_config: tokio_php::grpc::tls::GrpcTlsConfig,
+}
+
+async fn run_server<E: ScriptExecutor + 'static>(
     server: Server<E>,
+    #[cfg(feature = "grpc")] grpc_ctx: Option<GrpcContext>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drain_timeout = server.drain_timeout();
+
+    // Start gRPC server if configured
+    #[cfg(feature = "grpc")]
+    let grpc_handle = if let Some(ctx) = grpc_ctx {
+        let executor = server.executor();
+        let health_checker = server.health_checker();
+        let document_root = server.document_root().to_string();
+
+        let grpc_server =
+            GrpcServer::with_tls(ctx.addr, executor, health_checker, document_root, ctx.tls_config);
+
+        Some(tokio::spawn(async move {
+            if let Err(e) = grpc_server.run().await {
+                tracing::error!("gRPC server error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
 
     // Handle shutdown gracefully with tokio::select
     tokio::select! {
@@ -262,6 +335,12 @@ async fn run_server<E: tokio_php::executor::ScriptExecutor + 'static>(
                 info!("No active connections, shutting down immediately");
             }
         }
+    }
+
+    // Abort gRPC server if running
+    #[cfg(feature = "grpc")]
+    if let Some(handle) = grpc_handle {
+        handle.abort();
     }
 
     // Cleanup PHP workers

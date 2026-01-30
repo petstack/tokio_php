@@ -46,11 +46,91 @@ docker compose logs | grep -i grpc
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GRPC_ADDR` | _(empty)_ | gRPC server address (e.g., `0.0.0.0:50051`) |
+| `GRPC_TLS` | `off` | TLS mode: `off`, `auto`, `on` |
+| `GRPC_TLS_CERT` | _(empty)_ | Certificate path (required when `GRPC_TLS=on`) |
+| `GRPC_TLS_KEY` | _(empty)_ | Private key path (required when `GRPC_TLS=on`) |
+| `GRPC_TLS_CA` | _(empty)_ | CA certificate for mTLS (optional) |
+| `GRPC_TLS_AUTO_CN` | `localhost` | Common Name for auto-generated certs |
+| `GRPC_TLS_AUTO_DAYS` | `365` | Validity days for auto-generated certs |
 
 ```bash
-# Enable gRPC server on port 50051
+# Enable gRPC server on port 50051 (plaintext)
 GRPC_ADDR=0.0.0.0:50051 docker compose up -d
 ```
+
+## TLS Configuration
+
+gRPC TLS supports three modes:
+
+### Plaintext (default)
+
+```bash
+GRPC_TLS=off  # or omit
+GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+```
+
+No encryption. Use only for development or within trusted networks.
+
+### Auto-generated Certificates (development)
+
+```bash
+GRPC_TLS=auto \
+GRPC_ADDR=0.0.0.0:50051 \
+docker compose up -d
+```
+
+Generates self-signed certificates on first start:
+- Stored in `/tmp/tokio_php/grpc-{cert,key}.pem`
+- Valid for 365 days (configurable)
+- Regenerates automatically when expiring (<30 days)
+
+Test with grpcurl:
+```bash
+grpcurl -insecure localhost:50051 list
+```
+
+### External Certificates (production)
+
+```bash
+GRPC_TLS=on \
+GRPC_TLS_CERT=/run/secrets/grpc-cert.pem \
+GRPC_TLS_KEY=/run/secrets/grpc-key.pem \
+GRPC_ADDR=0.0.0.0:50051 \
+docker compose up -d
+```
+
+Use with cert-manager, Vault, or other PKI solutions.
+
+### Mutual TLS (mTLS)
+
+Require client certificates for authentication:
+
+```bash
+GRPC_TLS=on \
+GRPC_TLS_CERT=/run/secrets/grpc-cert.pem \
+GRPC_TLS_KEY=/run/secrets/grpc-key.pem \
+GRPC_TLS_CA=/run/secrets/ca.pem \
+GRPC_ADDR=0.0.0.0:50051 \
+docker compose up -d
+```
+
+Test with grpcurl (client cert required):
+```bash
+grpcurl \
+  -cacert ca.pem \
+  -cert client-cert.pem \
+  -key client-key.pem \
+  localhost:50051 list
+```
+
+### TLS Mode Comparison
+
+| Mode | Security | Use Case |
+|------|----------|----------|
+| `off` | None | Development, service mesh (Istio/Linkerd handles TLS) |
+| `auto` | Self-signed | Development, testing, internal services |
+| `on` | Full PKI | Production, external certificates |
+| `on` + CA | mTLS | Zero-trust, service-to-service auth |
 
 ## Service Definition
 

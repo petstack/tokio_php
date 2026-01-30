@@ -18,7 +18,7 @@ stub = []
 # Debug profiling: single-worker mode, writes detailed reports to /tmp/tokio_profile_request_{id}.md
 debug-profile = []
 # gRPC server for microservices architecture
-grpc = ["tonic", "prost", "tonic-build"]
+grpc = ["tonic", "prost", "tonic-build", "rcgen", "x509-parser", "time"]
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "net", "io-util", "fs", "sync", "signal", "macros"] }
@@ -43,12 +43,18 @@ socket2 = { version = "0.5", features = ["all"] }
 num_cpus = "1"
 async-trait = "0.1"
 tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 rustls-pemfile = "2"
 brotli = "7"
 
 # gRPC (optional)
-tonic = { version = "0.12", optional = true }
+tonic = { version = "0.12", optional = true, features = ["tls"] }
 prost = { version = "0.13", optional = true }
+
+# gRPC TLS certificate generation (optional)
+rcgen = { version = "0.13", optional = true }
+x509-parser = { version = "0.16", optional = true }
+time = { version = "0.3", optional = true }
 
 [build-dependencies]
 tonic-build = { version = "0.12", optional = true }

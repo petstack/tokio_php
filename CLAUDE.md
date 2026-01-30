@@ -1264,6 +1264,30 @@ See `www/examples/grpc/` for client examples in:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GRPC_ADDR` | _(empty)_ | gRPC server address (e.g., `0.0.0.0:50051`) |
+| `GRPC_TLS` | `off` | TLS mode: `off`, `auto`, `on` |
+| `GRPC_TLS_CERT` | _(empty)_ | Certificate path (required when `GRPC_TLS=on`) |
+| `GRPC_TLS_KEY` | _(empty)_ | Private key path (required when `GRPC_TLS=on`) |
+| `GRPC_TLS_CA` | _(empty)_ | CA certificate for mTLS |
+| `GRPC_TLS_AUTO_CN` | `localhost` | Common Name for auto-generated certs |
+| `GRPC_TLS_AUTO_DAYS` | `365` | Validity days for auto-generated certs |
+
+### TLS Modes
+
+```bash
+# Plaintext (default, development)
+GRPC_TLS=off GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+
+# Auto-generated self-signed (development)
+GRPC_TLS=auto GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+
+# External certificates (production)
+GRPC_TLS=on GRPC_TLS_CERT=/path/cert.pem GRPC_TLS_KEY=/path/key.pem \
+GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+
+# mTLS (production, client certs required)
+GRPC_TLS=on GRPC_TLS_CERT=/path/cert.pem GRPC_TLS_KEY=/path/key.pem \
+GRPC_TLS_CA=/path/ca.pem GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+```
 
 ## Limitations
 

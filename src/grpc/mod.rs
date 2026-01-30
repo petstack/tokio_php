@@ -38,9 +38,11 @@
 mod conversion;
 mod server;
 mod service;
+pub mod tls;
 
 pub use server::GrpcServer;
 pub use service::PhpServiceImpl;
+pub use tls::{GrpcTlsConfig, GrpcTlsMode};
 
 // Generated code from proto
 pub mod proto {

@@ -562,6 +562,21 @@ impl<E: ScriptExecutor + 'static> Server<E> {
         self.config.drain_timeout
     }
 
+    /// Get the executor (for gRPC server).
+    pub fn executor(&self) -> Arc<E> {
+        Arc::clone(&self.executor)
+    }
+
+    /// Get the health checker (for gRPC server).
+    pub fn health_checker(&self) -> Arc<HealthChecker> {
+        Arc::clone(&self.health_checker)
+    }
+
+    /// Get the document root.
+    pub fn document_root(&self) -> &str {
+        &self.config.document_root
+    }
+
     /// Wait for all active connections to drain.
     /// Returns true if drained successfully, false if timeout was reached.
     pub async fn wait_for_drain(&self, timeout: Duration) -> bool {

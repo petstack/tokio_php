@@ -17,6 +17,9 @@ RUN apk add --no-cache \
     g++ \
     autoconf \
     automake \
+    # protoc for gRPC proto compilation
+    protobuf \
+    protobuf-dev \
     # Libraries required by PHP
     readline-dev \
     ncurses-dev \
@@ -79,6 +82,8 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY build.rs ./
+# Proto files for gRPC (optional, only used with --features grpc)
+COPY proto ./proto
 
 # Set library paths for linking with tokio_bridge
 ENV LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib

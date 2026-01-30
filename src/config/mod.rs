@@ -14,6 +14,8 @@
 
 mod error;
 mod executor;
+#[cfg(feature = "grpc")]
+mod grpc;
 mod logging;
 mod middleware;
 mod parse;
@@ -21,6 +23,8 @@ mod server;
 
 pub use error::ConfigError;
 pub use executor::{ExecutorConfig, ExecutorType};
+#[cfg(feature = "grpc")]
+pub use grpc::GrpcConfig;
 pub use logging::LoggingConfig;
 pub use middleware::{MiddlewareConfig, RateLimitConfig};
 pub use server::{OptionalDuration, RequestTimeout, ServerConfig, SseTimeout, StaticCacheTtl};
@@ -36,6 +40,9 @@ pub struct Config {
     pub middleware: MiddlewareConfig,
     /// Logging configuration.
     pub logging: LoggingConfig,
+    /// gRPC server configuration (optional feature).
+    #[cfg(feature = "grpc")]
+    pub grpc: GrpcConfig,
 }
 
 impl Config {
@@ -46,6 +53,8 @@ impl Config {
             executor: ExecutorConfig::from_env()?,
             middleware: MiddlewareConfig::from_env()?,
             logging: LoggingConfig::from_env()?,
+            #[cfg(feature = "grpc")]
+            grpc: GrpcConfig::from_env()?,
         })
     }
 
@@ -106,6 +115,12 @@ impl Config {
 
         if self.middleware.is_access_log_enabled() {
             info!("Access log: enabled");
+        }
+
+        #[cfg(feature = "grpc")]
+        if let Some(addr) = self.grpc.addr {
+            info!("gRPC server: {}", addr);
+            info!("gRPC TLS: {:?}", self.grpc.tls.mode);
         }
     }
 }

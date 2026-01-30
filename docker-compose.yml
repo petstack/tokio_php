@@ -47,6 +47,16 @@ services:
       # GRPC_ADDR: gRPC server address (requires --features grpc build)
       # Example: GRPC_ADDR=0.0.0.0:50051
       - GRPC_ADDR=${GRPC_ADDR:-}
+      # GRPC_TLS: gRPC TLS mode (off, auto, on)
+      #   off  - plaintext (default, development)
+      #   auto - auto-generated self-signed certificates (development)
+      #   on   - external certificates (production)
+      - GRPC_TLS=${GRPC_TLS:-off}
+      # GRPC_TLS_CERT/KEY: external certificate paths (required when GRPC_TLS=on)
+      - GRPC_TLS_CERT=${GRPC_TLS_CERT:-}
+      - GRPC_TLS_KEY=${GRPC_TLS_KEY:-}
+      # GRPC_TLS_CA: CA certificate for mTLS (optional, enables client cert verification)
+      - GRPC_TLS_CA=${GRPC_TLS_CA:-}
     volumes:
       - ./www:/var/www/html:ro
       # PHP configuration (OPcache, JIT, etc.)
