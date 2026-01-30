@@ -1,0 +1,25 @@
+#!/bin/sh
+# Pre-commit hook: runs cargo fmt and clippy checks
+# Install: git config core.hooksPath .githooks
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+echo "  Checking formatting (cargo fmt)..."
+if ! cargo fmt --check > /dev/null 2>&1; then
+    echo "❌ Formatting check failed. Run 'cargo fmt' to fix."
+    exit 1
+fi
+echo "  ✓ Formatting OK"
+
+# Run clippy (without PHP-dependent features for speed)
+echo "  Running clippy..."
+if ! cargo clippy --lib --features grpc,otel -- -D warnings > /dev/null 2>&1; then
+    echo "❌ Clippy check failed. Run 'cargo clippy --lib --features grpc,otel' to see errors."
+    exit 1
+fi
+echo "  ✓ Clippy OK"
+
+echo "✓ All pre-commit checks passed"
