@@ -20,7 +20,9 @@ impl TlsConfigBuilder {
     /// Returns `Some(ServerTlsConfig)` if TLS is enabled.
     pub fn build(config: &GrpcTlsConfig) -> io::Result<Option<ServerTlsConfig>> {
         // Validate configuration
-        config.validate().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        config
+            .validate()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
         match config.mode {
             GrpcTlsMode::Off => {

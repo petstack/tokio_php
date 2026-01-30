@@ -42,6 +42,7 @@ Async PHP web server in Rust. Tokio + php-embed SAPI. HTTP/1.1, HTTP/2, HTTPS, w
 | [tokio_sapi Extension](tokio-sapi-extension.md) | PHP extension for FFI superglobals                         |
 | [gRPC](grpc.md) | gRPC server for microservices, Protobuf, client examples   |
 | [gRPC for Beginners](grpc-introduction.md) | Simple gRPC explanation with examples                      |
+| [Observability](observability.md) | Prometheus metrics, OpenTelemetry tracing, Grafana dashboard |
 
 ## Quick Start
 
@@ -122,6 +123,11 @@ tokio_php/
 │   │   ├── server.rs        # GrpcServer implementation
 │   │   ├── service.rs       # PhpServiceImpl (Execute, Check)
 │   │   └── conversion.rs    # Request/Response conversion
+│   ├── observability/       # Metrics and tracing
+│   │   ├── mod.rs           # Module exports
+│   │   ├── metrics.rs       # Prometheus metrics registry
+│   │   ├── otel.rs          # OpenTelemetry init (otel feature)
+│   │   └── tracing_middleware.rs  # W3C Trace Context (otel feature)
 │   ├── health/              # Kubernetes health probes
 │   │   ├── checker.rs       # HealthChecker (live/ready/startup)
 │   │   └── status.rs        # HealthStatus, ProbeType
@@ -142,6 +148,11 @@ tokio_php/
 ├── proto/                   # Protobuf definitions
 │   └── php_service.proto    # gRPC service definition
 ├── docs/                    # Documentation
+├── deploy/                  # Deployment configs
+│   ├── grafana/             # Grafana dashboards
+│   │   └── tokio-php-dashboard.json
+│   └── prometheus/          # Prometheus configs
+│       └── alerts.yml       # Alerting rules
 ├── www/                     # Document root
 │   └── examples/grpc/       # gRPC client examples
 │   └── errors/              # Custom error pages

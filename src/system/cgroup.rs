@@ -259,39 +259,52 @@ mod tests {
 
     #[test]
     fn test_optimal_workers_with_quota() {
-        let mut limits = ResourceLimits::default();
-        limits.cpu_quota = Some(2.5);
+        let limits = ResourceLimits {
+            cpu_quota: Some(2.5),
+            ..Default::default()
+        };
         assert_eq!(limits.optimal_workers(), 3);
 
-        limits.cpu_quota = Some(1.0);
+        let limits = ResourceLimits {
+            cpu_quota: Some(1.0),
+            ..Default::default()
+        };
         assert_eq!(limits.optimal_workers(), 1);
 
-        limits.cpu_quota = Some(0.5);
+        let limits = ResourceLimits {
+            cpu_quota: Some(0.5),
+            ..Default::default()
+        };
         assert_eq!(limits.optimal_workers(), 1); // Minimum 1 worker
     }
 
     #[test]
     fn test_memory_limit_display() {
-        let mut limits = ResourceLimits::default();
-
-        limits.memory_limit = Some(1_073_741_824);
+        let limits = ResourceLimits {
+            memory_limit: Some(1_073_741_824),
+            ..Default::default()
+        };
         assert_eq!(limits.memory_limit_display(), "1.0 GB");
 
-        limits.memory_limit = Some(536_870_912);
+        let limits = ResourceLimits {
+            memory_limit: Some(536_870_912),
+            ..Default::default()
+        };
         assert_eq!(limits.memory_limit_display(), "512.0 MB");
 
-        limits.memory_limit = None;
+        let limits = ResourceLimits::default();
         assert_eq!(limits.memory_limit_display(), "unlimited");
     }
 
     #[test]
     fn test_cpu_quota_display() {
-        let mut limits = ResourceLimits::default();
-
-        limits.cpu_quota = Some(2.5);
+        let limits = ResourceLimits {
+            cpu_quota: Some(2.5),
+            ..Default::default()
+        };
         assert_eq!(limits.cpu_quota_display(), "2.50 CPUs");
 
-        limits.cpu_quota = None;
+        let limits = ResourceLimits::default();
         assert_eq!(limits.cpu_quota_display(), "unlimited");
     }
 }

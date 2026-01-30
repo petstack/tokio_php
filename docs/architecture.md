@@ -77,7 +77,7 @@ src/
 │       ├── mod.rs       # Response builder
 │       ├── compression.rs # Brotli compression
 │       ├── static_file.rs # Static file serving
-│       └── streaming.rs # SSE streaming support
+│       └── streaming.rs # SSE streaming (MeteredChunkFrameStream for metrics)
 │
 ├── middleware/          # Middleware system
 │   ├── mod.rs           # Middleware trait
@@ -421,6 +421,103 @@ traceparent: 00-{trace_id}-{parent_span}-01     traceparent: 00-{trace_id}-{new_
 - New `span_id` generated for this request
 - `X-Request-ID` derived from trace: `{trace_id[0:12]}-{span_id[0:4]}`
 
+## Observability
+
+### Metrics Architecture
+
+The internal server (`/metrics`) exports Prometheus-compatible metrics:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      tokio_php Process                           │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                   RequestMetrics                          │  │
+│  │                                                           │  │
+│  │  Atomic counters (lock-free):                             │  │
+│  │  - requests_total{method}  - responses_total{status}      │  │
+│  │  - pending_requests        - dropped_requests             │  │
+│  │  - response_time_total_us  - response_count               │  │
+│  │                                                           │  │
+│  │  SSE metrics:                                             │  │
+│  │  - sse_active              - sse_total                    │  │
+│  │  - sse_chunks              - sse_bytes                    │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          │                                      │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                 Internal Server (:9090)                   │  │
+│  │                                                           │  │
+│  │  /health  - JSON health status                            │  │
+│  │  /metrics - Prometheus format                             │  │
+│  │  /config  - Server configuration                          │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Monitoring Stack                              │
+│                                                                 │
+│  ┌─────────────────┐              ┌─────────────────┐           │
+│  │   Prometheus    │──────────────│    Grafana      │           │
+│  │   (:9091)       │   scrape     │    (:3000)      │           │
+│  │                 │   every 5s   │                 │           │
+│  │  - Alerting     │              │  - Dashboards   │           │
+│  │  - Recording    │              │  - Alerts       │           │
+│  └─────────────────┘              └─────────────────┘           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### SSE Metrics Tracking
+
+SSE connections use `MeteredChunkFrameStream` wrapper for accurate metrics:
+
+```rust
+// src/server/response/streaming.rs
+pub struct MeteredChunkFrameStream {
+    inner: ChunkFrameStream,
+    metrics: Arc<RequestMetrics>,
+}
+
+impl Stream for MeteredChunkFrameStream {
+    fn poll_next(...) -> Poll<Option<...>> {
+        // On each chunk: metrics.sse_chunk_sent(bytes)
+    }
+}
+
+impl Drop for MeteredChunkFrameStream {
+    fn drop(&mut self) {
+        // On stream end: metrics.sse_connection_ended()
+    }
+}
+```
+
+Metrics lifecycle:
+1. `sse_connection_started()` - when SSE stream created
+2. `sse_chunk_sent(bytes)` - on each chunk sent (in `poll_next`)
+3. `sse_connection_ended()` - when stream dropped (in `Drop`)
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_uptime_seconds` | gauge | Server uptime |
+| `tokio_php_requests_per_second` | gauge | Lifetime average RPS |
+| `tokio_php_response_time_avg_seconds` | gauge | Average response time |
+| `tokio_php_active_connections` | gauge | Active HTTP connections |
+| `tokio_php_pending_requests` | gauge | Queue depth |
+| `tokio_php_dropped_requests` | counter | Queue overflow count |
+| `tokio_php_requests_total{method}` | counter | Requests by method |
+| `tokio_php_responses_total{status}` | counter | Responses by status |
+| `tokio_php_sse_active_connections` | gauge | Active SSE streams |
+| `tokio_php_sse_connections_total` | counter | Total SSE connections |
+| `tokio_php_sse_chunks_total` | counter | Total SSE chunks sent |
+| `tokio_php_sse_bytes_total` | counter | Total SSE bytes sent |
+| `node_load1/5/15` | gauge | System load average |
+| `node_memory_*` | gauge | System memory stats |
+
+See [Observability](observability.md) for Grafana setup and PromQL examples.
+
 ## SSE Streaming
 
 Server-Sent Events (SSE) support allows PHP scripts to stream data to clients in real-time.
@@ -655,6 +752,7 @@ HeartbeatContext uses `Instant` instead of `SystemTime`:
 - [Docker](docker.md) - Dockerfiles, build targets, deployment
 - [Middleware](middleware.md) - Middleware system details
 - [Internal Server](internal-server.md) - Health checks and metrics
+- [Observability](observability.md) - Monitoring stack, Grafana, OpenTelemetry
 - [Worker Pool](worker-pool.md) - PHP worker pool configuration
 - [Distributed Tracing](distributed-tracing.md) - W3C Trace Context
 - [Request Heartbeat](request-heartbeat.md) - Timeout extension mechanism

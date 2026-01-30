@@ -63,21 +63,15 @@ impl AutoCertGenerator {
     /// Generate new self-signed certificate and key.
     fn generate(&self, cert_path: &Path, key_path: &Path) -> io::Result<()> {
         // Generate key pair
-        let key_pair = KeyPair::generate().map_err(|e| {
-            io::Error::other(format!("Failed to generate key pair: {}", e))
-        })?;
+        let key_pair = KeyPair::generate()
+            .map_err(|e| io::Error::other(format!("Failed to generate key pair: {}", e)))?;
 
         // Create certificate parameters
-        let mut params = CertificateParams::new(vec![self.cn.clone()]).map_err(|e| {
-            io::Error::other(
-                format!("Failed to create certificate params: {}", e),
-            )
-        })?;
+        let mut params = CertificateParams::new(vec![self.cn.clone()])
+            .map_err(|e| io::Error::other(format!("Failed to create certificate params: {}", e)))?;
 
         // Subject
-        params
-            .distinguished_name
-            .push(DnType::CommonName, &self.cn);
+        params.distinguished_name.push(DnType::CommonName, &self.cn);
         params
             .distinguished_name
             .push(DnType::OrganizationName, "tokio_php");
@@ -109,11 +103,9 @@ impl AutoCertGenerator {
         let expires = params.not_after.date();
 
         // Generate self-signed certificate
-        let cert = params.self_signed(&key_pair).map_err(|e| {
-            io::Error::other(
-                format!("Failed to generate certificate: {}", e),
-            )
-        })?;
+        let cert = params
+            .self_signed(&key_pair)
+            .map_err(|e| io::Error::other(format!("Failed to generate certificate: {}", e)))?;
 
         // Write certificate
         fs::write(cert_path, cert.pem())?;
@@ -167,10 +159,7 @@ impl AutoCertGenerator {
 
         // Parse X.509
         let (_, cert) = x509_parser::parse_x509_certificate(&pem.contents).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Invalid X.509: {}", e),
-            )
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid X.509: {}", e))
         })?;
 
         // Check validity

@@ -252,7 +252,7 @@ async fn test_request_time() {
     // Should be positive and reasonable (< 5000ms)
     let delay_ms = data["delay_ms"].as_f64().unwrap_or(-1.0);
     assert!(
-        delay_ms >= 0.0 && delay_ms < 5000.0,
+        (0.0..5000.0).contains(&delay_ms),
         "delay_ms should be 0-5000ms, got: {}",
         delay_ms
     );

@@ -20,20 +20,23 @@ pub use streaming::{
     file_streaming_response,
     is_sse_accept,
     is_sse_content_type,
+    metered_streaming_response,
     open_file_stream,
     sse_response,
     stream_channel,
     streaming_response,
     FileBody,
     FileResponse,
+    MeteredStreamingBody,
+    MeteredStreamingResponse,
     StreamChunk,
     StreamingBody,
     StreamingResponse,
     DEFAULT_STREAM_BUFFER_SIZE,
 };
 
-/// Inner Either type for streaming bodies (SSE/chunked or file).
-type StreamOrFileBody = Either<StreamingBody, FileBody>;
+/// Inner Either type for streaming bodies (SSE/chunked, metered SSE, or file).
+type StreamOrFileBody = Either<Either<StreamingBody, MeteredStreamingBody>, FileBody>;
 
 /// Response body that can be full (buffered), streaming (SSE/chunked), or file streaming.
 ///
@@ -55,7 +58,13 @@ pub fn full_to_flexible(resp: Response<Full<Bytes>>) -> FlexibleResponse {
 /// Convert a streaming response to a flexible response.
 #[inline]
 pub fn streaming_to_flexible(resp: StreamingResponse) -> FlexibleResponse {
-    resp.map(|body| Either::Right(Either::Left(body)))
+    resp.map(|body| Either::Right(Either::Left(Either::Left(body))))
+}
+
+/// Convert a metered streaming response to a flexible response.
+#[inline]
+pub fn metered_streaming_to_flexible(resp: MeteredStreamingResponse) -> FlexibleResponse {
+    resp.map(|body| Either::Right(Either::Left(Either::Right(body))))
 }
 
 /// Convert a file streaming response to a flexible response.

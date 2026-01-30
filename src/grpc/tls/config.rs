@@ -106,8 +106,8 @@ impl GrpcTlsConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(365);
 
-        let auto_cert_cn = std::env::var("GRPC_TLS_AUTO_CN")
-            .unwrap_or_else(|_| "localhost".to_string());
+        let auto_cert_cn =
+            std::env::var("GRPC_TLS_AUTO_CN").unwrap_or_else(|_| "localhost".to_string());
 
         let auto_cert_dir = std::env::var("GRPC_TLS_AUTO_DIR")
             .map(PathBuf::from)
@@ -200,12 +200,7 @@ mod tests {
         );
         assert!(config.validate().is_ok());
 
-        let config = GrpcTlsConfig::new(
-            GrpcTlsMode::On,
-            None::<&str>,
-            None::<&str>,
-            None::<&str>,
-        );
+        let config = GrpcTlsConfig::new(GrpcTlsMode::On, None::<&str>, None::<&str>, None::<&str>);
         assert!(config.validate().is_err());
     }
 }

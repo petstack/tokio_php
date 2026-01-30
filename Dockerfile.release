@@ -3,6 +3,7 @@
 # Build args:
 #   PHP_VERSION: 8.4 or 8.5
 #   ALPINE_VERSION: 3.23
+#   CARGO_FEATURES: debug-profile, grpc, otel (default: "grpc,otel")
 #
 # Targets:
 #   (default) - Full runtime image with PHP, OPcache, JIT
@@ -18,6 +19,12 @@
 #     --build-arg ALPINE_VERSION=3.23 \
 #     -t tokio_php:php8.4-alpine3.23 .
 #
+#   # Build without optional features (minimal)
+#   docker build -f Dockerfile.release \
+#     --build-arg PHP_VERSION=8.4 \
+#     --build-arg CARGO_FEATURES="" \
+#     -t tokio_php:php8.4-alpine3.23 .
+#
 #   # Extract binaries to ./dist/ (preserves directory structure)
 #   docker build -f Dockerfile.release \
 #     --build-arg PHP_VERSION=8.4 \
@@ -27,6 +34,7 @@
 
 ARG PHP_VERSION=8.4
 ARG ALPINE_VERSION=3.23
+ARG CARGO_FEATURES="grpc,otel"
 
 # =============================================================================
 # Builder stage
@@ -45,6 +53,9 @@ RUN apk add --no-cache \
     g++ \
     autoconf \
     automake \
+    # protoc for gRPC proto compilation
+    protobuf \
+    protobuf-dev \
     # Libraries required by PHP
     readline-dev \
     ncurses-dev \
@@ -91,7 +102,15 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY build.rs ./
 
-RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
+# Re-declare ARG after FROM (required for multi-stage builds)
+ARG CARGO_FEATURES
+
+# Build with optional features (grpc, otel, debug-profile)
+RUN if [ -n "$CARGO_FEATURES" ]; then \
+        RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --features "$CARGO_FEATURES"; \
+    else \
+        RUSTFLAGS="-C target-feature=-crt-static" cargo build --release; \
+    fi
 
 # =============================================================================
 # Distribution stage - extract binaries with proper directory structure

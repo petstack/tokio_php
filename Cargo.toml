@@ -19,6 +19,14 @@ stub = []
 debug-profile = []
 # gRPC server for microservices architecture
 grpc = ["tonic", "prost", "tonic-build", "rcgen", "x509-parser", "time"]
+# OpenTelemetry distributed tracing
+otel = [
+    "opentelemetry",
+    "opentelemetry_sdk",
+    "opentelemetry-otlp",
+    "opentelemetry-semantic-conventions",
+    "tracing-opentelemetry",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "net", "io-util", "fs", "sync", "signal", "macros"] }
@@ -55,6 +63,17 @@ prost = { version = "0.13", optional = true }
 rcgen = { version = "0.13", optional = true }
 x509-parser = { version = "0.16", optional = true }
 time = { version = "0.3", optional = true }
+
+# OpenTelemetry (optional)
+opentelemetry = { version = "0.27", optional = true }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.27", features = ["tonic"], optional = true }
+opentelemetry-semantic-conventions = { version = "0.27", optional = true }
+tracing-opentelemetry = { version = "0.28", optional = true }
+
+# Prometheus metrics
+prometheus = "0.13"
+regex = "1"
 
 [build-dependencies]
 tonic-build = { version = "0.12", optional = true }

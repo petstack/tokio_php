@@ -77,7 +77,7 @@ async fn test_sse_streaming_with_delay() {
         // Second event should arrive after ~500ms delay
         let gap1 = timestamps[1] - timestamps[0];
         assert!(
-            gap1 >= 400 && gap1 < 1500,
+            (400..1500).contains(&gap1),
             "Gap between event 0 and 1 should be ~500ms, got {}ms",
             gap1
         );
@@ -85,7 +85,7 @@ async fn test_sse_streaming_with_delay() {
         // Third event should arrive after another ~500ms delay
         let gap2 = timestamps[2] - timestamps[1];
         assert!(
-            gap2 >= 400 && gap2 < 1500,
+            (400..1500).contains(&gap2),
             "Gap between event 1 and 2 should be ~500ms, got {}ms",
             gap2
         );
@@ -112,7 +112,7 @@ async fn test_sse_one_second_delay() {
     if timestamps.len() >= 2 {
         let gap = timestamps[1] - timestamps[0];
         assert!(
-            gap >= 800 && gap < 2000,
+            (800..2000).contains(&gap),
             "Events should arrive ~1s apart, gap was {}ms",
             gap
         );

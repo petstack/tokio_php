@@ -42,6 +42,12 @@ wrk -t4 -c100 -d10s http://localhost:8080/index.php
 
 # Build with gRPC support (optional)
 cargo build --release --features grpc
+
+# Build with OpenTelemetry tracing (optional)
+cargo build --release --features otel
+
+# Build with all features
+cargo build --release --features "grpc,otel"
 ```
 
 ## Cargo Features
@@ -50,6 +56,7 @@ cargo build --release --features grpc
 |---------|-------------|
 | `php` | Enable PHP execution (default) |
 | `grpc` | Enable gRPC server for microservices |
+| `otel` | Enable OpenTelemetry distributed tracing |
 | `debug-profile` | Enable single-worker profiling mode |
 
 ## Architecture
@@ -61,6 +68,8 @@ cargo build --release --features grpc
 - `src/executor/` - Script execution backends (trait-based, pluggable)
 - `src/types.rs` - ScriptRequest/ScriptResponse data structures
 - `src/profiler.rs` - Request timing profiler with TLS metrics
+- `src/observability/` - Prometheus metrics and OpenTelemetry tracing (otel feature)
+- `src/grpc/` - gRPC server for microservices (grpc feature)
 
 ### Protocol Support
 
@@ -443,6 +452,12 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate file |
 | `TLS_KEY_FILE` | `./certs/key.pem` | Docker secrets: host path to private key file |
 | `RUST_LOG` | `tokio_php=info` | Log level (trace, debug, info, warn, error) |
+| `OTEL_ENABLED` | `0` | Enable OpenTelemetry (`1` = enabled, requires `otel` feature) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP gRPC endpoint for traces |
+| `OTEL_SERVICE_NAME` | `tokio_php` | Service name in traces |
+| `OTEL_SAMPLING_RATIO` | `1.0` | Trace sampling ratio (0.0-1.0) |
+| `GRAFANA_USER` | `admin` | Grafana admin username |
+| `GRAFANA_PASSWORD` | `admin` | Grafana admin password |
 
 ### Auto-calculated Defaults
 
@@ -729,6 +744,24 @@ docker compose exec tokio_php ps aux
 |---------|------|-------------|
 | `tokio_php` | 8080, 9090 | HTTP + internal server |
 | `tokio_php_tls` | 8443, 9090 | HTTPS + internal server (profile: tls) |
+| `prometheus` | 9091 | Prometheus metrics (profile: monitoring) |
+| `grafana` | 3000 | Grafana dashboards (profile: monitoring) |
+
+### Monitoring Stack
+
+```bash
+# Start with Prometheus and Grafana
+docker compose --profile monitoring up -d
+
+# Open Grafana (admin/admin)
+open http://localhost:3000
+
+# Open Prometheus
+open http://localhost:9091
+
+# Stop monitoring
+docker compose --profile monitoring down
+```
 
 ## Testing Protocols
 
@@ -1287,6 +1320,193 @@ GRPC_ADDR=0.0.0.0:50051 docker compose up -d
 # mTLS (production, client certs required)
 GRPC_TLS=on GRPC_TLS_CERT=/path/cert.pem GRPC_TLS_KEY=/path/key.pem \
 GRPC_TLS_CA=/path/ca.pem GRPC_ADDR=0.0.0.0:50051 docker compose up -d
+```
+
+## Observability
+
+Production-grade observability with Prometheus metrics and optional OpenTelemetry distributed tracing.
+
+### Architecture
+
+```
+src/observability/
+├── mod.rs                    # Module exports
+├── metrics.rs                # Prometheus metrics registry
+├── otel.rs                   # OpenTelemetry init (otel feature)
+└── tracing_middleware.rs     # W3C Trace Context propagation (otel feature)
+
+deploy/
+├── grafana/tokio-php-dashboard.json   # Grafana dashboard
+└── prometheus/alerts.yml              # Prometheus alerting rules
+```
+
+### Prometheus Metrics
+
+Metrics are available at `/metrics` endpoint (requires `INTERNAL_ADDR`).
+
+#### HTTP Metrics (RED: Rate, Errors, Duration)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_http_requests_total{method,path,status}` | counter | Total HTTP requests |
+| `tokio_php_http_request_duration_seconds{method,path}` | histogram | Request duration |
+| `tokio_php_http_request_size_bytes{method}` | histogram | Request body size |
+| `tokio_php_http_response_size_bytes{method,status}` | histogram | Response body size |
+| `tokio_php_http_connections_active` | gauge | Active HTTP connections |
+
+#### PHP Execution Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_php_executions_total{script,status}` | counter | PHP script executions |
+| `tokio_php_php_execution_duration_seconds{script}` | histogram | PHP execution time |
+| `tokio_php_php_startup_duration_seconds` | histogram | php_request_startup() time |
+| `tokio_php_php_shutdown_duration_seconds` | histogram | php_request_shutdown() time |
+| `tokio_php_php_superglobals_duration_seconds` | histogram | Superglobals injection time |
+| `tokio_php_php_queue_depth` | gauge | Current queue depth |
+| `tokio_php_php_queue_capacity` | gauge | Queue capacity |
+| `tokio_php_php_workers_busy` | gauge | Busy workers count |
+| `tokio_php_php_workers_total` | gauge | Total workers count |
+
+#### OPcache Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_opcache_hits_total` | counter | OPcache hits |
+| `tokio_php_opcache_misses_total` | counter | OPcache misses |
+| `tokio_php_opcache_memory_used_bytes` | gauge | OPcache memory usage |
+| `tokio_php_opcache_cached_scripts` | gauge | Cached scripts count |
+
+#### System Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_process_memory_bytes{type}` | gauge | Memory (virtual/resident) |
+| `tokio_php_process_cpu_usage` | gauge | CPU usage (0.0-1.0) |
+| `tokio_php_process_open_fds` | gauge | Open file descriptors |
+| `tokio_php_process_uptime_seconds` | gauge | Process uptime |
+
+#### gRPC Metrics (with `grpc` feature)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_grpc_requests_total{method,status}` | counter | Total gRPC requests |
+| `tokio_php_grpc_request_duration_seconds{method}` | histogram | gRPC request duration |
+
+### OpenTelemetry (Optional)
+
+Enable distributed tracing with the `otel` feature:
+
+```bash
+# Build with OpenTelemetry support
+cargo build --release --features otel
+
+# Or with Docker
+CARGO_FEATURES=otel docker compose build
+```
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_ENABLED` | `0` | Enable OpenTelemetry (`1` = enabled) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP gRPC endpoint |
+| `OTEL_SERVICE_NAME` | `tokio_php` | Service name in traces |
+| `OTEL_SERVICE_VERSION` | _(from Cargo)_ | Service version |
+| `OTEL_ENVIRONMENT` | `development` | Deployment environment |
+| `OTEL_SAMPLING_RATIO` | `1.0` | Sampling ratio (0.0-1.0) |
+
+#### Example with Jaeger
+
+```bash
+# Start Jaeger
+docker run -d --name jaeger \
+  -p 16686:16686 \
+  -p 4317:4317 \
+  jaegertracing/all-in-one:latest
+
+# Run with OpenTelemetry
+OTEL_ENABLED=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  docker compose up -d
+
+# View traces at http://localhost:16686
+```
+
+#### W3C Trace Context
+
+Automatic propagation of W3C Trace Context headers:
+
+| Header | Direction | Description |
+|--------|-----------|-------------|
+| `traceparent` | Request/Response | W3C trace context |
+| `tracestate` | Request/Response | Vendor-specific trace data |
+
+PHP variables for trace propagation:
+
+```php
+<?php
+$traceId = $_SERVER['TRACE_ID'];
+$spanId = $_SERVER['SPAN_ID'];
+$parentSpanId = $_SERVER['PARENT_SPAN_ID'] ?? null;
+
+// Propagate to downstream service
+$ch = curl_init('https://api.example.com');
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "traceparent: 00-{$traceId}-" . bin2hex(random_bytes(8)) . "-01"
+]);
+```
+
+### Grafana Dashboard
+
+Import `deploy/grafana/tokio-php-dashboard.json` into Grafana for:
+
+- **Request Rate** - Requests per second by method
+- **Latency** - p50, p95, p99 response times
+- **Error Rate** - 5xx errors percentage
+- **PHP Execution** - Script execution time breakdown
+- **Worker Utilization** - Busy workers percentage
+- **Queue Depth** - Pending requests vs capacity
+- **Memory Usage** - RSS memory consumption
+- **OPcache Hit Rate** - Cache efficiency
+
+### Prometheus Alerting Rules
+
+Import `deploy/prometheus/alerts.yml` for production alerts:
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| `TokioPhpDown` | Instance down for 1m | critical |
+| `TokioPhpHighLatency` | p99 > 1s for 5m | warning |
+| `TokioPhpCriticalLatency` | p99 > 5s for 2m | critical |
+| `TokioPhpHighErrorRate` | 5xx > 5% for 5m | warning |
+| `TokioPhpCriticalErrorRate` | 5xx > 10% for 2m | critical |
+| `TokioPhpQueueSaturated` | Queue > 90% for 2m | warning |
+| `TokioPhpWorkersSaturated` | Workers > 95% for 5m | warning |
+| `TokioPhpHighMemory` | RSS > 1GB for 10m | warning |
+| `TokioPhpCriticalMemory` | RSS > 2GB for 5m | critical |
+| `TokioPhpSlowPhpExecution` | p99 > 500ms for 5m | warning |
+| `TokioPhpHighPhpErrors` | PHP errors > 5% for 5m | warning |
+| `TokioPhpNoTraffic` | No requests for 10m | warning |
+
+### Quick Setup
+
+```bash
+# Prometheus configuration
+cat >> prometheus.yml << 'EOF'
+scrape_configs:
+  - job_name: 'tokio_php'
+    static_configs:
+      - targets: ['localhost:9090']
+
+rule_files:
+  - /path/to/deploy/prometheus/alerts.yml
+EOF
+
+# Run with internal server for metrics
+INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
+
+# Verify metrics
+curl http://localhost:9090/metrics | grep tokio_php
 ```
 
 ## Limitations

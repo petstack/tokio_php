@@ -377,14 +377,17 @@ use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, warn};
 
+#[cfg(feature = "otel")]
+use crate::observability::tracing_middleware::TracedRequest;
+
 use super::access_log;
 use super::config::TlsInfo;
 use super::error_pages::{accepts_html, status_reason_phrase, ErrorPages};
 use super::request::{parse_cookies, parse_multipart, parse_query_string};
 use super::response::{
     accepts_brotli, empty_stub_response, from_script_response, full_to_flexible, is_sse_accept,
-    not_found_response, serve_static_file, streaming_response, streaming_to_flexible,
-    stub_response_with_profile, FlexibleResponse, BAD_REQUEST_BODY, EMPTY_BODY,
+    metered_streaming_response, metered_streaming_to_flexible, not_found_response,
+    serve_static_file, stub_response_with_profile, FlexibleResponse, BAD_REQUEST_BODY, EMPTY_BODY,
     METHOD_NOT_ALLOWED_BODY,
 };
 use super::routing::is_php_uri;
@@ -607,6 +610,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Normal (non-streaming) request path
         let request_start = Instant::now();
 
+        // Start OpenTelemetry span for tracing (if otel feature enabled)
+        #[cfg(feature = "otel")]
+        let traced_request = TracedRequest::new(&req);
+
         // Extract or generate W3C Trace Context
         let trace_ctx = TraceContext::from_headers(req.headers());
 
@@ -821,6 +828,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 Some(trace_ctx.span_id()),
             );
         }
+
+        // End OpenTelemetry span (if otel feature enabled)
+        #[cfg(feature = "otel")]
+        traced_request.end(response.status().as_u16());
 
         Ok(response)
     }
@@ -1374,12 +1385,17 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     receiver,
                 }) => {
                     // PHP enabled SSE via Content-Type: text/event-stream header
-                    // Track SSE connection
+                    // Track SSE connection (ended tracked via metered stream Drop)
                     self.request_metrics.sse_connection_started();
 
-                    // Build streaming response with auto-detected SSE headers
-                    let response = streaming_response(status_code, headers, receiver);
-                    streaming_to_flexible(response)
+                    // Build streaming response with metrics tracking
+                    let response = metered_streaming_response(
+                        status_code,
+                        headers,
+                        receiver,
+                        Arc::clone(&self.request_metrics),
+                    );
+                    metered_streaming_to_flexible(response)
                 }
                 Err(e) => {
                     if e.is_timeout() {
@@ -1464,6 +1480,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         tls_info: Option<TlsInfo>,
     ) -> Result<FlexibleResponse, Infallible> {
         let request_start = Instant::now();
+
+        // Start OpenTelemetry span for SSE tracing (if otel feature enabled)
+        #[cfg(feature = "otel")]
+        let traced_request = TracedRequest::new(&req);
+
         let trace_ctx = TraceContext::from_headers(req.headers());
 
         // Get request ID
@@ -1496,6 +1517,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             RouteResult::Execute(path) => path,
             RouteResult::Serve(_) => {
                 // Return error for non-PHP SSE requests
+                #[cfg(feature = "otel")]
+                traced_request.end(400);
                 let response = Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .header(
@@ -1509,6 +1532,8 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 return Ok(full_to_flexible(response));
             }
             RouteResult::NotFound => {
+                #[cfg(feature = "otel")]
+                traced_request.end(404);
                 return Ok(full_to_flexible(not_found_response()));
             }
         };
@@ -1600,7 +1625,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             .await
         {
             Ok(stream_rx) => {
-                // Track SSE connection
+                // Track SSE connection (ended tracked via metered stream Drop)
                 self.request_metrics.sse_connection_started();
 
                 // Build SSE headers
@@ -1619,14 +1644,24 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                 // Add Server header
                 headers.push(("Server".to_string(), "tokio_php/0.1.0".to_string()));
 
-                let response = streaming_response(200, headers, stream_rx);
+                // Build streaming response with metrics tracking
+                let response = metered_streaming_response(
+                    200,
+                    headers,
+                    stream_rx,
+                    Arc::clone(&self.request_metrics),
+                );
 
                 // Record metrics
                 let response_time_us = request_start.elapsed().as_micros() as u64;
                 self.request_metrics.record_response_time(response_time_us);
                 self.request_metrics.increment_status(200);
 
-                Ok(streaming_to_flexible(response))
+                // End OpenTelemetry span for SSE (if otel feature enabled)
+                #[cfg(feature = "otel")]
+                traced_request.end(200);
+
+                Ok(metered_streaming_to_flexible(response))
             }
             Err(e) => {
                 // Streaming not supported or error
@@ -1638,6 +1673,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                     )
                     .body(Full::new(Bytes::from(format!("SSE error: {}", e))))
                     .unwrap();
+
+                // End OpenTelemetry span for SSE error (if otel feature enabled)
+                #[cfg(feature = "otel")]
+                traced_request.end(500);
+
                 Ok(full_to_flexible(response))
             }
         }

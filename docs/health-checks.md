@@ -16,6 +16,7 @@ INTERNAL_ADDR=0.0.0.0:9090 docker compose up -d
 |----------|-------------|
 | `/health` | Health check (JSON) |
 | `/metrics` | Prometheus metrics |
+| `/config` | Current server configuration (JSON) |
 
 ### Health Response
 
@@ -38,6 +39,21 @@ curl http://localhost:9090/health
 | `timestamp` | Unix timestamp |
 | `active_connections` | Current active HTTP connections |
 | `total_requests` | Total requests processed since start |
+
+## Monitoring Stack
+
+For full observability, enable the monitoring profile:
+
+```bash
+# Start with Prometheus + Grafana
+docker compose --profile monitoring up -d
+
+# Access:
+# - Prometheus: http://localhost:9091
+# - Grafana: http://localhost:3000 (admin/admin)
+```
+
+See [Observability](observability.md) for metrics, dashboards, and alerting.
 
 ## Docker Compose Healthcheck
 
@@ -412,5 +428,6 @@ kubectl logs <pod-name> --tail=50
 ## See Also
 
 - [Internal Server](internal-server.md) - Full /health and /metrics endpoint reference
+- [Observability](observability.md) - Monitoring stack, Grafana, Prometheus alerts
 - [Graceful Shutdown](graceful-shutdown.md) - Shutdown behavior and Kubernetes integration
 - [Configuration](configuration.md) - Environment variables reference

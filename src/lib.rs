@@ -48,6 +48,7 @@ pub mod health;
 pub mod listener;
 pub mod logging;
 pub mod middleware;
+pub mod observability;
 pub mod profiler;
 pub mod server;
 pub mod system;

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -8,10 +6,11 @@ use tokio_php::executor::ScriptExecutor;
 use tokio_php::logging;
 use tokio_php::server::{Server, ServerConfig};
 
+#[cfg(feature = "otel")]
+use tokio_php::observability::otel::{init_tracing, shutdown_tracing, OtelConfig};
+
 #[cfg(feature = "grpc")]
 use tokio_php::grpc::GrpcServer;
-#[cfg(feature = "grpc")]
-use tokio_php::health::HealthChecker;
 
 #[cfg(feature = "php")]
 use tokio_php::executor::PhpExecutor;
@@ -71,6 +70,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Initialize OpenTelemetry tracing (if enabled)
+    #[cfg(feature = "otel")]
+    {
+        let otel_config = OtelConfig::from_env();
+        if let Err(e) = init_tracing(&otel_config) {
+            eprintln!("Warning: Failed to initialize OpenTelemetry: {}", e);
+        }
+    }
+
     // Build ServerConfig from new Config
     let mut server_config = ServerConfig::new(config.server.listen_addr)
         .with_workers(config.executor.worker_count())
@@ -145,11 +153,11 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 .with_access_log_enabled(access_log_enabled)
                 .with_rate_limiter(rate_limit_config);
             run_server(
-                    server,
-                    #[cfg(feature = "grpc")]
-                    grpc_ctx.clone(),
-                )
-                .await
+                server,
+                #[cfg(feature = "grpc")]
+                grpc_ctx.clone(),
+            )
+            .await
         }
         ExecutorType::Ext => {
             #[cfg(feature = "php")]
@@ -291,8 +299,13 @@ async fn run_server<E: ScriptExecutor + 'static>(
         let health_checker = server.health_checker();
         let document_root = server.document_root().to_string();
 
-        let grpc_server =
-            GrpcServer::with_tls(ctx.addr, executor, health_checker, document_root, ctx.tls_config);
+        let grpc_server = GrpcServer::with_tls(
+            ctx.addr,
+            executor,
+            health_checker,
+            document_root,
+            ctx.tls_config,
+        );
 
         Some(tokio::spawn(async move {
             if let Err(e) = grpc_server.run().await {
@@ -345,6 +358,11 @@ async fn run_server<E: ScriptExecutor + 'static>(
 
     // Cleanup PHP workers
     server.shutdown();
+
+    // Shutdown OpenTelemetry tracing (flush pending spans)
+    #[cfg(feature = "otel")]
+    shutdown_tracing();
+
     info!("Shutdown complete");
 
     Ok(())

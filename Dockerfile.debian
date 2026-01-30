@@ -2,6 +2,7 @@
 #
 # Build args:
 #   PHP_VERSION: 8.4 or 8.5
+#   CARGO_FEATURES: debug-profile, grpc, otel (default: "grpc,otel")
 #
 # Targets:
 #   (default) - Full runtime image with PHP, OPcache, JIT
@@ -13,6 +14,12 @@
 #     --build-arg PHP_VERSION=8.4 \
 #     -t tokio_php:php8.4-bookworm .
 #
+#   # Build without optional features (minimal)
+#   docker build -f Dockerfile.debian \
+#     --build-arg PHP_VERSION=8.4 \
+#     --build-arg CARGO_FEATURES="" \
+#     -t tokio_php:php8.4-bookworm .
+#
 #   # Extract binaries to ./dist-debian/
 #   docker build -f Dockerfile.debian \
 #     --build-arg PHP_VERSION=8.4 \
@@ -20,6 +27,7 @@
 #     --output type=local,dest=./dist-debian .
 
 ARG PHP_VERSION=8.4
+ARG CARGO_FEATURES="grpc,otel"
 
 # =============================================================================
 # Builder stage
@@ -38,6 +46,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
     automake \
     libtool \
+    # protoc for gRPC proto compilation
+    protobuf-compiler \
+    libprotobuf-dev \
     # Libraries required by PHP
     libreadline-dev \
     libncurses-dev \
@@ -88,7 +99,15 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY build.rs ./
 
-RUN cargo build --release
+# Re-declare ARG after FROM (required for multi-stage builds)
+ARG CARGO_FEATURES
+
+# Build with optional features (grpc, otel, debug-profile)
+RUN if [ -n "$CARGO_FEATURES" ]; then \
+        cargo build --release --features "$CARGO_FEATURES"; \
+    else \
+        cargo build --release; \
+    fi
 
 # =============================================================================
 # Distribution stage - extract binaries with proper directory structure

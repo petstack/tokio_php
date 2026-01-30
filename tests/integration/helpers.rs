@@ -179,6 +179,7 @@ pub async fn assert_body_contains(response: Response, substring: &str) {
 
 /// SSE event parsed from stream
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SseEvent {
     pub event: Option<String>,
     pub data: String,

@@ -29,6 +29,24 @@ tokio_php is configured via environment variables.
 | `SERVICE_NAME` | `tokio_php` | Service name in structured logs |
 | `PHP_VERSION` | `8.5` | Docker build: PHP version (8.4 or 8.5) |
 
+### OpenTelemetry (requires `otel` feature)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_ENABLED` | `0` | Enable OpenTelemetry tracing (`1` = enabled) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP gRPC endpoint |
+| `OTEL_SERVICE_NAME` | `tokio_php` | Service name in traces |
+| `OTEL_SERVICE_VERSION` | _(from Cargo)_ | Service version |
+| `OTEL_ENVIRONMENT` | `development` | Deployment environment |
+| `OTEL_SAMPLING_RATIO` | `1.0` | Sampling ratio (0.0-1.0) |
+
+### Monitoring Stack (docker compose --profile monitoring)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRAFANA_USER` | `admin` | Grafana admin username |
+| `GRAFANA_PASSWORD` | `admin` | Grafana admin password |
+
 ## Detailed Configuration
 
 ### LISTEN_ADDR
@@ -576,6 +594,57 @@ TLS_CERT_FILE=/path/to/cert.pem TLS_KEY_FILE=/path/to/key.pem docker compose --p
 ```
 
 See [HTTP/2 & TLS](http2-tls.md) for certificate setup and protocol configuration.
+
+### OpenTelemetry
+
+Enable distributed tracing with OpenTelemetry (requires `otel` feature).
+
+```bash
+# Build with OpenTelemetry support
+CARGO_FEATURES=otel docker compose build
+
+# Enable tracing
+OTEL_ENABLED=1 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317 \
+OTEL_SERVICE_NAME=my-app \
+docker compose up -d
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_ENABLED` | `0` | Enable tracing (`1` = enabled) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP gRPC endpoint (Jaeger, Tempo, etc.) |
+| `OTEL_SERVICE_NAME` | `tokio_php` | Service name in traces |
+| `OTEL_SERVICE_VERSION` | _(Cargo.toml)_ | Service version |
+| `OTEL_ENVIRONMENT` | `development` | Environment: `development`, `staging`, `production` |
+| `OTEL_SAMPLING_RATIO` | `1.0` | Sampling ratio (0.0 = none, 1.0 = all) |
+
+**Sampling recommendations:**
+- `1.0` - Development/staging (all requests)
+- `0.1` - Production (10% of requests)
+- `0.01` - High-traffic production (1% of requests)
+
+See [Observability](observability.md) for full tracing documentation.
+
+### Monitoring Stack
+
+Enable Prometheus and Grafana with Docker Compose profile:
+
+```bash
+# Start with monitoring
+docker compose --profile monitoring up -d
+
+# Access:
+# - Prometheus: http://localhost:9091
+# - Grafana: http://localhost:3000 (admin/admin)
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRAFANA_USER` | `admin` | Grafana admin username |
+| `GRAFANA_PASSWORD` | `admin` | Grafana admin password |
+
+See [Observability](observability.md) for metrics and dashboard details.
 
 ### PHP_VERSION
 

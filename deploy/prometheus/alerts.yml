@@ -1,0 +1,195 @@
+# Prometheus alerting rules for tokio_php
+#
+# Usage:
+#   1. Add to your prometheus.yml:
+#      rule_files:
+#        - /path/to/alerts.yml
+#
+#   2. Configure Alertmanager for notifications
+
+groups:
+  - name: tokio_php_alerts
+    rules:
+      # === Availability Alerts ===
+
+      - alert: TokioPhpDown
+        expr: up{job="tokio_php"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "tokio_php instance down"
+          description: "Instance {{ $labels.instance }} has been down for more than 1 minute."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#instance-down"
+
+      # === Latency Alerts ===
+
+      - alert: TokioPhpHighLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(tokio_php_http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency (> 1s)"
+          description: "p99 latency is {{ $value | humanizeDuration }}. Investigate slow requests."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#high-latency"
+
+      - alert: TokioPhpCriticalLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(tokio_php_http_request_duration_seconds_bucket[5m])) by (le)) > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical p99 latency (> 5s)"
+          description: "p99 latency is {{ $value | humanizeDuration }}. Immediate action required."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#critical-latency"
+
+      # === Error Rate Alerts ===
+
+      - alert: TokioPhpHighErrorRate
+        expr: |
+          sum(rate(tokio_php_http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(tokio_php_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate (> 5%)"
+          description: "Error rate is {{ $value | humanizePercentage }}. Check application logs."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#high-error-rate"
+
+      - alert: TokioPhpCriticalErrorRate
+        expr: |
+          sum(rate(tokio_php_http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(tokio_php_http_requests_total[5m])) > 0.10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical error rate (> 10%)"
+          description: "Error rate is {{ $value | humanizePercentage }}. Immediate action required."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#critical-error-rate"
+
+      # === Resource Saturation Alerts ===
+
+      - alert: TokioPhpQueueSaturated
+        expr: |
+          tokio_php_php_queue_depth / tokio_php_php_queue_capacity > 0.9
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker queue near capacity (> 90%)"
+          description: "Queue is {{ $value | humanizePercentage }} full. Consider scaling workers."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#queue-saturation"
+
+      - alert: TokioPhpWorkersSaturated
+        expr: |
+          tokio_php_php_workers_busy / tokio_php_php_workers_total > 0.95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workers near saturation (> 95%)"
+          description: "{{ $value | humanizePercentage }} of workers are busy. Consider adding workers."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#worker-saturation"
+
+      # === Memory Alerts ===
+
+      - alert: TokioPhpHighMemory
+        expr: |
+          tokio_php_process_memory_bytes{type="resident"} > 1e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage (> 1GB)"
+          description: "Memory usage is {{ $value | humanize1024 }}B. Check for memory leaks."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#high-memory"
+
+      - alert: TokioPhpCriticalMemory
+        expr: |
+          tokio_php_process_memory_bytes{type="resident"} > 2e9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical memory usage (> 2GB)"
+          description: "Memory usage is {{ $value | humanize1024 }}B. Risk of OOM."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#critical-memory"
+
+      # === PHP Execution Alerts ===
+
+      - alert: TokioPhpSlowPhpExecution
+        expr: |
+          histogram_quantile(0.99, sum(rate(tokio_php_php_execution_duration_seconds_bucket[5m])) by (le)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow PHP execution (p99 > 500ms)"
+          description: "PHP p99 execution time is {{ $value | humanizeDuration }}."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#slow-php"
+
+      - alert: TokioPhpHighPhpErrors
+        expr: |
+          sum(rate(tokio_php_php_executions_total{status="error"}[5m]))
+          / sum(rate(tokio_php_php_executions_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High PHP error rate (> 5%)"
+          description: "PHP error rate is {{ $value | humanizePercentage }}."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#php-errors"
+
+      # === Connection Alerts ===
+
+      - alert: TokioPhpHighConnections
+        expr: |
+          tokio_php_http_connections_active > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High active connections (> 1000)"
+          description: "{{ $value }} active connections. Check for connection leaks."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#high-connections"
+
+      - alert: TokioPhpFileDescriptorExhaustion
+        expr: |
+          tokio_php_process_open_fds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High file descriptor usage (> 900)"
+          description: "{{ $value }} open file descriptors. Risk of exhaustion."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#fd-exhaustion"
+
+      # === Traffic Anomaly Alerts ===
+
+      - alert: TokioPhpNoTraffic
+        expr: |
+          sum(rate(tokio_php_http_requests_total[5m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No traffic received"
+          description: "No HTTP requests in the last 10 minutes. Check load balancer or DNS."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#no-traffic"
+
+      - alert: TokioPhpTrafficSpike
+        expr: |
+          sum(rate(tokio_php_http_requests_total[1m])) >
+          2 * sum(rate(tokio_php_http_requests_total[1h] offset 5m))
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Traffic spike detected"
+          description: "Request rate is 2x higher than the hourly average. May be normal traffic growth or attack."
+          runbook_url: "https://github.com/your-org/tokio_php/wiki/Runbooks#traffic-spike"

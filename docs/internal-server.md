@@ -181,6 +181,15 @@ See [Worker Pool](worker-pool.md) for queue configuration and [Rate Limiting](ra
 | `node_memory_MemUsed_bytes` | gauge | Used memory |
 | `tokio_php_memory_usage_percent` | gauge | Memory usage % |
 
+### SSE Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_sse_active_connections` | gauge | Current active SSE connections |
+| `tokio_php_sse_connections_total` | counter | Total SSE connections since startup |
+| `tokio_php_sse_chunks_total` | counter | Total SSE chunks sent |
+| `tokio_php_sse_bytes_total` | counter | Total SSE bytes sent |
+
 ### Example Output
 
 ```
@@ -253,6 +262,22 @@ node_memory_MemUsed_bytes 8589934592
 # HELP tokio_php_memory_usage_percent Memory usage percentage
 # TYPE tokio_php_memory_usage_percent gauge
 tokio_php_memory_usage_percent 50.00
+
+# HELP tokio_php_sse_active_connections Current active SSE connections
+# TYPE tokio_php_sse_active_connections gauge
+tokio_php_sse_active_connections 2
+
+# HELP tokio_php_sse_connections_total Total SSE connections
+# TYPE tokio_php_sse_connections_total counter
+tokio_php_sse_connections_total 150
+
+# HELP tokio_php_sse_chunks_total Total SSE chunks sent
+# TYPE tokio_php_sse_chunks_total counter
+tokio_php_sse_chunks_total 45000
+
+# HELP tokio_php_sse_bytes_total Total SSE bytes sent
+# TYPE tokio_php_sse_bytes_total counter
+tokio_php_sse_bytes_total 2250000
 ```
 
 ## Prometheus Integration
@@ -290,7 +315,7 @@ spec:
 
 ### Key Queries
 
-```
+```promql
 # Request rate
 rate(tokio_php_requests_total[1m])
 
@@ -306,6 +331,15 @@ tokio_php_pending_requests
 
 # Memory usage
 tokio_php_memory_usage_percent
+
+# SSE active connections
+tokio_php_sse_active_connections
+
+# SSE throughput (bytes/sec)
+rate(tokio_php_sse_bytes_total[1m])
+
+# SSE chunks rate
+rate(tokio_php_sse_chunks_total[1m])
 ```
 
 ### Sample Dashboard JSON
@@ -424,6 +458,33 @@ services:
       - internal             # Prometheus in same internal network
 ```
 
+## Monitoring Stack
+
+The easiest way to set up monitoring is using the built-in Docker Compose profile:
+
+```bash
+# Start with monitoring (Prometheus + Grafana)
+docker compose --profile monitoring up -d
+
+# Access:
+# - App: http://localhost:8080
+# - Metrics: http://localhost:9090/metrics
+# - Prometheus: http://localhost:9091
+# - Grafana: http://localhost:3000 (admin/admin)
+```
+
+| Service | Port | Description |
+|---------|------|-------------|
+| `prometheus` | 9091 | Metrics collection, alerting |
+| `grafana` | 3000 | Dashboards, visualization |
+
+Pre-configured:
+- Prometheus datasource auto-provisioned in Grafana
+- Dashboard auto-imported from `deploy/grafana/tokio-php-dashboard.json`
+- Alerting rules from `deploy/prometheus/alerts.yml`
+
+See [Observability](observability.md) for dashboard details and PromQL examples.
+
 ## Docker Compose Example
 
 ```yaml
@@ -442,23 +503,30 @@ services:
       retries: 3
       start_period: 10s
 
+  # Optional: use --profile monitoring instead of manual setup
   prometheus:
     image: prom/prometheus
     ports:
-      - "9092:9090"
+      - "9091:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml
 
   grafana:
     image: grafana/grafana
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning
+      - ./deploy/grafana/tokio-php-dashboard.json:/var/lib/grafana/dashboards/tokio-php.json
 ```
 
 ## See Also
 
+- [Observability](observability.md) - Monitoring stack, Grafana dashboards, OpenTelemetry
 - [Health Checks](health-checks.md) - Kubernetes probes and Docker healthcheck
 - [Graceful Shutdown](graceful-shutdown.md) - Connection draining and shutdown
 - [Worker Pool](worker-pool.md) - Queue configuration

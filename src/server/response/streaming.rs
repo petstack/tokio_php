@@ -29,12 +29,108 @@ use hyper::Response;
 use std::convert::Infallible;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::fs::File;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tokio_util::io::ReaderStream;
+
+use crate::server::internal::RequestMetrics;
+
+// =============================================================================
+// Metered Stream for SSE Metrics
+// =============================================================================
+
+/// A wrapper around ChunkFrameStream that tracks SSE metrics.
+///
+/// This stream:
+/// - Calls `sse_chunk_sent(bytes)` when data is polled from the stream
+/// - Calls `sse_connection_ended()` when the stream is dropped
+pub struct MeteredChunkFrameStream {
+    inner: ChunkFrameStream,
+    metrics: Arc<RequestMetrics>,
+}
+
+impl MeteredChunkFrameStream {
+    /// Create a new metered chunk frame stream.
+    pub fn new(rx: mpsc::Receiver<StreamChunk>, metrics: Arc<RequestMetrics>) -> Self {
+        Self {
+            inner: ChunkFrameStream::new(rx),
+            metrics,
+        }
+    }
+}
+
+impl Stream for MeteredChunkFrameStream {
+    type Item = Result<Frame<Bytes>, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                // Track chunk bytes
+                if let Some(data) = frame.data_ref() {
+                    self.metrics.sse_chunk_sent(data.len());
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for MeteredChunkFrameStream {
+    fn drop(&mut self) {
+        // Track connection end
+        self.metrics.sse_connection_ended();
+    }
+}
+
+/// Type alias for metered streaming body.
+pub type MeteredStreamingBody = StreamBody<MeteredChunkFrameStream>;
+
+/// Type alias for metered streaming HTTP response.
+pub type MeteredStreamingResponse = Response<MeteredStreamingBody>;
+
+/// Create a metered streaming response that tracks SSE metrics.
+///
+/// This is the preferred function for SSE responses as it properly tracks:
+/// - Chunks sent (count and bytes)
+/// - Connection end (via Drop)
+///
+/// # Arguments
+///
+/// * `status` - HTTP status code
+/// * `headers` - Response headers (name, value pairs)
+/// * `body_rx` - Channel receiver for streaming chunks
+/// * `metrics` - Request metrics for tracking SSE stats
+///
+/// # Returns
+///
+/// A streaming HTTP response that tracks metrics as chunks are sent.
+pub fn metered_streaming_response(
+    status: u16,
+    headers: Vec<(String, String)>,
+    body_rx: mpsc::Receiver<StreamChunk>,
+    metrics: Arc<RequestMetrics>,
+) -> MeteredStreamingResponse {
+    let frame_stream = MeteredChunkFrameStream::new(body_rx, metrics);
+    let body = StreamBody::new(frame_stream);
+
+    let mut builder = Response::builder().status(status);
+
+    for (name, value) in headers {
+        builder = builder.header(name, value);
+    }
+
+    builder.body(body).unwrap()
+}
+
+// =============================================================================
+// Basic Stream Chunk Types
+// =============================================================================
 
 /// A chunk of streaming data.
 #[derive(Debug, Clone)]

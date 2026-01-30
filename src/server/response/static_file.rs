@@ -14,8 +14,12 @@ use super::streaming::{file_streaming_response, open_file_stream, should_stream_
 use super::EMPTY_BODY;
 use crate::server::config::StaticCacheTtl;
 
-/// Response body type: either in-memory or file streaming.
-type StaticFileBody = Either<Full<Bytes>, Either<super::StreamingBody, FileBody>>;
+/// Response body type: either in-memory or streaming (SSE/metered SSE/file).
+/// Matches FlexibleBody structure: Either<Full, Either<Either<Streaming, Metered>, File>>
+type StaticFileBody = Either<
+    Full<Bytes>,
+    Either<Either<super::StreamingBody, super::MeteredStreamingBody>, FileBody>,
+>;
 
 /// Format SystemTime as HTTP-date (RFC 7231).
 /// Example: "Sun, 06 Nov 1994 08:49:37 GMT"

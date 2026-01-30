@@ -1,7 +1,7 @@
 # PHP version: 8.4 or 8.5
 ARG PHP_VERSION=8.4
-# Cargo features (e.g., "debug-profile" for profiling build)
-ARG CARGO_FEATURES=""
+# Cargo features: debug-profile, grpc, otel (default: grpc,otel)
+ARG CARGO_FEATURES="grpc,otel"
 
 FROM php:${PHP_VERSION}-zts-alpine AS builder
 

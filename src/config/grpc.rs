@@ -5,21 +5,12 @@ use std::net::SocketAddr;
 use crate::grpc::tls::GrpcTlsConfig;
 
 /// gRPC server configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GrpcConfig {
     /// gRPC server address (None = disabled)
     pub addr: Option<SocketAddr>,
     /// TLS configuration
     pub tls: GrpcTlsConfig,
-}
-
-impl Default for GrpcConfig {
-    fn default() -> Self {
-        Self {
-            addr: None,
-            tls: GrpcTlsConfig::default(),
-        }
-    }
 }
 
 impl GrpcConfig {
@@ -29,11 +20,12 @@ impl GrpcConfig {
             .ok()
             .filter(|s| !s.is_empty())
             .map(|s| {
-                s.parse::<SocketAddr>().map_err(|e| super::ConfigError::Parse {
-                    key: "GRPC_ADDR".to_string(),
-                    value: s.clone(),
-                    error: e.to_string(),
-                })
+                s.parse::<SocketAddr>()
+                    .map_err(|e| super::ConfigError::Parse {
+                        key: "GRPC_ADDR".to_string(),
+                        value: s.clone(),
+                        error: e.to_string(),
+                    })
             })
             .transpose()?;
 

@@ -6,9 +6,12 @@ services:
       args:
         # PHP version: 8.4 or 8.5
         PHP_VERSION: ${PHP_VERSION:-8.5}
-        # Cargo features (e.g., "debug-profile" for profiling, "grpc" for gRPC support)
-        # For gRPC: CARGO_FEATURES=grpc docker compose build
-        CARGO_FEATURES: ${CARGO_FEATURES:-}
+        # Cargo features: debug-profile, grpc, otel (default: grpc,otel)
+        # Examples:
+        #   CARGO_FEATURES="" docker compose build        # Minimal build (no grpc/otel)
+        #   CARGO_FEATURES=grpc docker compose build      # gRPC only
+        #   CARGO_FEATURES=otel docker compose build      # OpenTelemetry only
+        CARGO_FEATURES: ${CARGO_FEATURES:-grpc,otel}
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -44,6 +47,12 @@ services:
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       # REQUEST_TIMEOUT: request timeout (30s, 2m, 5m, off). Returns 504 on timeout
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      # OpenTelemetry (requires CARGO_FEATURES=otel build)
+      - OTEL_ENABLED=${OTEL_ENABLED:-0}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-tokio_php}
+      - OTEL_ENVIRONMENT=${OTEL_ENVIRONMENT:-development}
+      - OTEL_SAMPLING_RATIO=${OTEL_SAMPLING_RATIO:-1.0}
       # GRPC_ADDR: gRPC server address (requires --features grpc build)
       # Example: GRPC_ADDR=0.0.0.0:50051
       - GRPC_ADDR=${GRPC_ADDR:-}
@@ -98,6 +107,12 @@ services:
       - RATE_WINDOW=${RATE_WINDOW:-60}
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      # OpenTelemetry (requires CARGO_FEATURES=otel build)
+      - OTEL_ENABLED=${OTEL_ENABLED:-0}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-tokio_php}
+      - OTEL_ENVIRONMENT=${OTEL_ENVIRONMENT:-development}
+      - OTEL_SAMPLING_RATIO=${OTEL_SAMPLING_RATIO:-1.0}
       - GRPC_ADDR=${GRPC_ADDR:-}
     secrets:
       - tls_cert
@@ -114,6 +129,67 @@ services:
       start_period: 10s
     profiles:
       - tls
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+    depends_on:
+      - tokio_php
+    profiles:
+      - monitoring
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/tokio-php-dashboard.json:/var/lib/grafana/dashboards/tokio-php-dashboard.json:ro
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+
+  # Jaeger for distributed tracing (OpenTelemetry)
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    profiles:
+      - monitoring
+      - tracing
+
+volumes:
+  prometheus_data:
+  grafana_data:
 
 secrets:
   tls_cert:
