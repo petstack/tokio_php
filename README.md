@@ -60,8 +60,7 @@ PHP_VERSION=8.5 docker compose up -d
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
 | `INDEX_FILE` | — | Routing mode: `index.php` (framework), `index.html` (SPA), empty (traditional) |
-| `USE_EXT` | `1` | Use ExtExecutor (recommended) |
-| `USE_STUB` | `0` | Stub mode (no PHP, for benchmarks) |
+| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | — | Path to TLS certificate (PEM) |
 | `TLS_KEY` | — | Path to TLS private key (PEM) |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration |
@@ -89,7 +88,7 @@ INDEX_FILE=index.html docker compose up -d
 docker compose --profile tls up -d
 
 # Benchmark mode (no PHP)
-USE_STUB=1 docker compose up -d
+EXECUTOR=stub docker compose up -d
 
 # Build with profiling (single-worker, writes reports to /tmp/)
 CARGO_FEATURES=debug-profile docker compose build
@@ -127,7 +126,7 @@ Full PHP superglobals support:
 
 ## Extension Functions
 
-When using `USE_EXT=1`, additional PHP functions are available:
+When using `EXECUTOR=ext` (default), additional PHP functions are available:
 
 ```php
 tokio_request_id();            // int - unique request ID

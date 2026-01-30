@@ -338,9 +338,9 @@ pub trait ScriptExecutor: Send + Sync {
 
 | Executor | Selection | Method | Best For |
 |----------|-----------|--------|----------|
-| `ExtExecutor` | `USE_EXT=1` (default) | `php_execute_script()` + FFI | **Real apps (48% faster)** |
-| `PhpExecutor` | `USE_EXT=0` | `zend_eval_string()` | Minimal scripts |
-| `StubExecutor` | `USE_STUB=1` | No PHP | Benchmarking only |
+| `ExtExecutor` | `EXECUTOR=ext` (default) | `php_execute_script()` + FFI | **Real apps (48% faster)** |
+| `PhpExecutor` | `EXECUTOR=php` | `zend_eval_string()` | Minimal scripts |
+| `StubExecutor` | `EXECUTOR=stub` | No PHP | Benchmarking only |
 
 ### Performance Comparison
 
@@ -360,10 +360,10 @@ pub trait ScriptExecutor: Send + Sync {
 - No tokio_sapi extension overhead (~100µs per request)
 - Simple `zend_eval_string()` is very fast for tiny scripts
 
-Selection priority in `main.rs`:
-1. `USE_STUB=1` → StubExecutor
-2. `USE_EXT=1` (default) → ExtExecutor **← production default**
-3. `USE_EXT=0` → PhpExecutor
+Selection via `EXECUTOR` env var in `main.rs`:
+- `EXECUTOR=ext` → ExtExecutor **← production default**
+- `EXECUTOR=php` → PhpExecutor
+- `EXECUTOR=stub` → StubExecutor
 
 ## Request Heartbeat
 

@@ -249,8 +249,7 @@ healthcheck:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `USE_EXT` | `1` | Use ExtExecutor (recommended, 2x faster) |
-| `USE_STUB` | `0` | Stub mode (no PHP, for benchmarks) |
+| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
 
 ### Middleware
 

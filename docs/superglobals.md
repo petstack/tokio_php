@@ -184,7 +184,7 @@ echo $_SERVER['TRACE_ID'];          // 32-char trace identifier
 echo $_SERVER['SPAN_ID'];           // 16-char span identifier
 echo $_SERVER['PARENT_SPAN_ID'];    // Parent span (if propagated)
 
-// tokio_php specific (USE_EXT=1 only)
+// tokio_php specific (EXECUTOR=ext only)
 echo $_SERVER['TOKIO_REQUEST_ID'];           // Unique request ID
 echo $_SERVER['TOKIO_WORKER_ID'];            // Worker thread ID
 echo $_SERVER['TOKIO_SERVER_BUILD_VERSION']; // Build version with git hash
@@ -247,7 +247,7 @@ $session->save();
 
 ## Implementation Details
 
-### FFI-based Injection (Default, USE_EXT=1)
+### FFI-based Injection (Default, EXECUTOR=ext)
 
 With the tokio_sapi extension (default), superglobals are set via FFI batch API:
 
@@ -261,7 +261,7 @@ FFI is **48% faster** for real applications because:
 - Batch API reduces FFI call overhead
 - Full OPcache/JIT optimization
 
-### Eval-based Injection (USE_EXT=0)
+### Eval-based Injection (EXECUTOR=php)
 
 Legacy mode injects superglobals via `zend_eval_string()`:
 

@@ -106,8 +106,7 @@ All tags are multi-arch (`amd64` + `arm64`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `USE_STUB` | `0` | Stub mode (no PHP execution, for benchmarks). `1` = enabled |
-| `USE_EXT` | `1` | Use FFI extension for superglobals (recommended, 2x faster). `0` = legacy mode |
+| `EXECUTOR` | `ext` | Script executor: `ext` (recommended, 2x faster), `php` (legacy), `stub` (benchmark) |
 
 ## Usage Examples
 

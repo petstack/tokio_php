@@ -23,9 +23,9 @@ docker compose logs -f
 docker compose down -v
 
 # Run with environment variables
-PHP_WORKERS=4 docker compose up -d      # Set worker count
-USE_STUB=1 docker compose up -d          # Stub mode (no PHP, for benchmarks)
-USE_EXT=1 docker compose up -d           # ExtExecutor with tokio_sapi extension
+PHP_WORKERS=4 docker compose up -d       # Set worker count
+EXECUTOR=stub docker compose up -d       # Stub mode (no PHP, for benchmarks)
+EXECUTOR=php docker compose up -d        # Legacy mode with zend_eval_string()
 
 # Build with profiling (debug-profile feature)
 cargo build --release --features debug-profile
@@ -67,10 +67,10 @@ The `ScriptExecutor` trait (`src/executor/mod.rs`) defines the interface for scr
 - `PhpExecutor` (`php.rs`) - Legacy executor using `zend_eval_string()` for superglobals
 - `StubExecutor` (`stub.rs`) - Returns empty responses for benchmarking
 
-Selection order in main.rs:
-1. `USE_STUB=1` → StubExecutor
-2. `USE_EXT=1` → ExtExecutor (with tokio_sapi PHP extension) **← recommended**
-3. Default → PhpExecutor
+Selection via `EXECUTOR` env var in main.rs:
+- `EXECUTOR=ext` → ExtExecutor (with tokio_sapi PHP extension) **← default, recommended**
+- `EXECUTOR=php` → PhpExecutor (legacy mode with zend_eval_string)
+- `EXECUTOR=stub` → StubExecutor (benchmark mode, no PHP execution)
 
 ### Executor Performance Comparison
 
@@ -87,9 +87,9 @@ Performance depends on script complexity:
 
 | Use Case | Recommendation |
 |----------|----------------|
-| Real apps (Laravel, Symfony, WordPress) | **USE_EXT=1** — 48% faster with superglobals |
-| Minimal scripts (health checks, APIs) | USE_EXT=0 — less extension overhead |
-| Production | **USE_EXT=1** — most apps use superglobals |
+| Real apps (Laravel, Symfony, WordPress) | **EXECUTOR=ext** — 48% faster with superglobals |
+| Minimal scripts (health checks, APIs) | `EXECUTOR=php` — less extension overhead |
+| Production | **EXECUTOR=ext** — most apps use superglobals (default) |
 
 **Why ExtExecutor is faster for real apps:**
 
@@ -104,7 +104,7 @@ Performance depends on script complexity:
 
 **Production recommendation:**
 ```bash
-USE_EXT=1 docker compose up -d
+docker compose up -d  # EXECUTOR=ext by default
 ```
 
 ### Performance vs PHP-FPM
@@ -426,8 +426,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
-| `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
-| `USE_EXT` | `1` | **Recommended.** Use ExtExecutor with tokio_sapi extension (2x faster) |
+| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM). In Docker: `/run/secrets/tls_cert` |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM). In Docker: `/run/secrets/tls_key` |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate file |
@@ -449,7 +448,7 @@ docker compose up -d
 PHP_WORKERS=8 docker compose up -d
 
 # Benchmark mode (no PHP execution)
-USE_STUB=1 docker compose up -d
+EXECUTOR=stub docker compose up -d
 
 # Laravel/Symfony single entry point
 INDEX_FILE=index.php DOCUMENT_ROOT=/var/www/html/public docker compose up -d

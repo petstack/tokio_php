@@ -288,7 +288,7 @@ tokio_php provides two PHP execution modes:
 Uses `php_execute_script()` + FFI for superglobals:
 
 ```bash
-USE_EXT=1 docker compose up -d  # Default
+docker compose up -d  # EXECUTOR=ext by default
 ```
 
 - 48% faster for real applications
@@ -301,7 +301,7 @@ USE_EXT=1 docker compose up -d  # Default
 Uses `zend_eval_string()` for superglobals:
 
 ```bash
-USE_EXT=0 docker compose up -d
+EXECUTOR=php docker compose up -d
 ```
 
 - Simpler execution model
@@ -402,7 +402,7 @@ stub = []
 cargo build --release --no-default-features --features stub
 
 # Run in stub mode
-USE_STUB=1 ./target/release/tokio_php
+EXECUTOR=stub ./target/release/tokio_php
 ```
 
 The stub-only build:

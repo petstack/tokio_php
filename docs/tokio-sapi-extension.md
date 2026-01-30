@@ -12,14 +12,14 @@ The extension provides:
 
 ## Enabling the Extension
 
-The extension is enabled by default (`USE_EXT=1`):
+The extension is enabled by default (`EXECUTOR=ext`):
 
 ```bash
 # Default - ExtExecutor with tokio_sapi
 docker compose up -d
 
 # Disable extension (use legacy PhpExecutor)
-USE_EXT=0 docker compose up -d
+EXECUTOR=php docker compose up -d
 ```
 
 When enabled, `ExtExecutor` is used instead of `PhpExecutor`.
@@ -498,7 +498,7 @@ Performance depends on script complexity:
 
 **Production recommendation:** Most apps use superglobals, so ExtExecutor is recommended.
 ```bash
-USE_EXT=1 docker compose up -d
+docker compose up -d  # EXECUTOR=ext by default
 ```
 
 ## Implementation
@@ -713,7 +713,7 @@ See [Profiling](profiling.md) for full report format.
 
 ## See Also
 
-- [Configuration](configuration.md) - `USE_EXT` environment variable
+- [Configuration](configuration.md) - `EXECUTOR` environment variable
 - [Superglobals](superglobals.md) - PHP superglobals support
 - [Request Heartbeat](request-heartbeat.md) - `tokio_request_heartbeat()` documentation
 - [SSE Streaming](sse-streaming.md) - Server-Sent Events streaming

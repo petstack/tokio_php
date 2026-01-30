@@ -121,8 +121,7 @@ mod tests {
         std::env::remove_var("DOCUMENT_ROOT");
         std::env::remove_var("PHP_WORKERS");
         std::env::remove_var("QUEUE_CAPACITY");
-        std::env::remove_var("USE_STUB");
-        std::env::remove_var("USE_EXT");
+        std::env::remove_var("EXECUTOR");
         std::env::remove_var("RATE_LIMIT");
         std::env::remove_var("ACCESS_LOG");
 
@@ -136,7 +135,7 @@ mod tests {
         // Workers and queue_capacity are pre-computed (never zero)
         assert!(config.executor.worker_count() >= 1);
         assert!(config.executor.queue_capacity() >= 100);
-        // USE_EXT=1 is default, so Ext executor
+        // EXECUTOR=ext is default
         assert_eq!(config.executor.executor_type, ExecutorType::Ext);
         assert!(config.middleware.rate_limit().is_none());
         assert!(!config.middleware.is_access_log_enabled());

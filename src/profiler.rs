@@ -112,7 +112,7 @@ pub struct ProfileData {
     pub superglobals_build_us: u64, // Build PHP code string (eval mode)
     pub superglobals_eval_us: u64,  // zend_eval_string execution (eval mode)
 
-    // FFI superglobals breakdown (USE_EXT=1)
+    // FFI superglobals breakdown (EXECUTOR=ext)
     pub ffi_request_init_us: u64,  // tokio_sapi_request_init()
     pub ffi_clear_us: u64,         // tokio_sapi_clear_superglobals()
     pub ffi_server_us: u64,        // All $_SERVER FFI calls
@@ -307,7 +307,7 @@ impl ProfileData {
             ),
         ]);
 
-        // FFI-specific headers (only when USE_EXT=1 and values are non-zero)
+        // FFI-specific headers (only when EXECUTOR=ext and values are non-zero)
         if self.ffi_request_init_us > 0 || self.ffi_clear_us > 0 {
             headers.extend([
                 (

@@ -404,16 +404,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                     .as_ref()
                     .map(|r| r.window_secs().to_string())
                     .unwrap_or_else(|| "60".to_string()),
-                use_stub: if executor_name == "stub" {
-                    "1".to_string()
-                } else {
-                    "0".to_string()
-                },
-                use_ext: if executor_name == "ext" {
-                    "1".to_string()
-                } else {
-                    "0".to_string()
-                },
+                executor: executor_name.to_string(),
                 profile: if self.profile_enabled {
                     "1".to_string()
                 } else {

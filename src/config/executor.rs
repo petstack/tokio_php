@@ -1,6 +1,6 @@
 //! Executor configuration.
 
-use super::parse::{env_bool, env_or};
+use super::parse::env_or;
 use super::ConfigError;
 use std::num::NonZeroUsize;
 
@@ -56,12 +56,10 @@ impl ExecutorConfig {
     }
 
     fn parse_executor_type() -> ExecutorType {
-        if env_bool("USE_STUB", false) {
-            ExecutorType::Stub
-        } else if env_bool("USE_EXT", true) {
-            ExecutorType::Ext
-        } else {
-            ExecutorType::Php
+        match env_or("EXECUTOR", "ext").to_lowercase().as_str() {
+            "stub" => ExecutorType::Stub,
+            "php" => ExecutorType::Php,
+            _ => ExecutorType::Ext, // "ext" or any other value defaults to Ext
         }
     }
 

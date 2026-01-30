@@ -20,8 +20,7 @@ tokio_php is configured via environment variables.
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
-| `USE_STUB` | `0` | Stub mode - disable PHP, return empty responses |
-| `USE_EXT` | `1` | **Default.** Use ExtExecutor (2x faster) |
+| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate |
@@ -502,31 +501,26 @@ Rate limit is checked first. If passed, request enters queue.
 
 See [Rate Limiting](rate-limiting.md) for algorithm details and best practices.
 
-### USE_STUB
+### EXECUTOR
 
-Enable stub mode for benchmarking without PHP.
-
-```bash
-# Normal mode (default)
-USE_STUB=0
-
-# Stub mode
-USE_STUB=1
-```
-
-Stub mode returns empty 200 responses without executing PHP. Useful for measuring HTTP overhead.
-
-### USE_EXT
-
-**Default and recommended.** Use ExtExecutor with FFI-based superglobals.
+Select the script execution backend. **Default: `ext` (recommended).**
 
 ```bash
 # ExtExecutor - FFI superglobals + php_execute_script() (default, recommended)
-USE_EXT=1
+EXECUTOR=ext
 
 # PhpExecutor - eval-based superglobals (legacy)
-USE_EXT=0
+EXECUTOR=php
+
+# StubExecutor - no PHP execution (for benchmarking)
+EXECUTOR=stub
 ```
+
+| Value | Executor | Method | Use Case |
+|-------|----------|--------|----------|
+| `ext` | ExtExecutor | `php_execute_script()` + FFI | **Production (2x faster)** |
+| `php` | PhpExecutor | `zend_eval_string()` | Legacy/debugging |
+| `stub` | StubExecutor | No PHP | Benchmarking HTTP overhead |
 
 ExtExecutor is **2x faster** than PhpExecutor:
 - Uses native `php_execute_script()` - fully optimized for OPcache/JIT
@@ -630,17 +624,15 @@ docker compose up -d
 ### Production
 
 ```bash
-USE_EXT=1 \
 PHP_WORKERS=8 \
 QUEUE_CAPACITY=1000 \
 INTERNAL_ADDR=0.0.0.0:9090 \
-docker compose up -d
+docker compose up -d  # EXECUTOR=ext by default
 ```
 
 ### Laravel/Symfony
 
 ```bash
-USE_EXT=1 \
 INDEX_FILE=index.php \
 DOCUMENT_ROOT=/var/www/html/public \
 PHP_WORKERS=8 \
@@ -660,7 +652,7 @@ For profiling, build with `debug-profile` feature (see [Profiling](profiling.md)
 ### Benchmark Mode
 
 ```bash
-USE_STUB=1 docker compose up -d
+EXECUTOR=stub docker compose up -d
 ```
 
 ### With TLS
@@ -683,7 +675,7 @@ INTERNAL_ADDR=0.0.0.0:9090 \
 ERROR_PAGES_DIR=/var/www/html/errors \
 STATIC_CACHE_TTL=1w \
 ACCESS_LOG=1 \
-USE_EXT=1 \
+EXECUTOR=ext \
 RUST_LOG=tokio_php=info \
 docker compose up -d
 ```
@@ -706,8 +698,7 @@ services:
       - SERVICE_NAME=${SERVICE_NAME:-tokio_php}
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
-      - USE_EXT=${USE_EXT:-1}  # Recommended: 2x faster
-      - USE_STUB=${USE_STUB:-0}
+      - EXECUTOR=${EXECUTOR:-ext}  # ext (recommended), php, stub
       - INDEX_FILE=${INDEX_FILE:-}
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - INTERNAL_ADDR=0.0.0.0:9090
@@ -905,7 +896,7 @@ pub struct ServerConfig {
 
 ```rust
 pub struct ExecutorConfig {
-    pub executor_type: ExecutorType,  // USE_STUB, USE_EXT
+    pub executor_type: ExecutorType,  // EXECUTOR env var
     pub workers: usize,               // PHP_WORKERS (0 = auto)
     pub queue_capacity: usize,        // QUEUE_CAPACITY (0 = auto)
 }
@@ -919,9 +910,9 @@ impl ExecutorConfig {
 }
 
 pub enum ExecutorType {
-    Stub,  // USE_STUB=1
-    Php,   // USE_EXT=0 (legacy)
-    Ext,   // USE_EXT=1 (default, recommended)
+    Stub,  // EXECUTOR=stub
+    Php,   // EXECUTOR=php (legacy)
+    Ext,   // EXECUTOR=ext (default, recommended)
 }
 ```
 
