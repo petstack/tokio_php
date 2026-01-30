@@ -101,6 +101,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY build.rs ./
+COPY proto ./proto
 
 # Re-declare ARG after FROM (required for multi-stage builds)
 ARG CARGO_FEATURES
