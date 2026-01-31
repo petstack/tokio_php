@@ -1,28 +1,42 @@
 # tokio_sapi PHP Extension
 
-tokio_php includes an optional PHP extension (`tokio_sapi`) that provides FFI-based superglobals, streaming support, and runtime information.
+tokio_php includes a PHP extension (`tokio_sapi`) that provides PHP functions for request information, streaming support, and runtime information. This extension is used by the legacy `ExtExecutor` but is **not required** for the default `SapiExecutor` which uses a pure Rust SAPI implementation.
 
 ## Overview
 
 The extension provides:
-- **C API**: Functions for setting superglobals directly via FFI
 - **PHP functions**: Access to request/worker information, streaming, early response
-- **Performance**: Alternative to eval-based superglobals
+- **C API**: Functions for setting superglobals directly via FFI (used by ExtExecutor)
 - **Streaming**: SSE support and chunked transfer encoding
+- **Legacy compatibility**: Required only when using `EXECUTOR=ext` or `EXECUTOR=php`
 
-## Enabling the Extension
+## Pure Rust SAPI (Default)
 
-The extension is enabled by default (`EXECUTOR=ext`):
+The default executor (`EXECUTOR=sapi`) uses a **pure Rust SAPI implementation** without requiring the tokio_sapi PHP extension:
 
 ```bash
-# Default - ExtExecutor with tokio_sapi
+# Default - SapiExecutor with pure Rust SAPI (no extension needed)
 docker compose up -d
 
-# Disable extension (use legacy PhpExecutor)
+# Explicitly specify SAPI executor
+EXECUTOR=sapi docker compose up -d
+```
+
+The pure Rust SAPI provides all the same PHP functions (`tokio_request_id()`, `tokio_worker_id()`, etc.) but implements them directly in Rust instead of using a C extension.
+
+## Legacy Executors
+
+The tokio_sapi extension is required for legacy executors:
+
+```bash
+# ExtExecutor - Uses C extension for FFI superglobals (legacy)
+EXECUTOR=ext docker compose up -d
+
+# PhpExecutor - Uses eval-based superglobals (legacy)
 EXECUTOR=php docker compose up -d
 ```
 
-When enabled, `ExtExecutor` is used instead of `PhpExecutor`.
+When using legacy executors, `ExtExecutor` or `PhpExecutor` are used instead of `SapiExecutor`.
 
 ## PHP Functions
 

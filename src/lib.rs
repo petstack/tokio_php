@@ -16,7 +16,8 @@
 //!
 //! The server uses a pluggable executor system for script execution:
 //!
-//! - `ExtExecutor` - Recommended for production, uses FFI for superglobals
+//! - `SapiExecutor` - Recommended for production, pure Rust SAPI implementation (default)
+//! - `ExtExecutor` - Legacy executor using C extension with FFI for superglobals
 //! - `PhpExecutor` - Legacy executor using zend_eval_string
 //! - `StubExecutor` - Returns empty responses for benchmarking
 //!
@@ -24,10 +25,10 @@
 //!
 //! ```rust,ignore
 //! use tokio_php::server::{Server, ServerConfig};
-//! use tokio_php::executor::ExtExecutor;
+//! use tokio_php::executor::SapiExecutor;
 //!
 //! let config = ServerConfig::default();
-//! let executor = ExtExecutor::new(4)?;
+//! let executor = SapiExecutor::new(4)?;
 //! let server = Server::new(config, executor)?;
 //! server.run().await?;
 //! ```

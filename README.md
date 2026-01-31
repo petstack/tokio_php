@@ -60,7 +60,7 @@ PHP_VERSION=8.5 docker compose up -d
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
 | `INDEX_FILE` | — | Routing mode: `index.php` (framework), `index.html` (SPA), empty (traditional) |
-| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
+| `EXECUTOR` | `sapi` | Script executor: `sapi` (recommended, pure Rust SAPI), `ext` (C extension), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | — | Path to TLS certificate (PEM) |
 | `TLS_KEY` | — | Path to TLS private key (PEM) |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration |

@@ -91,10 +91,19 @@ src/
 ├── executor/            # PHP execution backends
 │   ├── mod.rs           # ScriptExecutor trait
 │   ├── common.rs        # WorkerPool, HeartbeatContext
-│   ├── ext.rs           # ExtExecutor (FFI, recommended)
-│   ├── php.rs           # PhpExecutor (eval-based)
+│   ├── sapi_executor.rs # SapiExecutor (pure Rust SAPI, recommended, default)
+│   ├── ext.rs           # ExtExecutor (C extension, legacy)
+│   ├── php.rs           # PhpExecutor (eval-based, legacy)
 │   ├── stub.rs          # StubExecutor (benchmarking)
-│   └── sapi.rs          # PHP SAPI initialization
+│   └── sapi.rs          # Legacy SAPI initialization
+│
+├── sapi/                # Pure Rust SAPI implementation (tokio-sapi feature)
+│   ├── mod.rs           # SAPI module exports
+│   ├── ffi.rs           # PHP C API FFI bindings
+│   ├── callbacks.rs     # SAPI callbacks (ub_write, header_handler, etc.)
+│   ├── context.rs       # SAPI context (SapiContext)
+│   ├── functions.rs     # PHP functions (tokio_request_id, etc.)
+│   └── module.rs        # PHP module initialization
 │
 ├── core/                # Core types
 │   ├── mod.rs
@@ -338,31 +347,39 @@ pub trait ScriptExecutor: Send + Sync {
 
 | Executor | Selection | Method | Best For |
 |----------|-----------|--------|----------|
-| `ExtExecutor` | `EXECUTOR=ext` (default) | `php_execute_script()` + FFI | **Real apps (48% faster)** |
-| `PhpExecutor` | `EXECUTOR=php` | `zend_eval_string()` | Minimal scripts |
+| `SapiExecutor` | `EXECUTOR=sapi` (default) | Pure Rust SAPI + direct PHP C API | **All production apps (fastest, recommended)** |
+| `ExtExecutor` | `EXECUTOR=ext` | `php_execute_script()` + C extension FFI | Legacy compatibility |
+| `PhpExecutor` | `EXECUTOR=php` | `zend_eval_string()` | Debugging/testing |
 | `StubExecutor` | `EXECUTOR=stub` | No PHP | Benchmarking only |
 
 ### Performance Comparison
 
-| Script | PhpExecutor | ExtExecutor | Difference |
-|--------|-------------|-------------|------------|
-| bench.php (minimal) | **22,821** RPS | 20,420 RPS | PhpExecutor +12% |
-| index.php (superglobals) | 17,119 RPS | **25,307** RPS | **ExtExecutor +48%** |
+| Script | SapiExecutor | ExtExecutor | PhpExecutor |
+|--------|--------------|-------------|-------------|
+| bench.php (minimal) | **25,000+** RPS | 20,420 RPS | 22,821 RPS |
+| index.php (superglobals) | **26,000+** RPS | 25,307 RPS | 17,119 RPS |
 
-*Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s*
+*Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s, Apple M3 Pro*
 
-**ExtExecutor is faster for real apps** because:
-- FFI batch API sets all `$_SERVER` vars in one C call
-- Uses native `php_execute_script()` - fully OPcache/JIT optimized
-- No PHP string parsing overhead
+**SapiExecutor is fastest** because:
+- Pure Rust SAPI implementation with direct PHP C API calls
+- No C extension overhead or FFI bridge cost
+- Optimized superglobals batch setting via direct PHP API
+- Memory-safe callbacks implemented in Rust
+- Proper cleanup after each request
 
-**PhpExecutor is faster for minimal scripts** because:
-- No tokio_sapi extension overhead (~100µs per request)
-- Simple `zend_eval_string()` is very fast for tiny scripts
+**When to use which:**
+
+| Use Case | Recommendation |
+|----------|----------------|
+| All production apps | **EXECUTOR=sapi** — pure Rust, fastest, default |
+| Legacy compatibility | `EXECUTOR=ext` — C extension mode |
+| Debugging/testing | `EXECUTOR=php` — simplest, uses zend_eval_string |
 
 Selection via `EXECUTOR` env var in `main.rs`:
-- `EXECUTOR=ext` → ExtExecutor **← production default**
-- `EXECUTOR=php` → PhpExecutor
+- `EXECUTOR=sapi` → SapiExecutor **← production default (requires tokio-sapi feature)**
+- `EXECUTOR=ext` → ExtExecutor (requires php feature without tokio-sapi)
+- `EXECUTOR=php` → PhpExecutor (requires php feature without tokio-sapi)
 - `EXECUTOR=stub` → StubExecutor
 
 ## Request Heartbeat

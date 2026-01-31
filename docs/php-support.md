@@ -137,7 +137,7 @@ docker rm tmp
 
 Contents:
 - `/tokio_php` — the server binary
-- `/tokio_sapi.so` — PHP extension for ExtExecutor
+- `/tokio_sapi.so` — PHP extension (used by ExtExecutor and PhpExecutor, not required for SapiExecutor)
 - `/libtokio_bridge.so` — shared library for Rust-PHP communication (required)
 
 Use these when:
@@ -205,7 +205,7 @@ Official PHP image helper scripts:
 |-----------|-------------|
 | PHP 8.4/8.5 ZTS | Thread-safe PHP with embed SAPI |
 | OPcache | Bytecode caching and JIT |
-| tokio_sapi extension | FFI superglobals for ExtExecutor |
+| tokio_sapi extension | Legacy FFI superglobals (ExtExecutor/PhpExecutor) |
 | libtokio_bridge | Shared library for Rust-PHP communication |
 | tokio_php binary | The Rust server |
 | Common extensions | curl, mbstring, openssl, zlib, etc. |
@@ -281,22 +281,38 @@ See [OPcache & JIT](opcache-jit.md) for detailed configuration.
 
 ## Executors
 
-tokio_php provides two PHP execution modes:
+tokio_php provides multiple PHP execution modes:
 
-### ExtExecutor (Recommended)
+### SapiExecutor (Recommended, Default)
 
-Uses `php_execute_script()` + FFI for superglobals:
+Pure Rust SAPI implementation with direct PHP C API calls:
 
 ```bash
-docker compose up -d  # EXECUTOR=ext by default
+docker compose up -d  # EXECUTOR=sapi by default
 ```
 
-- 48% faster for real applications
+- **Fastest** — ~26K+ RPS for real applications
+- Pure Rust implementation with no C extension overhead
+- Direct PHP C API calls for optimal performance
+- Memory-safe callbacks implemented in Rust
+- Full OPcache/JIT optimization
+- Default executor when `tokio-sapi` feature is enabled
+
+### ExtExecutor (Legacy)
+
+Uses `php_execute_script()` + C extension FFI for superglobals:
+
+```bash
+EXECUTOR=ext docker compose up -d
+```
+
+- Legacy compatibility mode
+- Requires tokio_sapi C extension
 - Native PHP execution path
 - Full OPcache/JIT optimization
-- Requires tokio_sapi extension
+- ~25K RPS for real applications
 
-### PhpExecutor
+### PhpExecutor (Legacy)
 
 Uses `zend_eval_string()` for superglobals:
 
@@ -304,12 +320,12 @@ Uses `zend_eval_string()` for superglobals:
 EXECUTOR=php docker compose up -d
 ```
 
-- Simpler execution model
+- Simplest execution model for debugging
 - No extension dependency
-- Better for minimal scripts
-- Slightly higher overhead for complex apps
+- ~17K RPS for applications with superglobals
+- Higher overhead for complex apps
 
-See [Architecture](architecture.md#executor-system) for detailed comparison.
+See [Architecture](architecture.md#executor-system) for detailed comparison and performance benchmarks.
 
 ## Extensions
 
@@ -320,7 +336,7 @@ The Docker image includes these extensions:
 | Extension | Purpose |
 |-----------|---------|
 | OPcache | Bytecode caching, JIT |
-| tokio_sapi | FFI superglobals (for ExtExecutor) |
+| tokio_sapi | Legacy extension (ExtExecutor/PhpExecutor only, not needed for SapiExecutor) |
 | curl | HTTP client |
 | mbstring | Multibyte string support |
 | openssl | Cryptography |
@@ -391,7 +407,8 @@ stub = []
 
 | Command | PHP Required | Available Executors |
 |---------|--------------|---------------------|
-| `cargo build` | Yes | PhpExecutor, ExtExecutor, StubExecutor |
+| `cargo build` (default features) | Yes | SapiExecutor (default), StubExecutor |
+| `cargo build --features php` (without tokio-sapi) | Yes | ExtExecutor, PhpExecutor, StubExecutor |
 | `cargo build --no-default-features --features stub` | No | StubExecutor only |
 | `cargo build --no-default-features` | No | None (won't start) |
 
@@ -432,10 +449,13 @@ The stub-only build:
 
 2. **Conditional compilation** — PHP code behind feature gates:
    ```rust
-   #[cfg(feature = "php")]
+   #[cfg(feature = "tokio-sapi")]
    mod sapi;
 
-   #[cfg(feature = "php")]
+   #[cfg(feature = "tokio-sapi")]
+   pub use sapi_executor::SapiExecutor;
+
+   #[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
    pub use ext::ExtExecutor;
    ```
 
