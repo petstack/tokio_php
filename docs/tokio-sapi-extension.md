@@ -216,7 +216,31 @@ while ($has_data) {
 
 **Returns:** `bool` - `true` on success, `false` if streaming mode is not enabled.
 
-**Note:** With the SAPI flush handler installed, standard `flush()` also works for streaming. This function is kept for explicit streaming control and backward compatibility.
+#### Difference from `flush()`
+
+| Aspect | `flush()` | `tokio_stream_flush()` |
+|--------|-----------|------------------------|
+| **Mode check** | None | Returns `false` if not in streaming mode |
+| **Return value** | `void` | `bool` |
+| **Works always** | Yes | Only in SSE/streaming mode |
+| **Standard PHP** | Yes | tokio_php specific |
+
+Both functions perform the same underlying operation (`php_output_flush()`), but `tokio_stream_flush()` adds streaming mode validation:
+
+```php
+<?php
+// tokio_stream_flush() returns false if not streaming
+if (!tokio_stream_flush()) {
+    // Not in streaming mode - can handle this case
+    error_log("Streaming not enabled");
+}
+
+// flush() always works but gives no feedback
+flush();  // No way to know if streaming is active
+?>
+```
+
+**Recommendation:** Use standard `flush()` for streaming - it works via the SAPI flush handler and is portable PHP code. Use `tokio_stream_flush()` only when you need to check if streaming mode is active.
 
 ### tokio_is_streaming()
 
