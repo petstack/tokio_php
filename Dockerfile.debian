@@ -27,7 +27,7 @@
 #     --output type=local,dest=./dist-debian .
 
 ARG PHP_VERSION=8.4
-ARG CARGO_FEATURES="grpc,otel"
+ARG CARGO_FEATURES="tokio-sapi,grpc,otel"
 
 # =============================================================================
 # Builder stage
@@ -76,22 +76,31 @@ RUN make && \
     make install && \
     ldconfig
 
-# Build tokio_sapi PHP extension
+# Build tokio_sapi PHP extension (skip if tokio-sapi feature is enabled)
 WORKDIR /app/ext
-RUN phpize && \
-    ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && \
-    make && \
-    make install
+ARG CARGO_FEATURES
+RUN if echo "$CARGO_FEATURES" | grep -q "tokio-sapi"; then \
+        echo "=== Skipping C extension build (tokio-sapi enabled) ==="; \
+        touch /tmp/skip_c_ext; \
+        mkdir -p modules && touch modules/.placeholder; \
+    else \
+        phpize && \
+        ./configure --enable-tokio_sapi LDFLAGS="-L/usr/local/lib -ltokio_bridge" && \
+        make && \
+        make install; \
+    fi
 
 # Save extension directory path
 RUN php-config --extension-dir > /tmp/php_ext_dir
 
-# Build static library for Rust linking
-RUN cc -c -fPIC -I. -I/usr/local/include/php -I/usr/local/include/php/main \
-    -I/usr/local/include/php/TSRM -I/usr/local/include/php/Zend \
-    -I/usr/local/include/php/ext -DHAVE_CONFIG_H -o tokio_sapi_static.o tokio_sapi.c && \
-    ar rcs libtokio_sapi.a tokio_sapi_static.o && \
-    cp libtokio_sapi.a /usr/local/lib/
+# Build static library for Rust linking (skip if tokio-sapi enabled)
+RUN if [ ! -f /tmp/skip_c_ext ]; then \
+        cc -c -fPIC -I. -I/usr/local/include/php -I/usr/local/include/php/main \
+        -I/usr/local/include/php/TSRM -I/usr/local/include/php/Zend \
+        -I/usr/local/include/php/ext -DHAVE_CONFIG_H -o tokio_sapi_static.o tokio_sapi.c && \
+        ar rcs libtokio_sapi.a tokio_sapi_static.o && \
+        cp libtokio_sapi.a /usr/local/lib/; \
+    fi
 
 # Build Rust binary
 WORKDIR /app
@@ -115,18 +124,20 @@ RUN if [ -n "$CARGO_FEATURES" ]; then \
 # =============================================================================
 FROM debian:bookworm-slim AS dist-prepare
 
-# Copy extension directory path from builder
-COPY --from=builder /tmp/php_ext_dir /tmp/php_ext_dir
+# Copy extension directory path and skip flag from builder
+COPY --from=builder /tmp/php_ext_dir /tmp/skip_c_ext* /tmp/
 
 # Copy all binaries to staging area
 COPY --from=builder /app/target/release/tokio_php /staging/usr/local/bin/tokio_php
 COPY --from=builder /usr/local/lib/libtokio_bridge.so /staging/usr/local/lib/libtokio_bridge.so
-COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
+COPY --from=builder /app/ext/modules/ /tmp/ext_modules/
 
-# Place extension in correct PHP version-specific directory
-RUN EXT_DIR=$(cat /tmp/php_ext_dir) && \
-    mkdir -p "/staging${EXT_DIR}" && \
-    cp /tmp/tokio_sapi.so "/staging${EXT_DIR}/tokio_sapi.so"
+# Place extension in correct PHP version-specific directory (if not skipped)
+RUN if [ ! -f /tmp/skip_c_ext ] && [ -f /tmp/ext_modules/tokio_sapi.so ]; then \
+        EXT_DIR=$(cat /tmp/php_ext_dir) && \
+        mkdir -p "/staging${EXT_DIR}" && \
+        cp /tmp/ext_modules/tokio_sapi.so "/staging${EXT_DIR}/tokio_sapi.so"; \
+    fi
 
 # Final dist stage with proper structure
 FROM scratch AS dist
@@ -150,12 +161,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/lib/libtokio_bridge.so /usr/local/lib/libtokio_bridge.so
 RUN ldconfig
 
-# Copy extension
-COPY --from=builder /app/ext/modules/tokio_sapi.so /tmp/tokio_sapi.so
-RUN EXT_DIR=$(php-config --extension-dir) && \
-    cp /tmp/tokio_sapi.so "$EXT_DIR/" && \
-    rm /tmp/tokio_sapi.so && \
-    echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini
+# Copy extension (only if not using tokio-sapi feature)
+COPY --from=builder /tmp/skip_c_ext* /tmp/
+COPY --from=builder /app/ext/modules/ /tmp/ext_modules/
+RUN if [ -f /tmp/skip_c_ext ]; then \
+        echo "=== Skipping C extension install (tokio-sapi enabled) ==="; \
+        rm -rf /tmp/skip_c_ext /tmp/ext_modules; \
+    elif [ -f /tmp/ext_modules/tokio_sapi.so ]; then \
+        EXT_DIR=$(php-config --extension-dir) && \
+        cp /tmp/ext_modules/tokio_sapi.so "$EXT_DIR/" && \
+        rm -rf /tmp/ext_modules && \
+        echo "extension=tokio_sapi.so" >> /usr/local/etc/php/conf.d/tokio_sapi.ini; \
+    fi
 
 # Copy binary
 COPY --from=builder /app/target/release/tokio_php /usr/local/bin/tokio_php
