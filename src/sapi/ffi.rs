@@ -453,7 +453,6 @@ extern "C" {
     pub fn php_module_startup(
         sf: *mut sapi_module_struct,
         additional_module: *mut c_void,
-        num_additional_modules: c_uint,
     ) -> zend_result;
     pub fn php_module_shutdown();
 

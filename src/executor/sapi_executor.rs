@@ -454,13 +454,21 @@ fn execute_script(request: &ScriptRequest, profiling: bool) -> SapiExecutionTimi
     // Execute script via php_execute_script
     let script_start = Instant::now();
     unsafe {
-        let path_c = match CString::new(request.script_path.as_str()) {
+        // OPcache requires absolute/canonical paths for consistent cache keys
+        let path = std::path::Path::new(request.script_path.as_str());
+        let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path_str = abs_path.to_string_lossy();
+
+        let path_c = match CString::new(path_str.as_ref()) {
             Ok(c) => c,
             Err(_) => return timing,
         };
 
         let mut file_handle: zend_file_handle = std::mem::zeroed();
         zend_stream_init_filename(&mut file_handle, path_c.as_ptr());
+
+        // CRITICAL: primary_script must be true for OPcache to cache this script
+        file_handle.primary_script = true;
 
         let _result = php_execute_script(&mut file_handle);
 

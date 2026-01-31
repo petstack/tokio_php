@@ -1,8 +1,11 @@
 //! Custom PHP SAPI implementation in Rust.
 //!
-//! This module provides a pure Rust implementation of the PHP SAPI interface,
-//! named "tokio". It replaces the need for the C-based tokio_sapi extension
-//! while providing the same functionality.
+//! This module provides a pure Rust implementation of the PHP SAPI interface.
+//! It replaces the need for the C-based tokio_sapi extension while providing
+//! the same functionality.
+//!
+//! Note: SAPI name is "cli-server" for OPcache/JIT compatibility.
+//! OPcache only enables for recognized SAPI names.
 //!
 //! # Features
 //!
@@ -71,6 +74,6 @@ mod tests {
 
     #[test]
     fn test_sapi_name() {
-        assert_eq!(name(), "tokio");
+        assert_eq!(name(), "cli-server");
     }
 }

@@ -1,7 +1,10 @@
 //! SAPI module definition and lifecycle management.
 //!
-//! This module defines the "tokio" SAPI module and provides
+//! This module defines the SAPI module and provides
 //! initialization and shutdown functions.
+//!
+//! Note: SAPI name is "cli-server" for OPcache/JIT compatibility.
+//! OPcache only enables for recognized SAPI names.
 
 use std::ffi::c_char;
 use std::ptr;
@@ -14,10 +17,11 @@ use super::functions::TOKIO_FUNCTIONS;
 static SAPI_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 // Static strings for SAPI name (must live for program duration)
-static SAPI_NAME: &[u8] = b"tokio\0";
+// Using "cli-server" for OPcache/JIT compatibility (in OPcache's supported_sapis list)
+static SAPI_NAME: &[u8] = b"cli-server\0";
 static SAPI_PRETTY_NAME: &[u8] = b"Tokio PHP Server\0";
 
-/// The "tokio" SAPI module structure.
+/// The SAPI module structure (name: "cli-server" for OPcache compatibility).
 ///
 /// This is a static mut because PHP expects a mutable pointer to the module
 /// during initialization. The module is only modified during init/shutdown.
@@ -78,7 +82,7 @@ pub static mut TOKIO_SAPI_MODULE: sapi_module_struct = sapi_module_struct {
     // Note: pre_request_init does NOT exist in PHP 8.4 sapi_module_struct
 };
 
-/// Initialize the "tokio" SAPI.
+/// Initialize the SAPI module.
 ///
 /// This function must be called once at server startup before any PHP execution.
 /// It registers the SAPI module with PHP and initializes the PHP runtime.
@@ -94,7 +98,7 @@ pub fn init() -> Result<(), String> {
         return Ok(()); // Already initialized
     }
 
-    tracing::info!(sapi_name = "tokio", "Initializing SAPI module");
+    tracing::info!(sapi_name = "cli-server", "Initializing SAPI module");
 
     unsafe {
         // Initialize TSRM (Thread Safe Resource Manager) for ZTS builds
@@ -106,8 +110,8 @@ pub fn init() -> Result<(), String> {
         // Register SAPI module with PHP
         sapi_startup(&raw mut TOKIO_SAPI_MODULE);
 
-        // Initialize PHP module
-        let result = php_module_startup(&raw mut TOKIO_SAPI_MODULE, ptr::null_mut(), 0);
+        // Initialize PHP module (PHP 8.4+ takes only 2 arguments)
+        let result = php_module_startup(&raw mut TOKIO_SAPI_MODULE, ptr::null_mut());
 
         if result != SUCCESS {
             sapi_shutdown();
@@ -116,11 +120,14 @@ pub fn init() -> Result<(), String> {
         }
     }
 
-    tracing::info!(sapi_name = "tokio", "SAPI module initialized successfully");
+    tracing::info!(
+        sapi_name = "cli-server",
+        "SAPI module initialized successfully"
+    );
     Ok(())
 }
 
-/// Shutdown the "tokio" SAPI.
+/// Shutdown the SAPI module.
 ///
 /// This function should be called once at server shutdown.
 /// It cleans up PHP resources and unregisters the SAPI module.
@@ -129,14 +136,14 @@ pub fn shutdown() {
         return; // Not initialized
     }
 
-    tracing::info!(sapi_name = "tokio", "Shutting down SAPI module");
+    tracing::info!(sapi_name = "cli-server", "Shutting down SAPI module");
 
     unsafe {
         php_module_shutdown();
         sapi_shutdown();
     }
 
-    tracing::info!(sapi_name = "tokio", "SAPI module shutdown complete");
+    tracing::info!(sapi_name = "cli-server", "SAPI module shutdown complete");
 }
 
 /// Check if the SAPI is initialized.
@@ -146,7 +153,7 @@ pub fn is_initialized() -> bool {
 
 /// Get the SAPI name.
 pub fn name() -> &'static str {
-    "tokio"
+    "cli-server"
 }
 
 #[cfg(test)]
@@ -155,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_sapi_name() {
-        assert_eq!(name(), "tokio");
+        assert_eq!(name(), "cli-server");
     }
 
     #[test]
