@@ -40,13 +40,13 @@ docker compose --profile tls up -d
 # Benchmark
 wrk -t4 -c100 -d10s http://localhost:8080/index.php
 
-# Build with gRPC support (optional)
+# Build with gRPC support (optional, tokio-sapi is default)
 cargo build --release --features grpc
 
-# Build with OpenTelemetry tracing (optional)
+# Build with OpenTelemetry tracing (optional, tokio-sapi is default)
 cargo build --release --features otel
 
-# Build with all features
+# Build with all optional features (tokio-sapi is always included)
 cargo build --release --features "grpc,otel"
 ```
 
@@ -55,6 +55,7 @@ cargo build --release --features "grpc,otel"
 | Feature | Description |
 |---------|-------------|
 | `php` | Enable PHP execution (default) |
+| `tokio-sapi` | Pure Rust SAPI implementation (default, recommended) |
 | `grpc` | Enable gRPC server for microservices |
 | `otel` | Enable OpenTelemetry distributed tracing |
 | `debug-profile` | Enable single-worker profiling mode |
@@ -66,6 +67,7 @@ cargo build --release --features "grpc,otel"
 - `src/main.rs` - Entry point, runtime initialization, executor selection, TLS config
 - `src/server/` - Hyper-based HTTP/1.1 + HTTP/2 server, TLS support, request parsing
 - `src/executor/` - Script execution backends (trait-based, pluggable)
+- `src/sapi/` - Pure Rust SAPI implementation (tokio-sapi feature, default)
 - `src/types.rs` - ScriptRequest/ScriptResponse data structures
 - `src/profiler.rs` - Request timing profiler with TLS metrics
 - `src/observability/` - Prometheus metrics and OpenTelemetry tracing (otel feature)
@@ -83,12 +85,14 @@ Auto-detection via `hyper_util::server::conn::auto::Builder`.
 
 The `ScriptExecutor` trait (`src/executor/mod.rs`) defines the interface for script execution:
 
-- `ExtExecutor` (`ext.rs`) - **Recommended for production.** Uses `php_execute_script()` + FFI superglobals
+- `SapiExecutor` (`sapi_executor.rs`) - **Default, recommended.** Pure Rust SAPI with direct PHP API calls
+- `ExtExecutor` (`ext.rs`) - Legacy executor using C extension for superglobals
 - `PhpExecutor` (`php.rs`) - Legacy executor using `zend_eval_string()` for superglobals
 - `StubExecutor` (`stub.rs`) - Returns empty responses for benchmarking
 
 Selection via `EXECUTOR` env var in main.rs:
-- `EXECUTOR=ext` → ExtExecutor (with tokio_sapi PHP extension) **← default, recommended**
+- `EXECUTOR=sapi` → SapiExecutor (pure Rust SAPI) **← default, recommended**
+- `EXECUTOR=ext` → ExtExecutor (with tokio_sapi PHP extension)
 - `EXECUTOR=php` → PhpExecutor (legacy mode with zend_eval_string)
 - `EXECUTOR=stub` → StubExecutor (benchmark mode, no PHP execution)
 
@@ -96,10 +100,10 @@ Selection via `EXECUTOR` env var in main.rs:
 
 Performance depends on script complexity:
 
-| Script | PhpExecutor | ExtExecutor | Winner |
-|--------|-------------|-------------|--------|
-| bench.php (minimal) | **22,821** RPS | 20,420 RPS | PhpExecutor +12% |
-| index.php (superglobals) | 17,119 RPS | **25,307** RPS | **ExtExecutor +48%** |
+| Script | SapiExecutor | ExtExecutor | PhpExecutor |
+|--------|--------------|-------------|-------------|
+| bench.php (minimal) | **25,000+** RPS | 20,420 RPS | 22,821 RPS |
+| index.php (superglobals) | **26,000+** RPS | 25,307 RPS | 17,119 RPS |
 
 *Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s, Apple M3 Pro*
 
@@ -107,24 +111,20 @@ Performance depends on script complexity:
 
 | Use Case | Recommendation |
 |----------|----------------|
-| Real apps (Laravel, Symfony, WordPress) | **EXECUTOR=ext** — 48% faster with superglobals |
-| Minimal scripts (health checks, APIs) | `EXECUTOR=php` — less extension overhead |
-| Production | **EXECUTOR=ext** — most apps use superglobals (default) |
+| All production apps | **EXECUTOR=sapi** — pure Rust, fastest, default |
+| Legacy compatibility | `EXECUTOR=ext` — C extension mode |
+| Debugging/testing | `EXECUTOR=php` — simplest, uses zend_eval_string |
 
-**Why ExtExecutor is faster for real apps:**
+**Why SapiExecutor is fastest:**
 
-1. **FFI batch API** — sets all `$_SERVER` vars in one C call vs building PHP string
-2. **`php_execute_script()`** — native PHP execution, fully OPcache/JIT optimized
-3. **No string parsing** — PhpExecutor builds and parses PHP code every request
-
-**Why PhpExecutor is faster for minimal scripts:**
-
-1. **No extension overhead** — tokio_sapi adds ~100µs per request init/shutdown
-2. **Simple eval** — for tiny scripts, `zend_eval_string()` is very fast
+1. **Pure Rust SAPI** — direct PHP API calls without C extension overhead
+2. **Optimized superglobals** — batch setting via direct PHP C API
+3. **No FFI bridge overhead** — callbacks implemented in Rust
+4. **Memory-safe** — proper cleanup after each request
 
 **Production recommendation:**
 ```bash
-docker compose up -d  # EXECUTOR=ext by default
+docker compose up -d  # EXECUTOR=sapi by default
 ```
 
 ### Performance vs PHP-FPM
@@ -334,8 +334,8 @@ if (tokio_is_streaming()) {
 - Multi-threaded worker pool (threads = `PHP_WORKERS` or CPU count)
 - Channel-based work distribution (`mpsc::channel` → workers)
 - Each worker: `php_request_startup()` → execute → `php_request_shutdown()`
-- Output captured via memfd + stdout redirection
-- Superglobals injected via `zend_eval_string` before script execution
+- Output captured via SAPI `ub_write` callback (SapiExecutor) or memfd (legacy)
+- Superglobals injected via direct PHP C API calls (SapiExecutor) or `zend_eval_string` (legacy)
 
 ### TLS Implementation
 
@@ -347,7 +347,7 @@ if (tokio_is_streaming()) {
 
 ### Key Technical Details
 
-- SAPI name set to "cli-server" before `php_embed_init` for OPcache/JIT compatibility
+- SAPI name: "tokio" (pure Rust SAPI implementation, similar to cli-server for OPcache/JIT compatibility)
 - PHP 8.5/8.4 ZTS (Thread Safe) build required
 - Single-threaded Tokio runtime (PHP workers handle blocking work)
 - OPcache settings in Dockerfile: `opcache.jit=tracing`, `opcache.validate_timestamps=0`
@@ -446,7 +446,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
-| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
+| `EXECUTOR` | `sapi` | Script executor: `sapi` (recommended), `ext` (C extension), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM). In Docker: `/run/secrets/tls_cert` |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM). In Docker: `/run/secrets/tls_key` |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate file |
@@ -467,7 +467,7 @@ Check status: `curl http://localhost:8080/opcache_status.php`
 ### Configuration Examples
 
 ```bash
-# Minimal (all defaults, uses ExtExecutor)
+# Minimal (all defaults, uses SapiExecutor)
 docker compose up -d
 
 # Production with tuning
@@ -1132,7 +1132,7 @@ curl http://localhost:9090/health/startup
 
 # Configuration
 curl http://localhost:9090/config
-{"listen_addr":"0.0.0.0:8080","document_root":"/var/www/html","workers":14,"queue_capacity":1400,"executor":"ext","index_file":null,"internal_addr":"0.0.0.0:9090","tls_enabled":false,"drain_timeout_secs":30,"static_cache_ttl":"1d","request_timeout":"2m","profile_enabled":false,"access_log_enabled":false,"rate_limit":null,"rate_window_secs":60,"error_pages_enabled":true}
+{"listen_addr":"0.0.0.0:8080","document_root":"/var/www/html","workers":14,"queue_capacity":1400,"executor":"sapi","index_file":null,"internal_addr":"0.0.0.0:9090","tls_enabled":false,"drain_timeout_secs":30,"static_cache_ttl":"1d","request_timeout":"2m","profile_enabled":false,"access_log_enabled":false,"rate_limit":null,"rate_window_secs":60,"error_pages_enabled":true}
 
 # Metrics
 curl http://localhost:9090/metrics
@@ -1247,7 +1247,7 @@ See [docs/framework-compatibility.md](docs/framework-compatibility.md) for full 
 Enable gRPC for microservices architecture:
 
 ```bash
-# Build with gRPC feature
+# Build with gRPC feature (tokio-sapi is included by default)
 CARGO_FEATURES=grpc docker compose build
 
 # Run with gRPC enabled
@@ -1398,7 +1398,7 @@ Metrics are available at `/metrics` endpoint (requires `INTERNAL_ADDR`).
 Enable distributed tracing with the `otel` feature:
 
 ```bash
-# Build with OpenTelemetry support
+# Build with OpenTelemetry support (tokio-sapi is included by default)
 cargo build --release --features otel
 
 # Or with Docker

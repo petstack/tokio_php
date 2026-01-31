@@ -12,9 +12,9 @@ name = "tokio_php"
 path = "src/main.rs"
 
 [features]
-default = ["php"]
+default = ["php", "tokio-sapi"]
 php = []
-# Pure Rust SAPI implementation (eliminates C extension dependency)
+# Pure Rust SAPI implementation (replaces legacy C extension executors)
 tokio-sapi = ["php"]
 stub = []
 # Debug profiling: single-worker mode, writes detailed reports to /tmp/tokio_profile_request_{id}.md

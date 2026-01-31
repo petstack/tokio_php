@@ -59,18 +59,29 @@ pub enum ResponseChunk {
 // ============================================================================
 
 /// Called once during SAPI startup.
+///
+/// # Safety
+/// This callback is only called by PHP during SAPI initialization.
+/// The module pointer is valid when provided by PHP.
 pub unsafe extern "C" fn sapi_startup_callback(_module: *mut sapi_module_struct) -> c_int {
     tracing::trace!("sapi_startup_callback called");
     SUCCESS
 }
 
 /// Called once during SAPI shutdown.
+///
+/// # Safety
+/// This callback is only called by PHP during SAPI shutdown.
+/// The module pointer is valid when provided by PHP.
 pub unsafe extern "C" fn sapi_shutdown_callback(_module: *mut sapi_module_struct) -> c_int {
     tracing::trace!("sapi_shutdown_callback called");
     SUCCESS
 }
 
 /// Called at the start of each request.
+///
+/// # Safety
+/// This callback is only called by PHP during request startup.
 pub unsafe extern "C" fn sapi_activate_callback() -> c_int {
     tracing::trace!("sapi_activate_callback called");
 
@@ -82,6 +93,9 @@ pub unsafe extern "C" fn sapi_activate_callback() -> c_int {
 }
 
 /// Called at the end of each request.
+///
+/// # Safety
+/// This callback is only called by PHP during request shutdown.
 pub unsafe extern "C" fn sapi_deactivate_callback() -> c_int {
     tracing::trace!("sapi_deactivate_callback called");
 
@@ -102,6 +116,10 @@ pub unsafe extern "C" fn sapi_deactivate_callback() -> c_int {
 /// Unbuffered write callback - receives all PHP output.
 ///
 /// This is called for every piece of output PHP produces (echo, print, etc.).
+///
+/// # Safety
+/// This callback is only called by PHP. The `str` pointer and `len` are provided
+/// by PHP and point to valid output data.
 pub unsafe extern "C" fn sapi_ub_write(str: *const c_char, len: usize) -> usize {
     if str.is_null() || len == 0 {
         return len;
@@ -140,6 +158,9 @@ pub unsafe extern "C" fn sapi_ub_write(str: *const c_char, len: usize) -> usize 
 }
 
 /// Flush callback - called by PHP's flush() function.
+///
+/// # Safety
+/// This callback is only called by PHP.
 pub unsafe extern "C" fn sapi_flush(_server_context: *mut c_void) {
     tracing::trace!("sapi_flush called");
 
@@ -150,6 +171,10 @@ pub unsafe extern "C" fn sapi_flush(_server_context: *mut c_void) {
 }
 
 /// Get environment variable callback.
+///
+/// # Safety
+/// This callback is only called by PHP. The `name` pointer and `name_len` are
+/// provided by PHP and point to valid string data.
 pub unsafe extern "C" fn sapi_getenv(name: *const c_char, name_len: usize) -> *mut c_char {
     if name.is_null() || name_len == 0 {
         return ptr::null_mut();
@@ -173,6 +198,9 @@ pub unsafe extern "C" fn sapi_getenv(name: *const c_char, name_len: usize) -> *m
 // ============================================================================
 
 /// Header handler - captures headers set via PHP's header() function.
+///
+/// # Safety
+/// This callback is only called by PHP. The pointers are valid when provided by PHP.
 pub unsafe extern "C" fn sapi_header_handler(
     sapi_header: *mut sapi_header_struct,
     op: sapi_header_op_enum,
@@ -195,7 +223,7 @@ pub unsafe extern "C" fn sapi_header_handler(
                         // Parse status code from "HTTP/x.x NNN reason"
                         if let Some(status_part) = header_str.split_whitespace().nth(1) {
                             if let Ok(code) = status_part.parse::<u16>() {
-                                if code >= 100 && code < 600 {
+                                if (100..600).contains(&code) {
                                     CAPTURED_STATUS.with(|s| *s.borrow_mut() = code);
                                     STREAM_STATE.with(|state| {
                                         if let Some(ref mut s) = *state.borrow_mut() {
@@ -257,7 +285,7 @@ pub unsafe extern "C" fn sapi_header_handler(
             // http_response_code() passes the status code directly as the sapi_header pointer
             // (cast from int to void*), not as a sapi_header_struct
             let code = sapi_header as usize as u16;
-            if code >= 100 && code < 600 {
+            if (100..600).contains(&code) {
                 CAPTURED_STATUS.with(|s| *s.borrow_mut() = code);
                 STREAM_STATE.with(|state| {
                     if let Some(ref mut s) = *state.borrow_mut() {
@@ -275,6 +303,9 @@ pub unsafe extern "C" fn sapi_header_handler(
 }
 
 /// Send headers callback - sends all headers to client.
+///
+/// # Safety
+/// This callback is only called by PHP. The pointer is valid when provided by PHP.
 pub unsafe extern "C" fn sapi_send_headers(_sapi_headers: *mut sapi_headers_struct) -> c_int {
     tracing::trace!("sapi_send_headers called");
 
@@ -321,6 +352,10 @@ pub unsafe extern "C" fn sapi_send_headers(_sapi_headers: *mut sapi_headers_stru
 // ============================================================================
 
 /// Read POST data for php://input.
+///
+/// # Safety
+/// This callback is only called by PHP. The `buffer` pointer and `count_bytes` are
+/// provided by PHP and point to valid memory for writing.
 pub unsafe extern "C" fn sapi_read_post(buffer: *mut c_char, count_bytes: usize) -> usize {
     if buffer.is_null() || count_bytes == 0 {
         return 0;
@@ -342,6 +377,9 @@ pub unsafe extern "C" fn sapi_read_post(buffer: *mut c_char, count_bytes: usize)
 }
 
 /// Read cookies callback.
+///
+/// # Safety
+/// This callback is only called by PHP during request initialization.
 pub unsafe extern "C" fn sapi_read_cookies() -> *mut c_char {
     REQUEST_CTX.with(|ctx| {
         if let Some(ref context) = *ctx.borrow() {
@@ -359,6 +397,10 @@ pub unsafe extern "C" fn sapi_read_cookies() -> *mut c_char {
 ///
 /// This callback is called during php_request_startup() to populate
 /// the $_SERVER superglobal.
+///
+/// # Safety
+/// This callback is only called by PHP. The `track_vars_array` pointer is
+/// valid when provided by PHP and points to the $_SERVER array.
 pub unsafe extern "C" fn sapi_register_server_variables(track_vars_array: *mut zval) {
     tracing::trace!("sapi_register_server_variables called");
 
@@ -387,6 +429,9 @@ pub unsafe extern "C" fn sapi_register_server_variables(track_vars_array: *mut z
 // ============================================================================
 
 /// Log message callback - receives PHP errors and messages.
+///
+/// # Safety
+/// This callback is only called by PHP. The `message` pointer is valid when provided by PHP.
 pub unsafe extern "C" fn sapi_log_message(message: *const c_char, syslog_type: c_int) {
     if message.is_null() {
         return;
@@ -409,6 +454,9 @@ pub unsafe extern "C" fn sapi_log_message(message: *const c_char, syslog_type: c
 }
 
 /// Get request time callback.
+///
+/// # Safety
+/// This callback is only called by PHP. The `request_time` pointer is valid when provided by PHP.
 pub unsafe extern "C" fn sapi_get_request_time(request_time: *mut f64) -> zend_result {
     if !request_time.is_null() {
         *request_time = bridge::get_request_time();

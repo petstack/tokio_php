@@ -6,14 +6,13 @@ services:
       args:
         # PHP version: 8.4 or 8.5
         PHP_VERSION: ${PHP_VERSION:-8.5}
-        # Cargo features: tokio-sapi, grpc, otel, debug-profile
-        # Default: tokio-sapi (pure Rust SAPI), grpc, otel
+        # Cargo features: grpc, otel, debug-profile
+        # Note: tokio-sapi is now default (pure Rust SAPI)
         # Examples:
-        #   CARGO_FEATURES="tokio-sapi" docker compose build           # Pure Rust SAPI only
-        #   CARGO_FEATURES="tokio-sapi,grpc" docker compose build      # + gRPC
-        #   CARGO_FEATURES="tokio-sapi,grpc,otel" docker compose build # + OpenTelemetry
-        #   CARGO_FEATURES="grpc,otel" docker compose build            # Legacy C extension
-        CARGO_FEATURES: ${CARGO_FEATURES:-tokio-sapi,grpc,otel}
+        #   CARGO_FEATURES="" docker compose build           # Default (tokio-sapi only)
+        #   CARGO_FEATURES="grpc" docker compose build       # + gRPC
+        #   CARGO_FEATURES="grpc,otel" docker compose build  # + gRPC + OpenTelemetry
+        CARGO_FEATURES: ${CARGO_FEATURES:-grpc,otel}
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -90,7 +89,7 @@ services:
       dockerfile: Dockerfile
       args:
         PHP_VERSION: ${PHP_VERSION:-8.5}
-        CARGO_FEATURES: ${CARGO_FEATURES:-tokio-sapi,grpc,otel}
+        CARGO_FEATURES: ${CARGO_FEATURES:-grpc,otel}
     ports:
       - "8443:8443"
       - "9090:9090"

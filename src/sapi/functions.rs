@@ -198,7 +198,7 @@ unsafe extern "C" fn php_tokio_http_response_code(
             let type_info = (*arg).type_info();
             if type_info == IS_LONG {
                 let val = (*arg).get_long();
-                if val >= 100 && val < 600 {
+                if (100..600).contains(&val) {
                     Some(val as u16)
                 } else {
                     None
@@ -252,9 +252,9 @@ static ARGINFO_NO_ARGS: [zend_internal_arg_info; 1] = [zend_internal_arg_info::n
 static ARGINFO_HEARTBEAT: [zend_internal_arg_info; 2] = [
     zend_internal_arg_info::no_args(), // 0 required args
     zend_internal_arg_info {
-        name: b"time\0".as_ptr() as *const c_char,
+        name: c"time".as_ptr(),
         type_: zend_type::none(),
-        default_value: b"10\0".as_ptr() as *const c_char,
+        default_value: c"10".as_ptr(),
     },
 ];
 
@@ -262,9 +262,9 @@ static ARGINFO_HEARTBEAT: [zend_internal_arg_info; 2] = [
 static ARGINFO_SEND_HEADERS: [zend_internal_arg_info; 2] = [
     zend_internal_arg_info::no_args(), // 0 required args
     zend_internal_arg_info {
-        name: b"status\0".as_ptr() as *const c_char,
+        name: c"status".as_ptr(),
         type_: zend_type::none(),
-        default_value: b"200\0".as_ptr() as *const c_char,
+        default_value: c"200".as_ptr(),
     },
 ];
 
@@ -272,9 +272,9 @@ static ARGINFO_SEND_HEADERS: [zend_internal_arg_info; 2] = [
 static ARGINFO_HTTP_RESPONSE_CODE: [zend_internal_arg_info; 2] = [
     zend_internal_arg_info::no_args(), // 0 required args
     zend_internal_arg_info {
-        name: b"code\0".as_ptr() as *const c_char,
+        name: c"code".as_ptr(),
         type_: zend_type::none(),
-        default_value: b"0\0".as_ptr() as *const c_char,
+        default_value: c"0".as_ptr(),
     },
 ];
 
