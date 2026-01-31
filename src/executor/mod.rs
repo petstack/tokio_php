@@ -8,23 +8,24 @@
 //!
 //! | Executor | Feature | Description |
 //! |----------|---------|-------------|
-//! | [`ExtExecutor`] | `php` | **Recommended.** Uses FFI for superglobals, best performance |
-//! | [`PhpExecutor`] | `php` | Legacy executor using `zend_eval_string` |
+//! | [`SapiExecutor`] | `tokio-sapi` | **Recommended (default).** Pure Rust SAPI, fastest performance |
+//! | [`ExtExecutor`] | `php` (without tokio-sapi) | Legacy executor with C extension FFI |
+//! | [`PhpExecutor`] | `php` (without tokio-sapi) | Legacy executor using `zend_eval_string` |
 //! | [`StubExecutor`] | - | Returns empty responses, useful for benchmarking |
 //!
 //! # Performance Comparison
 //!
 //! For real applications using superglobals (`$_GET`, `$_POST`, `$_SERVER`),
-//! [`ExtExecutor`] is ~48% faster than [`PhpExecutor`] due to FFI batch API.
+//! [`SapiExecutor`] is the fastest due to pure Rust SAPI implementation with direct PHP C API calls.
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use tokio_php::executor::{ScriptExecutor, ExtExecutor};
+//! use tokio_php::executor::{ScriptExecutor, SapiExecutor};
 //! use tokio_php::types::ScriptRequest;
 //!
 //! // Create executor with 4 worker threads
-//! let executor = ExtExecutor::new(4, 400)?;
+//! let executor = SapiExecutor::new(4, 400)?;
 //!
 //! // Execute a script
 //! let request = ScriptRequest::new("/var/www/html/index.php");

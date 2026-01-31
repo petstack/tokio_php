@@ -111,11 +111,19 @@ tokio_php/
 │   │   └── static_cache.rs  # Static file caching
 │   ├── executor/            # PHP execution backends
 │   │   ├── mod.rs           # ScriptExecutor trait
-│   │   ├── php.rs           # PhpExecutor (zend_eval_string)
-│   │   ├── ext.rs           # ExtExecutor (php_execute_script)
+│   │   ├── sapi_executor.rs # SapiExecutor (pure Rust SAPI, default)
+│   │   ├── php.rs           # PhpExecutor (zend_eval_string, legacy)
+│   │   ├── ext.rs           # ExtExecutor (C extension, legacy)
 │   │   ├── stub.rs          # StubExecutor (benchmarks)
 │   │   ├── common.rs        # Shared worker pool
-│   │   └── sapi.rs          # SAPI initialization
+│   │   └── sapi.rs          # Legacy SAPI initialization
+│   ├── sapi/                # Pure Rust SAPI implementation (tokio-sapi feature)
+│   │   ├── mod.rs           # SAPI module exports
+│   │   ├── ffi.rs           # PHP C API FFI bindings
+│   │   ├── callbacks.rs     # SAPI callbacks
+│   │   ├── context.rs       # SAPI context
+│   │   ├── functions.rs     # PHP functions
+│   │   └── module.rs        # PHP module init
 │   ├── core/                # Core types and context
 │   ├── config/              # Configuration parsing
 │   ├── grpc/                # gRPC server (optional, --features grpc)

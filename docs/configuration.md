@@ -20,7 +20,7 @@ tokio_php is configured via environment variables.
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
-| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
+| `EXECUTOR` | `sapi` | Script executor: `sapi` (recommended, pure Rust SAPI), `ext` (C extension), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate |
@@ -521,10 +521,13 @@ See [Rate Limiting](rate-limiting.md) for algorithm details and best practices.
 
 ### EXECUTOR
 
-Select the script execution backend. **Default: `ext` (recommended).**
+Select the script execution backend. **Default: `sapi` (recommended).**
 
 ```bash
-# ExtExecutor - FFI superglobals + php_execute_script() (default, recommended)
+# SapiExecutor - Pure Rust SAPI implementation (default, recommended)
+EXECUTOR=sapi
+
+# ExtExecutor - C extension with FFI superglobals (legacy)
 EXECUTOR=ext
 
 # PhpExecutor - eval-based superglobals (legacy)
@@ -536,16 +539,19 @@ EXECUTOR=stub
 
 | Value | Executor | Method | Use Case |
 |-------|----------|--------|----------|
-| `ext` | ExtExecutor | `php_execute_script()` + FFI | **Production (2x faster)** |
-| `php` | PhpExecutor | `zend_eval_string()` | Legacy/debugging |
+| `sapi` | SapiExecutor | Pure Rust SAPI + direct PHP C API | **All production apps (fastest)** |
+| `ext` | ExtExecutor | `php_execute_script()` + C extension FFI | Legacy compatibility |
+| `php` | PhpExecutor | `zend_eval_string()` | Debugging/testing |
 | `stub` | StubExecutor | No PHP | Benchmarking HTTP overhead |
 
-ExtExecutor is **2x faster** than PhpExecutor:
-- Uses native `php_execute_script()` - fully optimized for OPcache/JIT
-- Sets superglobals via direct FFI calls (no eval parsing)
-- ~36K RPS vs ~16K RPS for index.php
+SapiExecutor is **fastest** for production:
+- Pure Rust SAPI implementation with direct PHP C API calls
+- No C extension overhead or FFI bridge cost
+- Optimized superglobals batch setting
+- Memory-safe callbacks implemented in Rust
+- ~26K+ RPS for index.php with superglobals
 
-See [Architecture](architecture.md) for executor comparison and [tokio_sapi Extension](tokio-sapi-extension.md) for FFI details.
+See [Architecture](architecture.md) for executor comparison and performance benchmarks.
 
 ### Profiling (debug-profile feature)
 
