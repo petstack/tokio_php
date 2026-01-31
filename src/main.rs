@@ -12,11 +12,16 @@ use tokio_php::observability::otel::{init_tracing, shutdown_tracing, OtelConfig}
 #[cfg(feature = "grpc")]
 use tokio_php::grpc::GrpcServer;
 
-#[cfg(feature = "php")]
+// Legacy executors (only when NOT using tokio-sapi)
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
 use tokio_php::executor::PhpExecutor;
 
-#[cfg(feature = "php")]
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
 use tokio_php::executor::ExtExecutor;
+
+// Pure Rust SAPI executor (when using tokio-sapi)
+#[cfg(feature = "tokio-sapi")]
+use tokio_php::executor::SapiExecutor;
 
 use tokio_php::executor::StubExecutor;
 
@@ -159,22 +164,23 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
             )
             .await
         }
-        ExecutorType::Ext => {
-            #[cfg(feature = "php")]
+        ExecutorType::Sapi => {
+            // Pure Rust SAPI executor (requires tokio-sapi feature)
+            #[cfg(feature = "tokio-sapi")]
             {
                 info!(
-                    "Initializing EXT executor with {} workers (FFI superglobals)...",
+                    "Initializing SAPI executor with {} workers (pure Rust SAPI)...",
                     worker_threads
                 );
 
-                let executor = ExtExecutor::with_queue_capacity(worker_threads, queue_capacity)
+                let executor = SapiExecutor::with_queue_capacity(worker_threads, queue_capacity)
                     .map_err(|e| {
-                        eprintln!("Failed to initialize ExtExecutor: {}", e);
+                        eprintln!("Failed to initialize SapiExecutor: {}", e);
                         e
                     })?;
 
                 info!(
-                    "ExtExecutor ready ({} workers, FFI mode)",
+                    "SapiExecutor ready ({} workers, pure Rust SAPI)",
                     executor.worker_count()
                 );
 
@@ -190,9 +196,61 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 .await
             }
 
-            #[cfg(not(feature = "php"))]
+            #[cfg(not(feature = "tokio-sapi"))]
             {
-                info!("PHP feature not enabled, falling back to stub mode");
+                eprintln!("EXECUTOR=sapi requires --features tokio-sapi");
+                eprintln!("Falling back to stub mode");
+                let executor = StubExecutor::new();
+                let server = Server::new(server_config, executor)?
+                    .with_profile_enabled(profile_enabled)
+                    .with_access_log_enabled(access_log_enabled)
+                    .with_rate_limiter(rate_limit_config);
+                run_server(
+                    server,
+                    #[cfg(feature = "grpc")]
+                    grpc_ctx.clone(),
+                )
+                .await
+            }
+        }
+        ExecutorType::Ext => {
+            // ExtExecutor with C extension (legacy, requires php feature without tokio-sapi)
+            #[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
+            {
+                info!(
+                    "Initializing EXT executor with {} workers (C extension)...",
+                    worker_threads
+                );
+
+                let executor = ExtExecutor::with_queue_capacity(worker_threads, queue_capacity)
+                    .map_err(|e| {
+                        eprintln!("Failed to initialize ExtExecutor: {}", e);
+                        e
+                    })?;
+
+                info!(
+                    "ExtExecutor ready ({} workers, C extension)",
+                    executor.worker_count()
+                );
+
+                let server = Server::new(server_config, executor)?
+                    .with_profile_enabled(profile_enabled)
+                    .with_access_log_enabled(access_log_enabled)
+                    .with_rate_limiter(rate_limit_config);
+                run_server(
+                    server,
+                    #[cfg(feature = "grpc")]
+                    grpc_ctx.clone(),
+                )
+                .await
+            }
+
+            #[cfg(any(not(feature = "php"), feature = "tokio-sapi"))]
+            {
+                eprintln!(
+                    "EXECUTOR=ext requires C extension (build without --features tokio-sapi)"
+                );
+                eprintln!("Falling back to stub mode");
                 let executor = StubExecutor::new();
                 let server = Server::new(server_config, executor)?
                     .with_profile_enabled(profile_enabled)
@@ -207,10 +265,11 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
             }
         }
         ExecutorType::Php => {
-            #[cfg(feature = "php")]
+            // PhpExecutor with zend_eval_string (legacy, requires php feature without tokio-sapi)
+            #[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
             {
                 info!(
-                    "Initializing PHP executor with {} workers...",
+                    "Initializing PHP executor with {} workers (legacy)...",
                     worker_threads
                 );
 
@@ -220,7 +279,10 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                         e
                     })?;
 
-                info!("PHP executor ready ({} workers)", executor.worker_count());
+                info!(
+                    "PHP executor ready ({} workers, legacy)",
+                    executor.worker_count()
+                );
 
                 let server = Server::new(server_config, executor)?
                     .with_profile_enabled(profile_enabled)
@@ -234,9 +296,12 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
                 .await
             }
 
-            #[cfg(not(feature = "php"))]
+            #[cfg(any(not(feature = "php"), feature = "tokio-sapi"))]
             {
-                info!("PHP feature not enabled, falling back to stub mode");
+                eprintln!(
+                    "EXECUTOR=php requires C extension (build without --features tokio-sapi)"
+                );
+                eprintln!("Falling back to stub mode");
                 let executor = StubExecutor::new();
                 let server = Server::new(server_config, executor)?
                     .with_profile_enabled(profile_enabled)

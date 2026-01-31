@@ -4,19 +4,36 @@
 //! to eliminate duplication and follow DRY principles.
 
 use std::cell::RefCell;
+#[cfg(not(feature = "tokio-sapi"))]
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
 use crate::bridge::{FinishChannel, FinishData, StreamingChannel};
-use crate::executor::sapi::{self, ResponseChunk};
+#[cfg(not(feature = "tokio-sapi"))]
 use crate::profiler::ProfileData;
 use crate::server::response::StreamChunk;
 use crate::types::{ScriptRequest, ScriptResponse};
+
+// =============================================================================
+// Response Chunk Types (imported from feature-specific modules)
+// =============================================================================
+
+// Import streaming functions and ResponseChunk from executor/sapi (only when NOT using tokio-sapi)
+#[cfg(not(feature = "tokio-sapi"))]
+use crate::executor::sapi;
+
+#[cfg(not(feature = "tokio-sapi"))]
+pub use crate::executor::sapi::ResponseChunk;
+
+// Import ResponseChunk from pure Rust SAPI (when using tokio-sapi)
+#[cfg(feature = "tokio-sapi")]
+pub use crate::sapi::ResponseChunk;
 
 // =============================================================================
 // Execute Result Types
@@ -43,9 +60,10 @@ pub enum ExecuteResult {
 }
 
 // =============================================================================
-// FFI Bindings (shared)
+// FFI Bindings (shared) - only used by legacy executors
 // =============================================================================
 
+#[cfg(not(feature = "tokio-sapi"))]
 #[link(name = "php")]
 extern "C" {
     pub fn php_request_startup() -> c_int;
@@ -59,7 +77,9 @@ extern "C" {
 // =============================================================================
 
 /// PHP code to finalize output - just flush buffers
+#[cfg(not(feature = "tokio-sapi"))]
 pub static FINALIZE_CODE: &[u8] = b"1;\0";
+#[cfg(not(feature = "tokio-sapi"))]
 pub static FINALIZE_NAME: &[u8] = b"f\0";
 
 /// Name for memfd (Linux only)
@@ -627,16 +647,18 @@ fn finish_data_to_response(data: FinishData, profiling: bool) -> ScriptResponse 
 }
 
 // =============================================================================
-// PHP Code Generation
+// PHP Code Generation - only used by legacy executors (PhpExecutor)
 // =============================================================================
 
 /// Checks if a string needs PHP escaping
+#[cfg(not(feature = "tokio-sapi"))]
 #[inline]
 pub fn needs_escape(s: &str) -> bool {
     s.bytes().any(|b| b == b'\\' || b == b'\'' || b == 0)
 }
 
 /// Writes a PHP-escaped string to a buffer (zero-alloc for clean strings)
+#[cfg(not(feature = "tokio-sapi"))]
 #[inline]
 pub fn write_escaped(buf: &mut String, s: &str) {
     if !needs_escape(s) {
@@ -654,6 +676,7 @@ pub fn write_escaped(buf: &mut String, s: &str) {
 }
 
 /// Writes a PHP key-value pair: 'key'=>'value'
+#[cfg(not(feature = "tokio-sapi"))]
 #[inline]
 pub fn write_kv(buf: &mut String, key: &str, value: &str) {
     buf.push('\'');
@@ -664,6 +687,7 @@ pub fn write_kv(buf: &mut String, key: &str, value: &str) {
 }
 
 /// Builds PHP code to set superglobals ($_GET, $_POST, $_SERVER, etc.)
+#[cfg(not(feature = "tokio-sapi"))]
 pub fn build_superglobals_code(request: &ScriptRequest) -> String {
     // Estimate capacity: base + params
     let estimated = 256
@@ -796,6 +820,7 @@ pub fn build_superglobals_code(request: &ScriptRequest) -> String {
 }
 
 /// Builds combined code: superglobals + require script (single eval)
+#[cfg(not(feature = "tokio-sapi"))]
 pub fn build_combined_code(request: &ScriptRequest) -> String {
     let mut code = String::with_capacity(4096);
     code.push_str(&build_superglobals_code(request));
@@ -916,6 +941,7 @@ impl StdoutCapture {
 /// Executes PHP script, returns capture handle for later finalization
 /// IMPORTANT: Caller must call php_request_shutdown() before finalizing capture!
 #[allow(dead_code)]
+#[cfg(not(feature = "tokio-sapi"))]
 pub fn execute_php_script_start(
     request: &ScriptRequest,
     profiling: bool,
@@ -972,6 +998,7 @@ pub fn execute_php_script_start(
 
 /// Finalizes script execution after php_request_shutdown
 #[allow(dead_code)]
+#[cfg(not(feature = "tokio-sapi"))]
 pub fn execute_php_script_finish(
     capture: StdoutCapture,
     mut timing: ExecutionTiming,
@@ -1040,6 +1067,7 @@ pub fn execute_php_script_finish(
 
 /// Worker thread main loop - processes requests until channel closes.
 /// Uses streaming output via SAPI ub_write callback.
+#[cfg(not(feature = "tokio-sapi"))]
 pub fn worker_main_loop(id: usize, rx: Arc<Mutex<std_mpsc::Receiver<WorkerRequest>>>) {
     // Initialize thread-local storage for ZTS
     unsafe {
@@ -1193,183 +1221,183 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // PHP string escaping tests
+    // PHP string escaping tests - only for legacy executors
     // -------------------------------------------------------------------------
 
-    #[test]
-    fn test_needs_escape_clean_string() {
-        assert!(!needs_escape("hello"));
-        assert!(!needs_escape("foo bar"));
-        assert!(!needs_escape("123"));
-        assert!(!needs_escape(""));
-    }
+    #[cfg(not(feature = "tokio-sapi"))]
+    mod php_code_gen_tests {
+        use super::*;
+        use std::borrow::Cow;
 
-    #[test]
-    fn test_needs_escape_with_backslash() {
-        assert!(needs_escape("foo\\bar"));
-        assert!(needs_escape("\\"));
-    }
+        #[test]
+        fn test_needs_escape_clean_string() {
+            assert!(!needs_escape("hello"));
+            assert!(!needs_escape("foo bar"));
+            assert!(!needs_escape("123"));
+            assert!(!needs_escape(""));
+        }
 
-    #[test]
-    fn test_needs_escape_with_quote() {
-        assert!(needs_escape("it's"));
-        assert!(needs_escape("'quoted'"));
-    }
+        #[test]
+        fn test_needs_escape_with_backslash() {
+            assert!(needs_escape("foo\\bar"));
+            assert!(needs_escape("\\"));
+        }
 
-    #[test]
-    fn test_needs_escape_with_null() {
-        assert!(needs_escape("foo\0bar"));
-    }
+        #[test]
+        fn test_needs_escape_with_quote() {
+            assert!(needs_escape("it's"));
+            assert!(needs_escape("'quoted'"));
+        }
 
-    #[test]
-    fn test_write_escaped_clean() {
-        let mut buf = String::new();
-        write_escaped(&mut buf, "hello world");
-        assert_eq!(buf, "hello world");
-    }
+        #[test]
+        fn test_needs_escape_with_null() {
+            assert!(needs_escape("foo\0bar"));
+        }
 
-    #[test]
-    fn test_write_escaped_backslash() {
-        let mut buf = String::new();
-        write_escaped(&mut buf, "foo\\bar");
-        assert_eq!(buf, "foo\\\\bar");
-    }
+        #[test]
+        fn test_write_escaped_clean() {
+            let mut buf = String::new();
+            write_escaped(&mut buf, "hello world");
+            assert_eq!(buf, "hello world");
+        }
 
-    #[test]
-    fn test_write_escaped_quote() {
-        let mut buf = String::new();
-        write_escaped(&mut buf, "it's");
-        assert_eq!(buf, "it\\'s");
-    }
+        #[test]
+        fn test_write_escaped_backslash() {
+            let mut buf = String::new();
+            write_escaped(&mut buf, "foo\\bar");
+            assert_eq!(buf, "foo\\\\bar");
+        }
 
-    #[test]
-    fn test_write_escaped_null_stripped() {
-        let mut buf = String::new();
-        write_escaped(&mut buf, "foo\0bar");
-        assert_eq!(buf, "foobar");
-    }
+        #[test]
+        fn test_write_escaped_quote() {
+            let mut buf = String::new();
+            write_escaped(&mut buf, "it's");
+            assert_eq!(buf, "it\\'s");
+        }
 
-    #[test]
-    fn test_write_escaped_mixed() {
-        let mut buf = String::new();
-        write_escaped(&mut buf, "path\\to\\'file'");
-        assert_eq!(buf, "path\\\\to\\\\\\'file\\'");
-    }
+        #[test]
+        fn test_write_escaped_null_stripped() {
+            let mut buf = String::new();
+            write_escaped(&mut buf, "foo\0bar");
+            assert_eq!(buf, "foobar");
+        }
 
-    #[test]
-    fn test_write_kv() {
-        let mut buf = String::new();
-        write_kv(&mut buf, "key", "value");
-        assert_eq!(buf, "'key'=>'value'");
-    }
+        #[test]
+        fn test_write_escaped_mixed() {
+            let mut buf = String::new();
+            write_escaped(&mut buf, "path\\to\\'file'");
+            assert_eq!(buf, "path\\\\to\\\\\\'file\\'");
+        }
 
-    #[test]
-    fn test_write_kv_with_escaping() {
-        let mut buf = String::new();
-        write_kv(&mut buf, "it's", "O'Brien");
-        assert_eq!(buf, "'it\\'s'=>'O\\'Brien'");
-    }
+        #[test]
+        fn test_write_kv() {
+            let mut buf = String::new();
+            write_kv(&mut buf, "key", "value");
+            assert_eq!(buf, "'key'=>'value'");
+        }
 
-    // -------------------------------------------------------------------------
-    // PHP code generation tests
-    // -------------------------------------------------------------------------
+        #[test]
+        fn test_write_kv_with_escaping() {
+            let mut buf = String::new();
+            write_kv(&mut buf, "it's", "O'Brien");
+            assert_eq!(buf, "'it\\'s'=>'O\\'Brien'");
+        }
 
-    use std::borrow::Cow;
+        #[test]
+        fn test_build_superglobals_code_empty() {
+            let request = ScriptRequest {
+                script_path: "/test.php".to_string(),
+                ..Default::default()
+            };
 
-    #[test]
-    fn test_build_superglobals_code_empty() {
-        let request = ScriptRequest {
-            script_path: "/test.php".to_string(),
-            ..Default::default()
-        };
+            let code = build_superglobals_code(&request);
 
-        let code = build_superglobals_code(&request);
+            assert!(code.contains("$_GET=[];"));
+            assert!(code.contains("$_POST=[];"));
+            assert!(code.contains("$_SERVER=[];"));
+            assert!(code.contains("$_COOKIE=[];"));
+            assert!(code.contains("$_FILES=[];"));
+            assert!(code.contains("$_REQUEST=$_GET+$_POST;"));
+        }
 
-        assert!(code.contains("$_GET=[];"));
-        assert!(code.contains("$_POST=[];"));
-        assert!(code.contains("$_SERVER=[];"));
-        assert!(code.contains("$_COOKIE=[];"));
-        assert!(code.contains("$_FILES=[];"));
-        assert!(code.contains("$_REQUEST=$_GET+$_POST;"));
-    }
+        #[test]
+        fn test_build_superglobals_code_with_get() {
+            let request = ScriptRequest {
+                script_path: "/test.php".to_string(),
+                get_params: vec![
+                    (Cow::Owned("foo".to_string()), Cow::Owned("bar".to_string())),
+                    (Cow::Owned("num".to_string()), Cow::Owned("123".to_string())),
+                ],
+                ..Default::default()
+            };
 
-    #[test]
-    fn test_build_superglobals_code_with_get() {
-        let request = ScriptRequest {
-            script_path: "/test.php".to_string(),
-            get_params: vec![
-                (Cow::Owned("foo".to_string()), Cow::Owned("bar".to_string())),
-                (Cow::Owned("num".to_string()), Cow::Owned("123".to_string())),
-            ],
-            ..Default::default()
-        };
+            let code = build_superglobals_code(&request);
 
-        let code = build_superglobals_code(&request);
+            assert!(code.contains("$_GET=['foo'=>'bar','num'=>'123'];"));
+        }
 
-        assert!(code.contains("$_GET=['foo'=>'bar','num'=>'123'];"));
-    }
+        #[test]
+        fn test_build_superglobals_code_with_post() {
+            let request = ScriptRequest {
+                script_path: "/test.php".to_string(),
+                post_params: vec![(
+                    Cow::Owned("username".to_string()),
+                    Cow::Owned("admin".to_string()),
+                )],
+                ..Default::default()
+            };
 
-    #[test]
-    fn test_build_superglobals_code_with_post() {
-        let request = ScriptRequest {
-            script_path: "/test.php".to_string(),
-            post_params: vec![(
-                Cow::Owned("username".to_string()),
-                Cow::Owned("admin".to_string()),
-            )],
-            ..Default::default()
-        };
+            let code = build_superglobals_code(&request);
 
-        let code = build_superglobals_code(&request);
+            assert!(code.contains("$_POST=['username'=>'admin'];"));
+        }
 
-        assert!(code.contains("$_POST=['username'=>'admin'];"));
-    }
+        #[test]
+        fn test_build_superglobals_code_escapes_values() {
+            let request = ScriptRequest {
+                script_path: "/test.php".to_string(),
+                get_params: vec![
+                    (
+                        Cow::Owned("path".to_string()),
+                        Cow::Owned("c:\\windows".to_string()),
+                    ),
+                    (
+                        Cow::Owned("name".to_string()),
+                        Cow::Owned("O'Brien".to_string()),
+                    ),
+                ],
+                ..Default::default()
+            };
 
-    #[test]
-    fn test_build_superglobals_code_escapes_values() {
-        let request = ScriptRequest {
-            script_path: "/test.php".to_string(),
-            get_params: vec![
-                (
-                    Cow::Owned("path".to_string()),
-                    Cow::Owned("c:\\windows".to_string()),
-                ),
-                (
-                    Cow::Owned("name".to_string()),
-                    Cow::Owned("O'Brien".to_string()),
-                ),
-            ],
-            ..Default::default()
-        };
+            let code = build_superglobals_code(&request);
 
-        let code = build_superglobals_code(&request);
+            assert!(code.contains("'path'=>'c:\\\\windows'"));
+            assert!(code.contains("'name'=>'O\\'Brien'"));
+        }
 
-        assert!(code.contains("'path'=>'c:\\\\windows'"));
-        assert!(code.contains("'name'=>'O\\'Brien'"));
-    }
+        #[test]
+        fn test_build_combined_code() {
+            let request = ScriptRequest {
+                script_path: "/var/www/html/index.php".to_string(),
+                ..Default::default()
+            };
 
-    #[test]
-    fn test_build_combined_code() {
-        let request = ScriptRequest {
-            script_path: "/var/www/html/index.php".to_string(),
-            ..Default::default()
-        };
+            let code = build_combined_code(&request);
 
-        let code = build_combined_code(&request);
+            assert!(code.ends_with("require'/var/www/html/index.php';"));
+        }
 
-        assert!(code.ends_with("require'/var/www/html/index.php';"));
-    }
+        #[test]
+        fn test_build_combined_code_escapes_path() {
+            let request = ScriptRequest {
+                script_path: "/var/www/html/it's.php".to_string(),
+                ..Default::default()
+            };
 
-    #[test]
-    fn test_build_combined_code_escapes_path() {
-        let request = ScriptRequest {
-            script_path: "/var/www/html/it's.php".to_string(),
-            ..Default::default()
-        };
+            let code = build_combined_code(&request);
 
-        let code = build_combined_code(&request);
-
-        assert!(code.ends_with("require'/var/www/html/it\\'s.php';"));
+            assert!(code.ends_with("require'/var/www/html/it\\'s.php';"));
+        }
     }
 
     // -------------------------------------------------------------------------

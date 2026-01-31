@@ -2,12 +2,18 @@
 $action = $_GET['action'] ?? '';
 $message = '';
 
+// Use tokio_http_response_code() when running under tokio SAPI,
+// fall back to http_response_code() for other SAPIs (cli, fpm, etc.)
+$setStatus = function_exists('tokio_http_response_code') && php_sapi_name() === 'tokio'
+    ? 'tokio_http_response_code'
+    : 'http_response_code';
+
 switch ($action) {
     case 'redirect':
         header('Location: /headers.php?action=redirected');
         exit;
     case 'redirect301':
-        http_response_code(301);
+        $setStatus(301);
         header('Location: /headers.php?action=redirected');
         exit;
     case 'redirected':
@@ -23,15 +29,15 @@ switch ($action) {
         $message = 'Custom headers added. Check DevTools Network tab.';
         break;
     case '404':
-        http_response_code(404);
+        $setStatus(404);
         $message = 'This page returned 404 status code.';
         break;
     case '500':
-        http_response_code(500);
+        $setStatus(500);
         $message = 'This page returned 500 status code.';
         break;
     case 'nocontent':
-        http_response_code(204);
+        $setStatus(204);
         exit;
 }
 ?>

@@ -234,6 +234,21 @@ int tokio_bridge_get_finished_header_count(void);
 int tokio_bridge_get_finished_response_code(void);
 
 /**
+ * Set the HTTP response code.
+ * Can be called anytime before headers are sent.
+ *
+ * @param code HTTP status code (100-599)
+ */
+void tokio_bridge_set_response_code(int code);
+
+/**
+ * Get the current HTTP response code.
+ *
+ * @return HTTP status code (default: 200)
+ */
+int tokio_bridge_get_response_code(void);
+
+/**
  * Set the finish request callback.
  * Called from Rust before PHP execution to enable streaming early response.
  *

@@ -21,14 +21,26 @@ pub async fn parse_multipart(
     content_type: &str,
     body: Bytes,
 ) -> Result<(ParamList, Vec<(String, Vec<UploadedFile>)>), String> {
+    tracing::debug!(
+        content_type = content_type,
+        body_len = body.len(),
+        "parse_multipart: starting"
+    );
+
     let boundary = content_type
         .split(';')
         .find_map(|part| {
-            part.trim()
-                .strip_prefix("boundary=")
-                .map(|b| b.trim_matches('"').to_string())
+            let trimmed = part.trim();
+            // Case-insensitive boundary search
+            if trimmed.to_lowercase().starts_with("boundary=") {
+                Some(trimmed[9..].trim_matches('"').to_string())
+            } else {
+                None
+            }
         })
         .ok_or("Missing boundary in multipart content-type")?;
+
+    tracing::debug!(boundary = %boundary, "parse_multipart: found boundary");
 
     let mut multipart = Multipart::new(
         stream::once(async { Ok::<_, std::io::Error>(body) }),
@@ -84,6 +96,15 @@ pub async fn parse_multipart(
                 }
             };
 
+            tracing::debug!(
+                field_name = %normalized_name,
+                file_name = %uploaded_file.name,
+                tmp_name = %uploaded_file.tmp_name,
+                size = uploaded_file.size,
+                error = uploaded_file.error,
+                "parse_multipart: parsed uploaded file"
+            );
+
             // Find existing entry or create new one
             if let Some(entry) = files.iter_mut().find(|(name, _)| name == &normalized_name) {
                 entry.1.push(uploaded_file);
@@ -92,9 +113,20 @@ pub async fn parse_multipart(
             }
         } else {
             let value = field.text().await.map_err(|e| e.to_string())?;
+            tracing::debug!(
+                field_name = %field_name,
+                value_len = value.len(),
+                "parse_multipart: parsed form field"
+            );
             params.push((Cow::Owned(field_name), Cow::Owned(value)));
         }
     }
+
+    tracing::debug!(
+        params_count = params.len(),
+        files_count = files.len(),
+        "parse_multipart: completed"
+    );
 
     Ok((params, files))
 }

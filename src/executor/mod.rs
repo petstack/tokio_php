@@ -54,24 +54,41 @@ mod stub;
 #[cfg(feature = "php")]
 mod common;
 
-#[cfg(feature = "php")]
+// Legacy executors (require C extension) - only when NOT using tokio-sapi
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
 mod php;
 
-#[cfg(feature = "php")]
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
 pub mod sapi;
 
-#[cfg(feature = "php")]
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
 mod ext;
+
+// Pure Rust SAPI executor (no C extension dependency)
+#[cfg(feature = "tokio-sapi")]
+mod sapi_executor;
 
 use async_trait::async_trait;
 
 pub use stub::StubExecutor;
 
-#[cfg(feature = "php")]
+// Legacy executors (require C extension)
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
 pub use php::PhpExecutor;
 
-#[cfg(feature = "php")]
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
 pub use ext::ExtExecutor;
+
+// ResponseChunk re-export
+#[cfg(all(feature = "php", not(feature = "tokio-sapi")))]
+pub use sapi::ResponseChunk;
+
+#[cfg(feature = "tokio-sapi")]
+pub use crate::sapi::ResponseChunk;
+
+// Pure Rust SAPI executor
+#[cfg(feature = "tokio-sapi")]
+pub use sapi_executor::SapiExecutor;
 
 #[cfg(feature = "php")]
 pub use common::QUEUE_FULL_ERROR;
@@ -81,9 +98,6 @@ pub use common::REQUEST_TIMEOUT_ERROR;
 
 #[cfg(feature = "php")]
 pub use common::ExecuteResult;
-
-#[cfg(feature = "php")]
-pub use sapi::ResponseChunk;
 
 use crate::server::response::StreamChunk;
 use crate::types::{ScriptRequest, ScriptResponse};

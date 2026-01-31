@@ -1022,10 +1022,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
             let raw_body_bytes = body_bytes.clone();
 
             let body_parse_start = Instant::now();
-            let result = if content_type_str.starts_with("application/x-www-form-urlencoded") {
+            let content_type_lower = content_type_str.to_lowercase();
+            let result = if content_type_lower.starts_with("application/x-www-form-urlencoded") {
                 let body_str = String::from_utf8_lossy(&body_bytes);
                 (parse_query_string(&body_str), Vec::new())
-            } else if content_type_str.starts_with("multipart/form-data") {
+            } else if content_type_lower.starts_with("multipart/form-data") {
                 match parse_multipart(&content_type_str, body_bytes).await {
                     Ok((params, uploaded_files)) => (params, uploaded_files),
                     Err(e) => {

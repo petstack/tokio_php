@@ -774,9 +774,21 @@ fn execute_script_streaming(
     // Set $_FILES variables
     let phase_start = Instant::now();
     let mut files_count: u64 = 0;
+    tracing::debug!(
+        files_entries = request.files.len(),
+        "execute_script_streaming: setting $_FILES"
+    );
     unsafe {
         for (field_name, files_vec) in &request.files {
             for file in files_vec {
+                tracing::debug!(
+                    field_name = %field_name,
+                    file_name = %file.name,
+                    tmp_name = %file.tmp_name,
+                    size = file.size,
+                    error = file.error,
+                    "execute_script_streaming: calling tokio_sapi_set_files_var"
+                );
                 let name_c = CString::new(file.name.as_str()).unwrap_or_default();
                 let type_c = CString::new(file.mime_type.as_str()).unwrap_or_default();
                 let tmp_c = CString::new(file.tmp_name.as_str()).unwrap_or_default();

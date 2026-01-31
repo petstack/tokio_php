@@ -6,12 +6,14 @@ services:
       args:
         # PHP version: 8.4 or 8.5
         PHP_VERSION: ${PHP_VERSION:-8.5}
-        # Cargo features: debug-profile, grpc, otel (default: grpc,otel)
+        # Cargo features: tokio-sapi, grpc, otel, debug-profile
+        # Default: tokio-sapi (pure Rust SAPI), grpc, otel
         # Examples:
-        #   CARGO_FEATURES="" docker compose build        # Minimal build (no grpc/otel)
-        #   CARGO_FEATURES=grpc docker compose build      # gRPC only
-        #   CARGO_FEATURES=otel docker compose build      # OpenTelemetry only
-        CARGO_FEATURES: ${CARGO_FEATURES:-grpc,otel}
+        #   CARGO_FEATURES="tokio-sapi" docker compose build           # Pure Rust SAPI only
+        #   CARGO_FEATURES="tokio-sapi,grpc" docker compose build      # + gRPC
+        #   CARGO_FEATURES="tokio-sapi,grpc,otel" docker compose build # + OpenTelemetry
+        #   CARGO_FEATURES="grpc,otel" docker compose build            # Legacy C extension
+        CARGO_FEATURES: ${CARGO_FEATURES:-tokio-sapi,grpc,otel}
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -22,11 +24,12 @@ services:
       - RUST_LOG=tokio_php=info
       # PHP_WORKERS: number of PHP worker processes (0 = auto-detect from CPU cores)
       - PHP_WORKERS=${PHP_WORKERS:-0}
-      # EXECUTOR: script executor mode (ext, php, stub)
-      #   ext - recommended for production, uses php_execute_script() with FFI superglobals
-      #   php - legacy mode, uses zend_eval_string()
+      # EXECUTOR: script executor mode
+      #   sapi - pure Rust SAPI (default for tokio-sapi builds, recommended)
+      #   ext  - C extension mode (legacy, requires build without tokio-sapi)
+      #   php  - legacy mode with zend_eval_string (requires build without tokio-sapi)
       #   stub - benchmark mode, returns empty responses without PHP execution
-      - EXECUTOR=${EXECUTOR:-ext}
+      - EXECUTOR=${EXECUTOR:-sapi}
       # QUEUE_CAPACITY: max pending requests in queue (0 = workers * 100)
       - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
       # INDEX_FILE: single entry point mode (e.g., index.php)
@@ -87,7 +90,7 @@ services:
       dockerfile: Dockerfile
       args:
         PHP_VERSION: ${PHP_VERSION:-8.5}
-        CARGO_FEATURES: ${CARGO_FEATURES:-}
+        CARGO_FEATURES: ${CARGO_FEATURES:-tokio-sapi,grpc,otel}
     ports:
       - "8443:8443"
       - "9090:9090"
@@ -95,7 +98,7 @@ services:
       - LISTEN_ADDR=0.0.0.0:8443
       - RUST_LOG=tokio_php=info
       - PHP_WORKERS=${PHP_WORKERS:-0}
-      - EXECUTOR=${EXECUTOR:-ext}
+      - EXECUTOR=${EXECUTOR:-sapi}
       - INDEX_FILE=${INDEX_FILE:-}
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - TLS_CERT=/run/secrets/tls_cert

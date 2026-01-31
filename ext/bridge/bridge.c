@@ -137,6 +137,24 @@ int tokio_bridge_get_finished_response_code(void)
     return tls_ctx->response_code;
 }
 
+void tokio_bridge_set_response_code(int code)
+{
+    if (tls_ctx == NULL) {
+        return;
+    }
+    if (code >= 100 && code < 600) {
+        tls_ctx->response_code = code;
+    }
+}
+
+int tokio_bridge_get_response_code(void)
+{
+    if (tls_ctx == NULL) {
+        return 200;
+    }
+    return tls_ctx->response_code;
+}
+
 /* ============================================================================
  * Finish Request Callback API (streaming early response)
  * ============================================================================ */

@@ -150,7 +150,10 @@ mod tests {
         // Workers and queue_capacity are pre-computed (never zero)
         assert!(config.executor.worker_count() >= 1);
         assert!(config.executor.queue_capacity() >= 100);
-        // EXECUTOR=ext is default
+        // Default executor depends on feature: sapi for tokio-sapi, ext otherwise
+        #[cfg(feature = "tokio-sapi")]
+        assert_eq!(config.executor.executor_type, ExecutorType::Sapi);
+        #[cfg(not(feature = "tokio-sapi"))]
         assert_eq!(config.executor.executor_type, ExecutorType::Ext);
         assert!(config.middleware.rate_limit().is_none());
         assert!(!config.middleware.is_access_log_enabled());

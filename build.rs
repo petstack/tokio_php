@@ -78,8 +78,10 @@ fn main() {
     // This provides shared TLS context for finish_request, heartbeat, etc.
     println!("cargo:rustc-link-lib=dylib=tokio_bridge");
 
-    // Link against tokio_sapi static library (if available)
-    // This provides the extension functions for direct superglobal access
+    // Link against tokio_sapi static library (C extension)
+    // This provides the extension functions for direct superglobal access.
+    // Note: Even with tokio-sapi feature (pure Rust SAPI), we still need the C extension
+    // for superglobals manipulation ($_GET, $_POST, $_FILES, $_REQUEST).
     println!("cargo:rustc-link-lib=static=tokio_sapi");
 
     // Parse additional libraries from --libs

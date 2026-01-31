@@ -11,9 +11,11 @@ pub enum ExecutorType {
     Stub,
     /// PHP executor using zend_eval_string (legacy).
     Php,
-    /// Ext executor using php_execute_script with FFI superglobals (default, recommended).
-    #[default]
+    /// Ext executor using php_execute_script with FFI superglobals (default for non-tokio-sapi).
     Ext,
+    /// SAPI executor using pure Rust SAPI implementation (requires tokio-sapi feature).
+    #[default]
+    Sapi,
 }
 
 /// Executor configuration loaded from environment.
@@ -56,10 +58,18 @@ impl ExecutorConfig {
     }
 
     fn parse_executor_type() -> ExecutorType {
-        match env_or("EXECUTOR", "ext").to_lowercase().as_str() {
+        // Default depends on feature: "sapi" for tokio-sapi, "ext" otherwise
+        #[cfg(feature = "tokio-sapi")]
+        let default = "sapi";
+        #[cfg(not(feature = "tokio-sapi"))]
+        let default = "ext";
+
+        match env_or("EXECUTOR", default).to_lowercase().as_str() {
             "stub" => ExecutorType::Stub,
             "php" => ExecutorType::Php,
-            _ => ExecutorType::Ext, // "ext" or any other value defaults to Ext
+            "ext" => ExecutorType::Ext,
+            "sapi" => ExecutorType::Sapi,
+            _ => ExecutorType::default(),
         }
     }
 
@@ -120,8 +130,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_executor_type_default_is_ext() {
-        assert_eq!(ExecutorType::default(), ExecutorType::Ext);
+    fn test_executor_type_default_is_sapi() {
+        assert_eq!(ExecutorType::default(), ExecutorType::Sapi);
     }
 
     #[test]

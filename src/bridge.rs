@@ -113,6 +113,34 @@ extern "C" {
     // Stream finish (new streaming architecture)
     fn tokio_bridge_set_stream_finish_callback(ctx: *mut c_void, callback: StreamFinishCallback);
     fn tokio_bridge_trigger_stream_finish() -> c_int;
+
+    // Header storage
+    fn tokio_bridge_add_header(
+        name: *const c_char,
+        name_len: usize,
+        value: *const c_char,
+        value_len: usize,
+        replace: c_int,
+    ) -> c_int;
+    fn tokio_bridge_clear_headers();
+    fn tokio_bridge_get_header_count() -> c_int;
+
+    // Chunked mode and headers sent
+    fn tokio_bridge_enable_chunked_mode() -> c_int;
+    fn tokio_bridge_is_chunked_mode() -> c_int;
+    fn tokio_bridge_mark_headers_sent();
+    fn tokio_bridge_are_headers_sent() -> c_int;
+
+    // Heartbeat
+    fn tokio_bridge_send_heartbeat(secs: u64) -> c_int;
+    fn tokio_bridge_get_heartbeat_max() -> u64;
+
+    // Finish request mark
+    fn tokio_bridge_mark_finished(offset: usize, header_count: c_int, response_code: c_int);
+
+    // Response code (for http_response_code() support)
+    fn tokio_bridge_set_response_code(code: c_int);
+    fn tokio_bridge_get_response_code() -> c_int;
 }
 
 // =============================================================================
@@ -300,6 +328,126 @@ pub unsafe fn set_stream_finish_callback(ctx: *mut c_void, callback: StreamFinis
 #[inline]
 pub fn trigger_stream_finish() -> bool {
     unsafe { tokio_bridge_trigger_stream_finish() != 0 }
+}
+
+// =============================================================================
+// Header Storage API (for SAPI callbacks)
+// =============================================================================
+
+/// Add a header to the bridge context.
+///
+/// Called from the SAPI header_handler callback.
+#[inline]
+pub fn add_header(name: &str, value: &str, replace: bool) -> bool {
+    unsafe {
+        tokio_bridge_add_header(
+            name.as_ptr() as *const c_char,
+            name.len(),
+            value.as_ptr() as *const c_char,
+            value.len(),
+            if replace { 1 } else { 0 },
+        ) != 0
+    }
+}
+
+/// Clear all captured headers.
+#[inline]
+pub fn clear_headers() {
+    unsafe { tokio_bridge_clear_headers() }
+}
+
+/// Get the number of captured headers.
+#[inline]
+pub fn get_header_count() -> i32 {
+    unsafe { tokio_bridge_get_header_count() }
+}
+
+// =============================================================================
+// Chunked Mode API
+// =============================================================================
+
+/// Enable chunked transfer encoding mode.
+///
+/// Returns true if chunked mode was enabled, false if headers already sent.
+#[inline]
+pub fn enable_chunked_mode() -> bool {
+    unsafe { tokio_bridge_enable_chunked_mode() != 0 }
+}
+
+/// Check if chunked mode is enabled.
+#[inline]
+pub fn is_chunked_mode() -> bool {
+    unsafe { tokio_bridge_is_chunked_mode() != 0 }
+}
+
+/// Mark headers as sent.
+#[inline]
+pub fn mark_headers_sent() {
+    unsafe { tokio_bridge_mark_headers_sent() }
+}
+
+/// Check if headers have been sent.
+#[inline]
+pub fn are_headers_sent() -> bool {
+    unsafe { tokio_bridge_are_headers_sent() != 0 }
+}
+
+// =============================================================================
+// Heartbeat API
+// =============================================================================
+
+/// Send a heartbeat to extend the request timeout.
+///
+/// Returns true on success, false if exceeds max_secs or no callback configured.
+#[inline]
+pub fn send_heartbeat(secs: u64) -> bool {
+    unsafe { tokio_bridge_send_heartbeat(secs) != 0 }
+}
+
+/// Get the maximum heartbeat extension in seconds.
+#[inline]
+pub fn get_heartbeat_max() -> u64 {
+    unsafe { tokio_bridge_get_heartbeat_max() }
+}
+
+// =============================================================================
+// Finish Request API (extended)
+// =============================================================================
+
+/// Mark the request as finished with specific parameters.
+#[inline]
+pub fn mark_finished_with(offset: usize, header_count: i32, response_code: i32) {
+    unsafe { tokio_bridge_mark_finished(offset, header_count, response_code) }
+}
+
+/// Mark the request as finished (simple version for SAPI use).
+#[inline]
+pub fn mark_finished() {
+    // Use current values when marking finished from SAPI
+    unsafe { tokio_bridge_mark_finished(0, 0, 200) }
+}
+
+// =============================================================================
+// Response Code API (for http_response_code() support)
+// =============================================================================
+
+/// Set the HTTP response code in the bridge context.
+///
+/// This is used to communicate the status code from PHP to Rust,
+/// bypassing PHP's sapi_globals which can be unreliable under high load.
+#[inline]
+pub fn set_response_code(code: u16) {
+    unsafe {
+        tokio_bridge_set_response_code(code as c_int);
+    }
+}
+
+/// Get the HTTP response code from the bridge context.
+///
+/// Returns the status code set via `set_response_code()` or 200 as default.
+#[inline]
+pub fn get_response_code() -> u16 {
+    unsafe { tokio_bridge_get_response_code() as u16 }
 }
 
 // =============================================================================

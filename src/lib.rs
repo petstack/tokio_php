@@ -50,6 +50,8 @@ pub mod logging;
 pub mod middleware;
 pub mod observability;
 pub mod profiler;
+#[cfg(feature = "tokio-sapi")]
+pub mod sapi;
 pub mod server;
 pub mod system;
 pub mod trace_context;

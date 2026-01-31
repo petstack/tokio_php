@@ -1,10 +1,18 @@
 <?php
-$extLoaded = extension_loaded('tokio_sapi');
+$sapiName = php_sapi_name();
+$isPureRustSapi = ($sapiName === 'tokio');
+$isExtension = extension_loaded('tokio_sapi');
+$isTokioPhp = $isPureRustSapi || $isExtension;
+
 $functions = [
     'tokio_request_id' => function_exists('tokio_request_id'),
     'tokio_worker_id' => function_exists('tokio_worker_id'),
     'tokio_server_info' => function_exists('tokio_server_info'),
     'tokio_request_heartbeat' => function_exists('tokio_request_heartbeat'),
+    'tokio_finish_request' => function_exists('tokio_finish_request'),
+    'tokio_send_headers' => function_exists('tokio_send_headers'),
+    'tokio_stream_flush' => function_exists('tokio_stream_flush'),
+    'tokio_is_streaming' => function_exists('tokio_is_streaming'),
 ];
 $serverVersion = $_SERVER['TOKIO_SERVER_BUILD_VERSION'] ?? null;
 $serverInfo = function_exists('tokio_server_info') ? tokio_server_info() : null;
@@ -16,7 +24,7 @@ $workerId = function_exists('tokio_worker_id') ? tokio_worker_id() : null;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Extension Test - tokio_php</title>
+    <title>SAPI Test - tokio_php</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 720px; margin: 40px auto; padding: 20px; background: #fff; color: #333; line-height: 1.6; }
@@ -60,15 +68,27 @@ $workerId = function_exists('tokio_worker_id') ? tokio_worker_id() : null;
 <body>
     <div class="nav"><a href="/">Home</a></div>
 
-    <h1>Extension Test</h1>
-    <p class="subtitle">Test <code>tokio_sapi</code> PHP extension</p>
+    <h1>SAPI Test</h1>
+    <p class="subtitle">Test tokio_php SAPI integration</p>
 
     <div class="section">
-        <div class="section-title">Extension Status</div>
+        <div class="section-title">SAPI Status</div>
         <div class="card">
             <div class="row">
-                <span class="label">tokio_sapi loaded</span>
-                <span class="value <?= $extLoaded ? 'ok' : 'fail' ?>"><?= $extLoaded ? 'Yes' : 'No' ?></span>
+                <span class="label">SAPI Name</span>
+                <span class="value"><code><?= htmlspecialchars($sapiName) ?></code></span>
+            </div>
+            <div class="row">
+                <span class="label">tokio_php Active</span>
+                <span class="value <?= $isTokioPhp ? 'ok' : 'fail' ?>"><?= $isTokioPhp ? 'Yes' : 'No' ?></span>
+            </div>
+            <div class="row">
+                <span class="label">Mode</span>
+                <span class="value"><?php
+                    if ($isPureRustSapi) echo '<span class="ok">Pure Rust SAPI</span>';
+                    elseif ($isExtension) echo '<span class="ok">C Extension</span>';
+                    else echo '<span class="fail">Not running on tokio_php</span>';
+                ?></span>
             </div>
             <?php if ($serverVersion): ?>
             <div class="row">
@@ -82,11 +102,15 @@ $workerId = function_exists('tokio_worker_id') ? tokio_worker_id() : null;
                 <span class="value"><?= TOKIO_SAPI_VERSION ?></span>
             </div>
             <?php endif; ?>
+            <div class="row">
+                <span class="label">PHP Version</span>
+                <span class="value"><?= PHP_VERSION ?></span>
+            </div>
         </div>
     </div>
 
     <div class="section">
-        <div class="section-title">Functions</div>
+        <div class="section-title">Functions (<?= count(array_filter($functions)) ?>/<?= count($functions) ?>)</div>
         <div class="card">
             <?php foreach ($functions as $fn => $exists): ?>
             <div class="row">
