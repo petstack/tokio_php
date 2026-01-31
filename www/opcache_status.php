@@ -65,8 +65,17 @@ $enabled = $status && $status['opcache_enabled'];
     <?php else:
         $stats = $status['opcache_statistics'];
         $memory = $status['memory_usage'];
+
+        $phpVersion = PHP_VERSION;
+        if (PHP_VERSION_ID >= 80500) {
+            $memory_consumption = (int) ini_get('opcache.memory_consumption') * 1024 * 1024;
+            $used_memory = $memory_consumption - $memory['free_memory'] - $memory['wasted_memory'];
+        } else {
+            $used_memory = $memory['used_memory'];
+        }
+
         $hitRate = $stats['hits'] > 0 ? round($stats['hits'] / ($stats['hits'] + $stats['misses']) * 100, 1) : 0;
-        $memUsed = round($memory['used_memory'] / 1024 / 1024, 1);
+        $memUsed = round($used_memory / 1024 / 1024, 1);
         $memFree = round($memory['free_memory'] / 1024 / 1024, 1);
         $memTotal = $memUsed + $memFree;
         $memPct = $memTotal > 0 ? round($memUsed / $memTotal * 100) : 0;
