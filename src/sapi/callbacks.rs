@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_void, CStr};
 use std::ptr;
 use std::slice;
+use std::time::Instant;
 
 use bytes::Bytes;
 use tokio::sync::mpsc;
@@ -29,6 +30,121 @@ thread_local! {
 
     /// Stream state for response streaming
     pub static STREAM_STATE: RefCell<Option<StreamState>> = const { RefCell::new(None) };
+
+    /// SAPI callback timing accumulator (for profiling)
+    pub static SAPI_TIMING: RefCell<SapiTiming> = const { RefCell::new(SapiTiming::new()) };
+}
+
+/// Accumulated timing data for SAPI callbacks.
+///
+/// This struct collects timing data during PHP execution, which is then
+/// transferred to ProfileData after script execution completes.
+#[derive(Debug, Clone, Default)]
+pub struct SapiTiming {
+    /// Total time in ub_write callback (microseconds)
+    pub ub_write_us: u64,
+    /// Number of ub_write calls
+    pub ub_write_count: u64,
+    /// Total bytes written via ub_write
+    pub ub_write_bytes: u64,
+
+    /// Total time in header_handler callback (microseconds)
+    pub header_handler_us: u64,
+    /// Number of header() calls
+    pub header_handler_count: u64,
+
+    /// Time in send_headers callback (microseconds)
+    pub send_headers_us: u64,
+
+    /// Total time in flush callback (microseconds)
+    pub flush_us: u64,
+    /// Number of flush() calls
+    pub flush_count: u64,
+
+    /// Total time reading POST data (microseconds)
+    pub read_post_us: u64,
+    /// Bytes read via read_post callback
+    pub read_post_bytes: u64,
+
+    /// Time in sapi_activate (microseconds)
+    pub activate_us: u64,
+    /// Time in sapi_deactivate (microseconds)
+    pub deactivate_us: u64,
+
+    /// Number of chunks sent via streaming
+    pub stream_chunk_count: u64,
+    /// Total bytes sent via streaming
+    pub stream_chunk_bytes: u64,
+
+    /// Request context initialization time (microseconds)
+    pub context_init_us: u64,
+    /// Request context cleanup time (microseconds)
+    pub context_cleanup_us: u64,
+
+    /// Whether profiling is enabled for this request
+    profiling_enabled: bool,
+}
+
+impl SapiTiming {
+    /// Create a new SapiTiming instance.
+    pub const fn new() -> Self {
+        Self {
+            ub_write_us: 0,
+            ub_write_count: 0,
+            ub_write_bytes: 0,
+            header_handler_us: 0,
+            header_handler_count: 0,
+            send_headers_us: 0,
+            flush_us: 0,
+            flush_count: 0,
+            read_post_us: 0,
+            read_post_bytes: 0,
+            activate_us: 0,
+            deactivate_us: 0,
+            stream_chunk_count: 0,
+            stream_chunk_bytes: 0,
+            context_init_us: 0,
+            context_cleanup_us: 0,
+            profiling_enabled: false,
+        }
+    }
+
+    /// Reset all timing counters.
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    /// Enable profiling for the current request.
+    pub fn enable_profiling(&mut self) {
+        self.profiling_enabled = true;
+    }
+
+    /// Check if profiling is enabled.
+    #[inline]
+    pub fn is_profiling(&self) -> bool {
+        self.profiling_enabled
+    }
+}
+
+/// Initialize SAPI timing for a new request.
+pub fn init_sapi_timing(profiling: bool) {
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        timing.reset();
+        if profiling {
+            timing.enable_profiling();
+        }
+    });
+}
+
+/// Get a copy of the current SAPI timing data.
+pub fn get_sapi_timing() -> SapiTiming {
+    SAPI_TIMING.with(|t| t.borrow().clone())
+}
+
+/// Clear SAPI timing after request completes.
+pub fn clear_sapi_timing() {
+    SAPI_TIMING.with(|t| t.borrow_mut().reset());
 }
 
 /// Stream state for sending response chunks
@@ -83,11 +199,20 @@ pub unsafe extern "C" fn sapi_shutdown_callback(_module: *mut sapi_module_struct
 /// # Safety
 /// This callback is only called by PHP during request startup.
 pub unsafe extern "C" fn sapi_activate_callback() -> c_int {
+    let start = Instant::now();
     tracing::trace!("sapi_activate_callback called");
 
     // Clear per-request state
     CAPTURED_HEADERS.with(|h| h.borrow_mut().clear());
     CAPTURED_STATUS.with(|s| *s.borrow_mut() = 200);
+
+    // Record timing if profiling is enabled
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        if timing.is_profiling() {
+            timing.activate_us = start.elapsed().as_micros() as u64;
+        }
+    });
 
     SUCCESS
 }
@@ -97,12 +222,21 @@ pub unsafe extern "C" fn sapi_activate_callback() -> c_int {
 /// # Safety
 /// This callback is only called by PHP during request shutdown.
 pub unsafe extern "C" fn sapi_deactivate_callback() -> c_int {
+    let start = Instant::now();
     tracing::trace!("sapi_deactivate_callback called");
 
     // Cleanup request context
     REQUEST_CTX.with(|ctx| {
         if let Some(ref mut context) = *ctx.borrow_mut() {
             context.cleanup();
+        }
+    });
+
+    // Record timing if profiling is enabled
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        if timing.is_profiling() {
+            timing.deactivate_us = start.elapsed().as_micros() as u64;
         }
     });
 
@@ -121,11 +255,13 @@ pub unsafe extern "C" fn sapi_deactivate_callback() -> c_int {
 /// This callback is only called by PHP. The `str` pointer and `len` are provided
 /// by PHP and point to valid output data.
 pub unsafe extern "C" fn sapi_ub_write(str: *const c_char, len: usize) -> usize {
+    let start = Instant::now();
+
     if str.is_null() || len == 0 {
         return len;
     }
 
-    STREAM_STATE.with(|state| {
+    let result = STREAM_STATE.with(|state| {
         let mut state_ref = state.borrow_mut();
         let stream_state = match state_ref.as_mut() {
             Some(s) => s,
@@ -154,7 +290,21 @@ pub unsafe extern "C" fn sapi_ub_write(str: *const c_char, len: usize) -> usize 
             .blocking_send(ResponseChunk::Body(Bytes::copy_from_slice(data)));
 
         len
-    })
+    });
+
+    // Record timing if profiling is enabled
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        if timing.is_profiling() {
+            timing.ub_write_us += start.elapsed().as_micros() as u64;
+            timing.ub_write_count += 1;
+            timing.ub_write_bytes += len as u64;
+            timing.stream_chunk_count += 1;
+            timing.stream_chunk_bytes += len as u64;
+        }
+    });
+
+    result
 }
 
 /// Flush callback - called by PHP's flush() function.
@@ -162,12 +312,22 @@ pub unsafe extern "C" fn sapi_ub_write(str: *const c_char, len: usize) -> usize 
 /// # Safety
 /// This callback is only called by PHP.
 pub unsafe extern "C" fn sapi_flush(_server_context: *mut c_void) {
+    let start = Instant::now();
     tracing::trace!("sapi_flush called");
 
     // Flush PHP output buffers
     while php_output_get_level() > 0 {
         let _ = php_output_flush();
     }
+
+    // Record timing if profiling is enabled
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        if timing.is_profiling() {
+            timing.flush_us += start.elapsed().as_micros() as u64;
+            timing.flush_count += 1;
+        }
+    });
 }
 
 /// Get environment variable callback.
@@ -206,10 +366,20 @@ pub unsafe extern "C" fn sapi_header_handler(
     op: sapi_header_op_enum,
     _sapi_headers: *mut sapi_headers_struct,
 ) -> c_int {
+    let start = Instant::now();
+
     // NOTE: Do NOT read http_response_code here - it may be uninitialized garbage.
     // Status code is captured in sapi_send_headers() when PHP is ready to send.
 
     if sapi_header.is_null() {
+        // Record timing even for null case
+        SAPI_TIMING.with(|t| {
+            let mut timing = t.borrow_mut();
+            if timing.is_profiling() {
+                timing.header_handler_us += start.elapsed().as_micros() as u64;
+                timing.header_handler_count += 1;
+            }
+        });
         return 0;
     }
 
@@ -299,6 +469,15 @@ pub unsafe extern "C" fn sapi_header_handler(
         _ => {}
     }
 
+    // Record timing if profiling is enabled
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        if timing.is_profiling() {
+            timing.header_handler_us += start.elapsed().as_micros() as u64;
+            timing.header_handler_count += 1;
+        }
+    });
+
     0 // SAPI_HEADER_ADD = 0
 }
 
@@ -307,6 +486,7 @@ pub unsafe extern "C" fn sapi_header_handler(
 /// # Safety
 /// This callback is only called by PHP. The pointer is valid when provided by PHP.
 pub unsafe extern "C" fn sapi_send_headers(_sapi_headers: *mut sapi_headers_struct) -> c_int {
+    let start = Instant::now();
     tracing::trace!("sapi_send_headers called");
 
     // NOTE: We do NOT read http_response_code from sapi_headers because it's unreliable
@@ -325,7 +505,7 @@ pub unsafe extern "C" fn sapi_send_headers(_sapi_headers: *mut sapi_headers_stru
     // Check if status code was set via bridge
     let bridge_status = crate::bridge::get_response_code();
 
-    STREAM_STATE.with(|state| {
+    let result = STREAM_STATE.with(|state| {
         let mut state_ref = state.borrow_mut();
         if let Some(ref mut stream_state) = *state_ref {
             if !stream_state.headers_sent {
@@ -344,7 +524,17 @@ pub unsafe extern "C" fn sapi_send_headers(_sapi_headers: *mut sapi_headers_stru
             }
         }
         SAPI_HEADER_SENT_SUCCESSFULLY
-    })
+    });
+
+    // Record timing if profiling is enabled
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        if timing.is_profiling() {
+            timing.send_headers_us += start.elapsed().as_micros() as u64;
+        }
+    });
+
+    result
 }
 
 // ============================================================================
@@ -357,11 +547,13 @@ pub unsafe extern "C" fn sapi_send_headers(_sapi_headers: *mut sapi_headers_stru
 /// This callback is only called by PHP. The `buffer` pointer and `count_bytes` are
 /// provided by PHP and point to valid memory for writing.
 pub unsafe extern "C" fn sapi_read_post(buffer: *mut c_char, count_bytes: usize) -> usize {
+    let start = Instant::now();
+
     if buffer.is_null() || count_bytes == 0 {
         return 0;
     }
 
-    REQUEST_CTX.with(|ctx| {
+    let result = REQUEST_CTX.with(|ctx| {
         if let Some(ref mut context) = *ctx.borrow_mut() {
             let read = context.read_post(buffer, count_bytes);
             tracing::trace!(
@@ -373,7 +565,18 @@ pub unsafe extern "C" fn sapi_read_post(buffer: *mut c_char, count_bytes: usize)
         }
         tracing::trace!("sapi_read_post: no context");
         0
-    })
+    });
+
+    // Record timing if profiling is enabled
+    SAPI_TIMING.with(|t| {
+        let mut timing = t.borrow_mut();
+        if timing.is_profiling() {
+            timing.read_post_us += start.elapsed().as_micros() as u64;
+            timing.read_post_bytes += result as u64;
+        }
+    });
+
+    result
 }
 
 /// Read cookies callback.

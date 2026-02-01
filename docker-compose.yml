@@ -9,9 +9,10 @@ services:
         # Cargo features: tokio-sapi (default), grpc, otel, debug-profile
         # tokio-sapi = pure Rust SAPI (no C extension needed)
         # Examples:
-        #   CARGO_FEATURES="tokio-sapi" docker compose build             # SAPI only
-        #   CARGO_FEATURES="tokio-sapi,grpc" docker compose build        # + gRPC
-        #   CARGO_FEATURES="tokio-sapi,grpc,otel" docker compose build   # + gRPC + OpenTelemetry
+        #   CARGO_FEATURES="tokio-sapi" docker compose build               # SAPI only
+        #   CARGO_FEATURES="tokio-sapi,grpc" docker compose build          # + gRPC
+        #   CARGO_FEATURES="tokio-sapi,grpc,otel" docker compose build     # + gRPC + OpenTelemetry
+        #   CARGO_FEATURES="tokio-sapi,debug-profile" docker compose build # + Profiling (single worker)
         CARGO_FEATURES: ${CARGO_FEATURES:-tokio-sapi,grpc,otel}
     ports:
       - "8080:8080"

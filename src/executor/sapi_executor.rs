@@ -215,6 +215,9 @@ fn sapi_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>
                     request.raw_body.as_deref(),
                 );
 
+                // Initialize SAPI timing for profiling
+                rust_sapi::init_sapi_timing(profiling);
+
                 // Initialize streaming state using executor/sapi infrastructure
                 rust_sapi::init_stream_state(stream_tx.clone());
 
@@ -342,9 +345,10 @@ fn sapi_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>
                     ));
                 }
 
-                // Finalize streaming
+                // Finalize streaming and cleanup
                 rust_sapi::finalize_stream();
                 rust_sapi::clear_context();
+                rust_sapi::clear_sapi_timing();
             }
             Err(_) => {
                 break;
@@ -489,6 +493,9 @@ fn build_profile_data(
     exec_timing: &SapiExecutionTiming,
     php_shutdown_us: u64,
 ) -> ProfileData {
+    // Collect SAPI callback timing
+    let sapi_timing = rust_sapi::get_sapi_timing();
+
     ProfileData {
         total_us: queue_wait_us
             + php_startup_us
@@ -500,6 +507,23 @@ fn build_profile_data(
         superglobals_us: exec_timing.superglobals_us,
         script_exec_us: exec_timing.script_exec_us,
         php_shutdown_us,
+        // SAPI callback timing
+        sapi_ub_write_us: sapi_timing.ub_write_us,
+        sapi_ub_write_count: sapi_timing.ub_write_count,
+        sapi_ub_write_bytes: sapi_timing.ub_write_bytes,
+        sapi_header_handler_us: sapi_timing.header_handler_us,
+        sapi_header_handler_count: sapi_timing.header_handler_count,
+        sapi_send_headers_us: sapi_timing.send_headers_us,
+        sapi_flush_us: sapi_timing.flush_us,
+        sapi_flush_count: sapi_timing.flush_count,
+        sapi_read_post_us: sapi_timing.read_post_us,
+        sapi_read_post_bytes: sapi_timing.read_post_bytes,
+        sapi_activate_us: sapi_timing.activate_us,
+        sapi_deactivate_us: sapi_timing.deactivate_us,
+        stream_chunk_count: sapi_timing.stream_chunk_count,
+        stream_chunk_bytes: sapi_timing.stream_chunk_bytes,
+        context_init_us: sapi_timing.context_init_us,
+        context_cleanup_us: sapi_timing.context_cleanup_us,
         ..Default::default()
     }
 }

@@ -163,6 +163,43 @@ pub struct ProfileData {
     pub mw_error_pages_us: u64,  // Error pages middleware (response)
     pub mw_access_log_us: u64,   // Access log middleware (response)
 
+    // === SAPI Callback timing ===
+    // Output (ub_write callback)
+    pub sapi_ub_write_us: u64,    // Total time in ub_write callback
+    pub sapi_ub_write_count: u64, // Number of ub_write calls
+    pub sapi_ub_write_bytes: u64, // Total bytes written via ub_write
+
+    // Header handling
+    pub sapi_header_handler_us: u64, // Total time in header_handler callback
+    pub sapi_header_handler_count: u64, // Number of header() calls from PHP
+    pub sapi_send_headers_us: u64,   // Time in send_headers callback
+
+    // Flush
+    pub sapi_flush_us: u64,    // Total time in flush callback
+    pub sapi_flush_count: u64, // Number of flush() calls
+
+    // POST data reading
+    pub sapi_read_post_us: u64,    // Total time reading POST data
+    pub sapi_read_post_bytes: u64, // Bytes read via read_post callback
+
+    // Lifecycle callbacks
+    pub sapi_activate_us: u64,   // Time in sapi_activate (request start)
+    pub sapi_deactivate_us: u64, // Time in sapi_deactivate (request end)
+
+    // === Streaming ===
+    pub stream_chunk_count: u64, // Number of chunks sent
+    pub stream_chunk_bytes: u64, // Total bytes sent via streaming
+
+    // === Routing ===
+    pub routing_decision_us: u64,   // Routing logic decision time
+    pub file_cache_lookup_us: u64,  // File cache lookup time
+    pub file_cache_hit_count: u64,  // Number of cache hits during request
+    pub file_cache_miss_count: u64, // Number of cache misses during request
+
+    // === Context management ===
+    pub context_init_us: u64,    // Request context initialization
+    pub context_cleanup_us: u64, // Request context cleanup
+
     // === Skipped actions with reasons ===
     pub skipped_actions: Vec<SkippedAction>,
 }
@@ -452,6 +489,110 @@ impl ProfileData {
             headers.push((
                 "X-Profile-Static-File-Size".to_string(),
                 self.static_file_size.to_string(),
+            ));
+        }
+
+        // SAPI callback timing
+        if self.sapi_ub_write_count > 0 {
+            headers.push((
+                "X-Profile-SAPI-UbWrite-Us".to_string(),
+                self.sapi_ub_write_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-SAPI-UbWrite-Count".to_string(),
+                self.sapi_ub_write_count.to_string(),
+            ));
+            headers.push((
+                "X-Profile-SAPI-UbWrite-Bytes".to_string(),
+                self.sapi_ub_write_bytes.to_string(),
+            ));
+        }
+        if self.sapi_header_handler_count > 0 {
+            headers.push((
+                "X-Profile-SAPI-Header-Us".to_string(),
+                self.sapi_header_handler_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-SAPI-Header-Count".to_string(),
+                self.sapi_header_handler_count.to_string(),
+            ));
+        }
+        if self.sapi_send_headers_us > 0 {
+            headers.push((
+                "X-Profile-SAPI-SendHeaders-Us".to_string(),
+                self.sapi_send_headers_us.to_string(),
+            ));
+        }
+        if self.sapi_flush_count > 0 {
+            headers.push((
+                "X-Profile-SAPI-Flush-Us".to_string(),
+                self.sapi_flush_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-SAPI-Flush-Count".to_string(),
+                self.sapi_flush_count.to_string(),
+            ));
+        }
+        if self.sapi_read_post_bytes > 0 {
+            headers.push((
+                "X-Profile-SAPI-ReadPost-Us".to_string(),
+                self.sapi_read_post_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-SAPI-ReadPost-Bytes".to_string(),
+                self.sapi_read_post_bytes.to_string(),
+            ));
+        }
+        if self.sapi_activate_us > 0 || self.sapi_deactivate_us > 0 {
+            headers.push((
+                "X-Profile-SAPI-Activate-Us".to_string(),
+                self.sapi_activate_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-SAPI-Deactivate-Us".to_string(),
+                self.sapi_deactivate_us.to_string(),
+            ));
+        }
+
+        // Streaming stats
+        if self.stream_chunk_count > 0 {
+            headers.push((
+                "X-Profile-Stream-Chunks".to_string(),
+                self.stream_chunk_count.to_string(),
+            ));
+            headers.push((
+                "X-Profile-Stream-Bytes".to_string(),
+                self.stream_chunk_bytes.to_string(),
+            ));
+        }
+
+        // Routing stats
+        if self.routing_decision_us > 0 {
+            headers.push((
+                "X-Profile-Routing-Us".to_string(),
+                self.routing_decision_us.to_string(),
+            ));
+        }
+        if self.file_cache_hit_count > 0 || self.file_cache_miss_count > 0 {
+            headers.push((
+                "X-Profile-FileCache-Hits".to_string(),
+                self.file_cache_hit_count.to_string(),
+            ));
+            headers.push((
+                "X-Profile-FileCache-Misses".to_string(),
+                self.file_cache_miss_count.to_string(),
+            ));
+        }
+
+        // Context management
+        if self.context_init_us > 0 || self.context_cleanup_us > 0 {
+            headers.push((
+                "X-Profile-Context-Init-Us".to_string(),
+                self.context_init_us.to_string(),
+            ));
+            headers.push((
+                "X-Profile-Context-Cleanup-Us".to_string(),
+                self.context_cleanup_us.to_string(),
             ));
         }
 
@@ -806,6 +947,98 @@ impl ProfileData {
         }
         report.push_str("```\n\n");
 
+        // SAPI Callbacks section (if any callbacks were profiled)
+        let has_sapi_timing = self.sapi_ub_write_count > 0
+            || self.sapi_header_handler_count > 0
+            || self.sapi_flush_count > 0
+            || self.sapi_read_post_bytes > 0
+            || self.sapi_activate_us > 0;
+
+        if has_sapi_timing {
+            report.push_str("## SAPI Callbacks\n\n");
+            report.push_str("```\n");
+
+            // Lifecycle
+            if self.sapi_activate_us > 0 || self.sapi_deactivate_us > 0 {
+                report.push_str(&format!(
+                    "├── Lifecycle: {}\n",
+                    fmt_time(self.sapi_activate_us + self.sapi_deactivate_us)
+                ));
+                report.push_str(&format!(
+                    "│   ├── Activate: {}\n",
+                    fmt_time(self.sapi_activate_us)
+                ));
+                report.push_str(&format!(
+                    "│   └── Deactivate: {}\n",
+                    fmt_time(self.sapi_deactivate_us)
+                ));
+            }
+
+            // Output (ub_write)
+            if self.sapi_ub_write_count > 0 {
+                report.push_str(&format!(
+                    "├── Output (ub_write): {} ({} calls, {} bytes)\n",
+                    fmt_time(self.sapi_ub_write_us),
+                    self.sapi_ub_write_count,
+                    self.sapi_ub_write_bytes
+                ));
+            }
+
+            // Header handling
+            if self.sapi_header_handler_count > 0 {
+                report.push_str(&format!(
+                    "├── Headers: {} ({} calls)\n",
+                    fmt_time(self.sapi_header_handler_us),
+                    self.sapi_header_handler_count
+                ));
+                if self.sapi_send_headers_us > 0 {
+                    report.push_str(&format!(
+                        "│   └── Send Headers: {}\n",
+                        fmt_time(self.sapi_send_headers_us)
+                    ));
+                }
+            }
+
+            // Flush
+            if self.sapi_flush_count > 0 {
+                report.push_str(&format!(
+                    "├── Flush: {} ({} calls)\n",
+                    fmt_time(self.sapi_flush_us),
+                    self.sapi_flush_count
+                ));
+            }
+
+            // POST data reading
+            if self.sapi_read_post_bytes > 0 {
+                report.push_str(&format!(
+                    "└── Read POST: {} ({} bytes)\n",
+                    fmt_time(self.sapi_read_post_us),
+                    self.sapi_read_post_bytes
+                ));
+            }
+
+            report.push_str("```\n\n");
+        }
+
+        // Streaming section (if used)
+        if self.stream_chunk_count > 0 {
+            report.push_str("## Streaming\n\n");
+            report.push_str(&format!("- Chunks sent: {}\n", self.stream_chunk_count));
+            report.push_str(&format!("- Total bytes: {}\n", self.stream_chunk_bytes));
+            report.push('\n');
+        }
+
+        // Context management (if timing available)
+        if self.context_init_us > 0 || self.context_cleanup_us > 0 {
+            report.push_str("## Context Management\n\n");
+            report.push_str(&format!("- Init: {}\n", fmt_time(self.context_init_us)));
+            report.push_str(&format!(
+                "- Cleanup: {}\n",
+                fmt_time(self.context_cleanup_us)
+            ));
+            report.push('\n');
+        }
+
         // Static file (if applicable)
         if self.static_file_us > 0 {
             report.push_str("## Static File\n\n");
@@ -877,6 +1110,21 @@ impl ProfileData {
             fmt_time(self.response_build_us),
             pct(self.response_build_us)
         ));
+
+        // Add SAPI callbacks timing if available
+        let sapi_total = self.sapi_ub_write_us
+            + self.sapi_header_handler_us
+            + self.sapi_send_headers_us
+            + self.sapi_flush_us
+            + self.sapi_read_post_us;
+        if sapi_total > 0 {
+            report.push_str(&format!(
+                "| SAPI Callbacks | {} | {:.1}% |\n",
+                fmt_time(sapi_total),
+                pct(sapi_total)
+            ));
+        }
+
         report.push_str(&format!(
             "| **Total** | **{}** | **100%** |\n",
             fmt_time(self.total_us)

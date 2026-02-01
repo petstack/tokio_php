@@ -57,8 +57,9 @@ pub mod module;
 
 // Re-exports for convenience
 pub use callbacks::{
-    are_headers_sent, clear_captured_headers, finalize_stream, get_captured_headers,
-    get_captured_status, init_stream_state, mark_stream_finished, set_status_code, ResponseChunk,
+    are_headers_sent, clear_captured_headers, clear_sapi_timing, finalize_stream,
+    get_captured_headers, get_captured_status, get_sapi_timing, init_sapi_timing,
+    init_stream_state, mark_stream_finished, set_status_code, ResponseChunk, SapiTiming,
     StreamState,
 };
 pub use context::{
