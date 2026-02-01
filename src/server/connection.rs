@@ -592,6 +592,9 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         remote_addr: SocketAddr,
         tls_info: Option<TlsInfo>,
     ) -> Result<FlexibleResponse, Infallible> {
+        // Network I/O timing: capture entry time
+        let handler_entry_time = Instant::now();
+
         // Check for SSE request (Accept: text/event-stream)
         let accept_header = req
             .headers()
@@ -692,7 +695,14 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         let mut response = match req.method().as_str() {
             "GET" | "POST" | "HEAD" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "QUERY" => {
                 let mut resp = self
-                    .process_request(req, remote_addr, tls_info, &trace_ctx, rate_limit_us)
+                    .process_request(
+                        req,
+                        remote_addr,
+                        tls_info,
+                        &trace_ctx,
+                        rate_limit_us,
+                        handler_entry_time,
+                    )
                     .await;
 
                 // HEAD: return headers only, no body
@@ -833,7 +843,11 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         tls_info: Option<TlsInfo>,
         trace_ctx: &TraceContext,
         rate_limit_us: u64,
+        handler_entry_time: Instant,
     ) -> FlexibleResponse {
+        // Calculate handler entry delay (time from handler start to processing start)
+        let net_handler_entry_us = handler_entry_time.elapsed().as_micros() as u64;
+
         // Capture request timestamp at the very start
         let request_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1312,6 +1326,10 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
                             } else {
                                 profile.skip("TLS handshake", "Plain HTTP connection");
                             }
+
+                            // Network I/O timing
+                            profile.net_handler_entry_us = net_handler_entry_us;
+                            profile.net_response_size_bytes = resp.body.len() as u64;
 
                             // Routing info
                             profile.route_type = RouteType::Php;
