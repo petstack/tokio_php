@@ -7,18 +7,24 @@ tokio_php uses structured JSON logging for easy parsing and aggregation. This do
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ACCESS_LOG` | `0` | Enable access logs (`1` = enabled) |
-| `RUST_LOG` | `tokio_php=info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `LOG_LEVEL` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `RUST_LOG` | — | Advanced: full tracing filter syntax (fallback if `LOG_LEVEL` not set) |
 
 ```bash
 # Enable access logs
 ACCESS_LOG=1 docker compose up -d
 
 # Debug logging
-RUST_LOG=tokio_php=debug docker compose up -d
+LOG_LEVEL=debug docker compose up -d
 
 # Quiet mode (errors only)
-RUST_LOG=tokio_php=error docker compose up -d
+LOG_LEVEL=error docker compose up -d
+
+# Advanced: multi-target filtering (RUST_LOG fallback)
+RUST_LOG=tokio_php=debug,hyper=warn docker compose up -d
 ```
+
+**Priority**: `LOG_LEVEL` > `RUST_LOG` > default (`info`)
 
 ## Log Format
 
