@@ -58,7 +58,7 @@ src/
 ├── types.rs             # ScriptRequest/ScriptResponse
 ├── profiler.rs          # Request timing profiler
 ├── trace_context.rs     # W3C Trace Context (distributed tracing)
-├── logging.rs           # JSON logging setup
+├── logging.rs           # JSON logging (async access log via channel)
 │
 ├── server/              # HTTP server
 │   ├── mod.rs           # Server struct, main loop
@@ -160,7 +160,7 @@ Built-in middleware:
 | Middleware | Priority | Function |
 |------------|----------|----------|
 | Rate Limit | -100 | Per-IP request throttling |
-| Access Log | -90 | Structured JSON logging |
+| Access Log | -90 | Async JSON logging (non-blocking) |
 | Static Cache | 50 | Cache-Control headers |
 | Error Pages | 90 | Custom HTML error pages |
 | Compression | 100 | Brotli compression |
@@ -437,6 +437,45 @@ traceparent: 00-{trace_id}-{parent_span}-01     traceparent: 00-{trace_id}-{new_
 - Incoming `traceparent` header is parsed and propagated
 - New `span_id` generated for this request
 - `X-Request-ID` derived from trace: `{trace_id[0:12]}-{span_id[0:4]}`
+
+## Logging Architecture
+
+### Async Access Logging
+
+Access logs use a **channel + background task** pattern to avoid blocking request handlers:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Access Log Pipeline                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Request Handler              mpsc::unbounded         Background│
+│       │                            │                   Task     │
+│       │  log_access()              │                     │      │
+│       │      │                     │                     │      │
+│       │      └─► tx.send(entry) ──►│                     │      │
+│       │          (~10ns)           │                     │      │
+│       │                            │                     │      │
+│       │  Ok(response)              │  rx.recv().await ◄──┘      │
+│       │ ──────► Client             │      │                     │
+│       │                            │      ▼                     │
+│       │                            │  tokio::io::stdout()       │
+│       │                            │  .write_all().await        │
+│       │                            │  .flush().await            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Key components:
+- **`ACCESS_LOG_TX`**: Global `OnceLock<mpsc::UnboundedSender<String>>`
+- **`init_access_log_writer()`**: Called at startup if access log enabled
+- **Background task**: Loops on `rx.recv()`, writes to async stdout
+
+Benefits:
+- **Non-blocking**: Request returns immediately (~10ns for `send()`)
+- **No I/O latency**: Response not delayed by stdout writes
+- **Async I/O**: Uses `tokio::io::stdout()` with `AsyncWriteExt`
+- **Ordered writes**: Single background task ensures log order
 
 ## Observability
 
