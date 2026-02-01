@@ -1,6 +1,6 @@
 <?php
 /**
- * SSE (Server-Sent Events) test script
+ * SSE (Server-Sent Events) test script with graceful reconnect support
  *
  * Usage with curl:
  *   curl -N -H "Accept: text/event-stream" http://localhost:8080/test_sse.php
@@ -8,14 +8,36 @@
  * Or in browser JavaScript:
  *   const source = new EventSource('/test_sse.php');
  *   source.onmessage = (e) => console.log(e.data);
+ *   source.addEventListener('reconnect', (e) => {
+ *       console.log('Server requested reconnect:', e.data);
+ *       source.close();
+ *       // Reconnect after retry delay
+ *   });
  */
 
-// Note: Headers are set automatically by the server for SSE requests
+// Disable output buffering for real-time streaming
+while (ob_get_level()) {
+    ob_end_clean();
+}
+
+// SSE headers
 header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+header('Connection: keep-alive');
+header('X-Accel-Buffering: no');  // Disable nginx buffering
+
+// Ignore user abort to allow sending reconnect event
+ignore_user_abort(true);
+
 $count = 0;
-$max_events = 10;
+$max_events = 30;  // 30 events, 1 per second = 30 seconds max
 
 while ($count < $max_events) {
+    // Check if client disconnected
+    if (connection_aborted()) {
+        break;
+    }
+
     $count++;
     $data = json_encode([
         'event' => $count,
@@ -25,9 +47,6 @@ while ($count < $max_events) {
 
     // SSE format: "data: {json}\n\n"
     echo "data: $data\n\n";
-
-    // Flush the output to send to client immediately
-    // Standard PHP flush() works via SAPI flush handler
     flush();
 
     // Wait before next event
@@ -36,6 +55,19 @@ while ($count < $max_events) {
     }
 }
 
+// Send reconnect event if client still connected
+// This advises client to reconnect (e.g., to another server instance)
+if (!connection_aborted()) {
+    // Set retry interval (milliseconds) - client should wait this long before reconnecting
+    echo "retry: 1000\n";
+    echo "event: reconnect\n";
+    echo "data: " . json_encode([
+        'reason' => $count >= $max_events ? 'max_events_reached' : 'server_closing',
+        'reconnect_after' => 1000
+    ]) . "\n\n";
+    flush();
+}
+
 // Send completion event
-echo "data: " . json_encode(['event' => 'complete', 'total' => $max_events]) . "\n\n";
+echo "data: " . json_encode(['event' => 'complete', 'total' => $count]) . "\n\n";
 flush();
