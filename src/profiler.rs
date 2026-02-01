@@ -84,6 +84,12 @@ pub struct ProfileData {
     pub tls_protocol: String,  // TLS 1.2, TLS 1.3, or empty for plain HTTP
     pub tls_alpn: String,      // ALPN negotiated protocol (h2, http/1.1)
 
+    // === Network I/O timing ===
+    pub net_handler_entry_us: u64, // Time from request ready to handler start
+    pub net_sse_check_us: u64,     // Time to check SSE Accept header
+    pub net_response_ready_us: u64, // Time when response is ready to send
+    pub net_response_size_bytes: u64, // Response body size in bytes
+
     // === Middleware (Rust) ===
     pub rate_limit_us: u64,     // Rate limiting check
     pub middleware_req_us: u64, // Total request middleware time
@@ -247,6 +253,26 @@ impl ProfileData {
         }
         if !self.tls_alpn.is_empty() {
             headers.push(("X-Profile-TLS-ALPN".to_string(), self.tls_alpn.clone()));
+        }
+
+        // Network I/O
+        if self.net_handler_entry_us > 0 {
+            headers.push((
+                "X-Profile-Net-Handler-Entry-Us".to_string(),
+                self.net_handler_entry_us.to_string(),
+            ));
+        }
+        if self.net_sse_check_us > 0 {
+            headers.push((
+                "X-Profile-Net-SSE-Check-Us".to_string(),
+                self.net_sse_check_us.to_string(),
+            ));
+        }
+        if self.net_response_size_bytes > 0 {
+            headers.push((
+                "X-Profile-Net-Response-Size".to_string(),
+                self.net_response_size_bytes.to_string(),
+            ));
         }
 
         // Middleware (Rust-side)
@@ -700,6 +726,31 @@ impl ProfileData {
             report.push_str("- TLS: none (plain HTTP)\n");
         }
         report.push('\n');
+
+        // Network I/O overhead (timing not captured by profiler)
+        if self.net_handler_entry_us > 0 || self.net_sse_check_us > 0 {
+            report.push_str("## Network I/O\n\n");
+            report.push_str("```\n");
+            if self.net_handler_entry_us > 0 {
+                report.push_str(&format!(
+                    "├── Handler Entry Delay: {}\n",
+                    fmt_time(self.net_handler_entry_us)
+                ));
+            }
+            if self.net_sse_check_us > 0 {
+                report.push_str(&format!(
+                    "├── SSE Check: {}\n",
+                    fmt_time(self.net_sse_check_us)
+                ));
+            }
+            if self.net_response_size_bytes > 0 {
+                report.push_str(&format!(
+                    "└── Response Size: {} bytes\n",
+                    self.net_response_size_bytes
+                ));
+            }
+            report.push_str("```\n\n");
+        }
 
         // Request pipeline
         report.push_str("## Request Pipeline\n\n");
