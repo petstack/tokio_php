@@ -54,7 +54,7 @@ pub struct ServerConfigInfo {
     pub profile: String,
     pub tls_cert: String,
     pub tls_key: String,
-    pub rust_log: String,
+    pub log_level: String,
     pub service_name: String,
 }
 

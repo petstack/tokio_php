@@ -429,8 +429,7 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 },
                 tls_cert: self.config.tls_cert.clone().unwrap_or_default(),
                 tls_key: self.config.tls_key.clone().unwrap_or_default(),
-                rust_log: std::env::var("RUST_LOG")
-                    .unwrap_or_else(|_| "tokio_php=info".to_string()),
+                log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
                 service_name: std::env::var("SERVICE_NAME")
                     .unwrap_or_else(|_| "tokio_php".to_string()),
             });
