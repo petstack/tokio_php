@@ -80,6 +80,10 @@ pub struct ServerConfig {
     pub request_timeout: RequestTimeout,
     /// SSE timeout (default: 30m, "off" to disable)
     pub sse_timeout: RequestTimeout,
+    /// Header read timeout (default: 5s, Slowloris protection)
+    pub header_timeout: Duration,
+    /// Idle connection timeout (default: 60s)
+    pub idle_timeout: Duration,
 }
 
 impl ServerConfig {
@@ -97,6 +101,8 @@ impl ServerConfig {
             static_cache_ttl: OptionalDuration::from_secs(86400), // 1 day
             request_timeout: OptionalDuration::from_secs(120),    // 2 minutes
             sse_timeout: OptionalDuration::from_secs(1800),       // 30 minutes
+            header_timeout: Duration::from_secs(5),               // 5 seconds
+            idle_timeout: Duration::from_secs(60),                // 60 seconds
         }
     }
 
@@ -148,6 +154,16 @@ impl ServerConfig {
 
     pub fn with_sse_timeout(mut self, timeout: RequestTimeout) -> Self {
         self.sse_timeout = timeout;
+        self
+    }
+
+    pub fn with_header_timeout(mut self, timeout: Duration) -> Self {
+        self.header_timeout = timeout;
+        self
+    }
+
+    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = timeout;
         self
     }
 

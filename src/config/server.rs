@@ -12,6 +12,8 @@ const DEFAULT_STATIC_CACHE_TTL_SECS: u64 = 86400; // 1 day
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120; // 2 minutes
 const DEFAULT_SSE_TIMEOUT_SECS: u64 = 1800; // 30 minutes (SSE connections are long-lived)
 const DEFAULT_DRAIN_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_HEADER_TIMEOUT_SECS: u64 = 5; // 5 seconds (Slowloris protection)
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 60; // 60 seconds (keep-alive idle timeout)
 
 /// Duration-based configuration that can be disabled.
 ///
@@ -132,6 +134,10 @@ pub struct ServerConfig {
     pub request_timeout: RequestTimeout,
     /// SSE (Server-Sent Events) timeout.
     pub sse_timeout: SseTimeout,
+    /// Header read timeout (Slowloris protection).
+    pub header_timeout: Duration,
+    /// Keep-alive idle timeout.
+    pub idle_timeout: Duration,
     /// TLS configuration.
     pub tls: TlsConfig,
 }
@@ -161,6 +167,14 @@ impl ServerConfig {
                 &env_or("SSE_TIMEOUT", "30m"),
                 DEFAULT_SSE_TIMEOUT_SECS,
             ),
+            header_timeout: Duration::from_secs(Self::parse_u64(
+                "HEADER_TIMEOUT_SECS",
+                DEFAULT_HEADER_TIMEOUT_SECS,
+            )?),
+            idle_timeout: Duration::from_secs(Self::parse_u64(
+                "IDLE_TIMEOUT_SECS",
+                DEFAULT_IDLE_TIMEOUT_SECS,
+            )?),
             tls: TlsConfig::from_env(),
         })
     }

@@ -453,6 +453,8 @@ impl<E: ScriptExecutor + 'static> Server<E> {
                 static_cache_ttl: self.config.static_cache_ttl,
                 request_timeout: self.config.request_timeout,
                 sse_timeout: self.config.sse_timeout,
+                header_timeout: self.config.header_timeout,
+                idle_timeout: self.config.idle_timeout,
                 profile_enabled: self.profile_enabled,
                 access_log_enabled: self.access_log_enabled,
                 file_cache: Arc::clone(&self.file_cache),
