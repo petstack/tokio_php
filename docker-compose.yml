@@ -13,7 +13,7 @@ services:
       - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
-      - RUST_LOG=tokio_php=info
+      - LOG_LEVEL=trace
       # PHP_WORKERS: number of PHP worker processes (0 = auto-detect from CPU cores)
       - PHP_WORKERS=${PHP_WORKERS:-0}
       # EXECUTOR: script executor mode (ext, php, stub)
@@ -32,7 +32,7 @@ services:
       # ERROR_PAGES_DIR: directory with custom HTML error pages (e.g., 404.html, 500.html)
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
       # ACCESS_LOG: set to 1 or true to enable access logs
-      - ACCESS_LOG=${ACCESS_LOG:-0}
+      - ACCESS_LOG=${ACCESS_LOG:-1}
       # RATE_LIMIT: max requests per IP per window (0 = disabled)
       - RATE_LIMIT=${RATE_LIMIT:-0}
       # RATE_WINDOW: rate limit window in seconds (default: 60)
@@ -68,7 +68,7 @@ services:
       - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8443
-      - RUST_LOG=tokio_php=info
+      - LOG_LEVEL=info
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - EXECUTOR=${EXECUTOR:-ext}
       - INDEX_FILE=${INDEX_FILE:-}

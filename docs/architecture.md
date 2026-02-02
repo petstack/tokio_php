@@ -58,7 +58,7 @@ src/
 ├── types.rs             # ScriptRequest/ScriptResponse
 ├── profiler.rs          # Request timing profiler
 ├── trace_context.rs     # W3C Trace Context (distributed tracing)
-├── logging.rs           # JSON logging setup
+├── logging.rs           # JSON logging (async access log via channel)
 │
 ├── server/              # HTTP server
 │   ├── mod.rs           # Server struct, main loop
@@ -160,7 +160,7 @@ Built-in middleware:
 | Middleware | Priority | Function |
 |------------|----------|----------|
 | Rate Limit | -100 | Per-IP request throttling |
-| Access Log | -90 | Structured JSON logging |
+| Access Log | -90 | Async JSON logging (non-blocking) |
 | Static Cache | 50 | Cache-Control headers |
 | Error Pages | 90 | Custom HTML error pages |
 | Compression | 100 | Brotli compression |
@@ -437,6 +437,142 @@ traceparent: 00-{trace_id}-{parent_span}-01     traceparent: 00-{trace_id}-{new_
 - Incoming `traceparent` header is parsed and propagated
 - New `span_id` generated for this request
 - `X-Request-ID` derived from trace: `{trace_id[0:12]}-{span_id[0:4]}`
+
+## Logging Architecture
+
+### Async Access Logging
+
+Access logs use a **channel + background task** pattern to avoid blocking request handlers:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Access Log Pipeline                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Request Handler              mpsc::unbounded         Background│
+│       │                            │                   Task     │
+│       │  log_access()              │                     │      │
+│       │      │                     │                     │      │
+│       │      └─► tx.send(entry) ──►│                     │      │
+│       │          (~10ns)           │                     │      │
+│       │                            │                     │      │
+│       │  Ok(response)              │  rx.recv().await ◄──┘      │
+│       │ ──────► Client             │      │                     │
+│       │                            │      ▼                     │
+│       │                            │  tokio::io::stdout()       │
+│       │                            │  .write_all().await        │
+│       │                            │  .flush().await            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Key components:
+- **`ACCESS_LOG_TX`**: Global `OnceLock<mpsc::UnboundedSender<String>>`
+- **`init_access_log_writer()`**: Called at startup if access log enabled
+- **Background task**: Loops on `rx.recv()`, writes to async stdout
+
+Benefits:
+- **Non-blocking**: Request returns immediately (~10ns for `send()`)
+- **No I/O latency**: Response not delayed by stdout writes
+- **Async I/O**: Uses `tokio::io::stdout()` with `AsyncWriteExt`
+- **Ordered writes**: Single background task ensures log order
+
+## Observability
+
+### Metrics Architecture
+
+The internal server (`/metrics`) exports Prometheus-compatible metrics:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      tokio_php Process                           │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                   RequestMetrics                          │  │
+│  │                                                           │  │
+│  │  Atomic counters (lock-free):                             │  │
+│  │  - requests_total{method}  - responses_total{status}      │  │
+│  │  - pending_requests        - dropped_requests             │  │
+│  │  - response_time_total_us  - response_count               │  │
+│  │                                                           │  │
+│  │  SSE metrics:                                             │  │
+│  │  - sse_active              - sse_total                    │  │
+│  │  - sse_chunks              - sse_bytes                    │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          │                                      │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                 Internal Server (:9090)                   │  │
+│  │                                                           │  │
+│  │  /health  - JSON health status                            │  │
+│  │  /metrics - Prometheus format                             │  │
+│  │  /config  - Server configuration                          │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Monitoring Stack                              │
+│                                                                 │
+│  ┌─────────────────┐              ┌─────────────────┐           │
+│  │   Prometheus    │──────────────│    Grafana      │           │
+│  │   (:9091)       │   scrape     │    (:3000)      │           │
+│  │                 │   every 5s   │                 │           │
+│  │  - Alerting     │              │  - Dashboards   │           │
+│  │  - Recording    │              │  - Alerts       │           │
+│  └─────────────────┘              └─────────────────┘           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### SSE Metrics Tracking
+
+SSE connections use `MeteredChunkFrameStream` wrapper for accurate metrics:
+
+```rust
+// src/server/response/streaming.rs
+pub struct MeteredChunkFrameStream {
+    inner: ChunkFrameStream,
+    metrics: Arc<RequestMetrics>,
+}
+
+impl Stream for MeteredChunkFrameStream {
+    fn poll_next(...) -> Poll<Option<...>> {
+        // On each chunk: metrics.sse_chunk_sent(bytes)
+    }
+}
+
+impl Drop for MeteredChunkFrameStream {
+    fn drop(&mut self) {
+        // On stream end: metrics.sse_connection_ended()
+    }
+}
+```
+
+Metrics lifecycle:
+1. `sse_connection_started()` - when SSE stream created
+2. `sse_chunk_sent(bytes)` - on each chunk sent (in `poll_next`)
+3. `sse_connection_ended()` - when stream dropped (in `Drop`)
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `tokio_php_uptime_seconds` | gauge | Server uptime |
+| `tokio_php_requests_per_second` | gauge | Lifetime average RPS |
+| `tokio_php_response_time_avg_seconds` | gauge | Average response time |
+| `tokio_php_active_connections` | gauge | Active HTTP connections |
+| `tokio_php_pending_requests` | gauge | Queue depth |
+| `tokio_php_dropped_requests` | counter | Queue overflow count |
+| `tokio_php_requests_total{method}` | counter | Requests by method |
+| `tokio_php_responses_total{status}` | counter | Responses by status |
+| `tokio_php_sse_active_connections` | gauge | Active SSE streams |
+| `tokio_php_sse_connections_total` | counter | Total SSE connections |
+| `tokio_php_sse_chunks_total` | counter | Total SSE chunks sent |
+| `tokio_php_sse_bytes_total` | counter | Total SSE bytes sent |
+| `node_load1/5/15` | gauge | System load average |
+| `node_memory_*` | gauge | System memory stats |
+
+See [Observability](observability.md) for Grafana setup and PromQL examples.
 
 ## SSE Streaming
 

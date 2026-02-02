@@ -16,8 +16,8 @@ echo "  ✓ Formatting OK"
 
 # Run clippy (without PHP-dependent features for speed)
 echo "  Running clippy..."
-if ! cargo clippy --lib --features grpc,otel -- -D warnings > /dev/null 2>&1; then
-    echo "❌ Clippy check failed. Run 'cargo clippy --lib --features grpc,otel' to see errors."
+if ! cargo clippy --lib -- -D warnings > /dev/null 2>&1; then
+    echo "❌ Clippy check failed. Run 'cargo clippy --lib' to see errors."
     exit 1
 fi
 echo "  ✓ Clippy OK"

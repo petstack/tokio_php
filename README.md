@@ -67,8 +67,11 @@ PHP_VERSION=8.5 docker compose up -d
 | `ERROR_PAGES_DIR` | — | Custom HTML error pages directory |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout |
 | `REQUEST_TIMEOUT` | `2m` | Request timeout (30s, 2m, 5m, off) |
+| `HEADER_TIMEOUT_SECS` | `5` | Header read timeout (Slowloris protection) |
+| `IDLE_TIMEOUT_SECS` | `60` | Idle connection timeout |
 | `INTERNAL_ADDR` | — | Internal server for /health, /metrics |
 | `ACCESS_LOG` | `0` | Enable access logs (0 = disabled) |
+| `LOG_LEVEL` | `info` | Log level: trace, debug, info, warn, error |
 | `RATE_LIMIT` | `0` | Max requests per IP (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window (seconds) |
 

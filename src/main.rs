@@ -120,6 +120,11 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     let access_log_enabled = config.middleware.is_access_log_enabled();
     let rate_limit_config = config.middleware.rate_limit();
 
+    // Initialize async access log writer (non-blocking stdout via channel)
+    if access_log_enabled {
+        logging::init_access_log_writer();
+    }
+
     // Create executor based on type
     match config.executor.executor_type {
         ExecutorType::Stub => {

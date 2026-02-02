@@ -4,14 +4,40 @@
 //! ```json
 //! {"ts":"2024-12-28T15:04:05.123Z","level":"info","type":"app","msg":"Server started","ctx":{},"data":{}}
 //! ```
+//!
+//! Access logs use async I/O via a background task to avoid blocking request handlers.
 
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::sync::OnceLock;
+use tokio::io::{stdout, AsyncWriteExt};
+use tokio::sync::mpsc;
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
+
+/// Channel sender for async access logging.
+static ACCESS_LOG_TX: OnceLock<mpsc::UnboundedSender<String>> = OnceLock::new();
+
+/// Initialize the async access log writer.
+/// Must be called once at server startup from an async context.
+pub fn init_access_log_writer() {
+    let (tx, rx) = mpsc::unbounded_channel::<String>();
+    ACCESS_LOG_TX.set(tx).ok();
+    tokio::spawn(access_log_writer_task(rx));
+}
+
+/// Background task that writes access log entries to stdout.
+async fn access_log_writer_task(mut rx: mpsc::UnboundedReceiver<String>) {
+    let mut stdout = stdout();
+    while let Some(entry) = rx.recv().await {
+        // Write and flush - errors are silently ignored (logging should not crash server)
+        let _ = stdout.write_all(entry.as_bytes()).await;
+        let _ = stdout.write_all(b"\n").await;
+        let _ = stdout.flush().await;
+    }
+}
 
 /// Log entry with unified structure.
 #[derive(Serialize)]
@@ -271,6 +297,8 @@ pub fn log_access(
         "data": data,
     });
 
-    // Write directly to stdout
-    let _ = writeln!(io::stdout(), "{}", entry);
+    // Send to async writer (non-blocking)
+    if let Some(tx) = ACCESS_LOG_TX.get() {
+        let _ = tx.send(entry.to_string());
+    }
 }
