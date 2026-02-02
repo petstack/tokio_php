@@ -25,7 +25,9 @@ tokio_php is configured via environment variables.
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate |
 | `TLS_KEY_FILE` | `./certs/key.pem` | Docker secrets: host path to private key |
-| `RUST_LOG` | `tokio_php=info` | Log level |
+| `HEADER_TIMEOUT_SECS` | `5` | Header read timeout in seconds (Slowloris protection) |
+| `IDLE_TIMEOUT_SECS` | `60` | Idle connection timeout in seconds |
+| `LOG_LEVEL` | `info` | Log level: trace, debug, info, warn, error |
 | `SERVICE_NAME` | `tokio_php` | Service name in structured logs |
 | `PHP_VERSION` | `8.5` | Docker build: PHP version (8.4 or 8.5) |
 
@@ -666,27 +668,72 @@ PHP_VERSION=8.4 docker compose build
 
 Supported versions: `8.4`, `8.5`
 
-### RUST_LOG
+### HEADER_TIMEOUT_SECS
 
-Configure log level and filtering. All logs use unified JSON format.
+Maximum time in seconds to read HTTP headers. Provides Slowloris attack protection.
+
+```bash
+# Default: 5 seconds
+HEADER_TIMEOUT_SECS=5
+
+# Stricter for high-security environments
+HEADER_TIMEOUT_SECS=3
+
+# More lenient for slow clients
+HEADER_TIMEOUT_SECS=10
+```
+
+When header read times out, connection is closed silently (no response sent). This is normal for abandoned connections.
+
+### IDLE_TIMEOUT_SECS
+
+Maximum idle time for keep-alive connections before closing.
+
+```bash
+# Default: 60 seconds
+IDLE_TIMEOUT_SECS=60
+
+# Aggressive cleanup (low memory)
+IDLE_TIMEOUT_SECS=30
+
+# Long-lived connections
+IDLE_TIMEOUT_SECS=120
+```
+
+### LOG_LEVEL
+
+Configure log level. All logs use unified JSON format.
 
 ```bash
 # Default - info level
-RUST_LOG=tokio_php=info
+LOG_LEVEL=info
 
 # Debug mode
-RUST_LOG=tokio_php=debug
+LOG_LEVEL=debug
 
 # Trace level (very verbose)
-RUST_LOG=tokio_php=trace
+LOG_LEVEL=trace
 
 # Warning only (suppress info)
-RUST_LOG=tokio_php=warn
+LOG_LEVEL=warn
+
+# Errors only
+LOG_LEVEL=error
 ```
 
 Log levels: `trace`, `debug`, `info`, `warn`, `error`
 
-**Note:** Access logs (when `ACCESS_LOG=1`) are always output regardless of RUST_LOG level. Use `jq` to filter by type.
+**Advanced filtering:** For complex filtering (e.g., per-module levels), use `RUST_LOG` instead. `LOG_LEVEL` takes precedence when both are set.
+
+```bash
+# Simple level (recommended)
+LOG_LEVEL=debug
+
+# Advanced filtering (fallback)
+RUST_LOG=tokio_php=debug,hyper=warn
+```
+
+**Note:** Access logs (when `ACCESS_LOG=1`) are always output regardless of log level. Use `jq` to filter by type.
 
 ## Configuration Examples
 
@@ -717,7 +764,7 @@ docker compose up -d
 ### Development
 
 ```bash
-RUST_LOG=tokio_php=debug \
+LOG_LEVEL=debug \
 PHP_WORKERS=2 \
 docker compose up -d
 ```
@@ -750,8 +797,8 @@ INTERNAL_ADDR=0.0.0.0:9090 \
 ERROR_PAGES_DIR=/var/www/html/errors \
 STATIC_CACHE_TTL=1w \
 ACCESS_LOG=1 \
-EXECUTOR=ext \
-RUST_LOG=tokio_php=info \
+EXECUTOR=sapi \
+LOG_LEVEL=info \
 docker compose up -d
 ```
 
@@ -769,11 +816,11 @@ services:
       - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
-      - RUST_LOG=${RUST_LOG:-tokio_php=info}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=${SERVICE_NAME:-tokio_php}
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
-      - EXECUTOR=${EXECUTOR:-ext}  # ext (recommended), php, stub
+      - EXECUTOR=${EXECUTOR:-sapi}  # sapi (recommended), ext, php, stub
       - INDEX_FILE=${INDEX_FILE:-}
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - INTERNAL_ADDR=0.0.0.0:9090
@@ -801,7 +848,7 @@ services:
 
 ```bash
 # View environment
-docker compose exec app env | grep -E '^(PHP_|QUEUE_|DOCUMENT_|INDEX_|INTERNAL_|USE_|TLS_|RUST_|LISTEN_)'
+docker compose exec app env | grep -E '^(PHP_|QUEUE_|DOCUMENT_|INDEX_|INTERNAL_|TLS_|LOG_|LISTEN_|HEADER_|IDLE_)'
 
 # View startup logs
 docker compose logs app | head -20
@@ -1007,7 +1054,7 @@ Note: Profiling is controlled at compile-time via `debug-profile` feature, not a
 
 ```rust
 pub struct LoggingConfig {
-    pub filter: String,       // RUST_LOG
+    pub filter: String,       // LOG_LEVEL (simple) or RUST_LOG (advanced)
     pub service_name: String, // SERVICE_NAME
 }
 ```

@@ -21,7 +21,7 @@ services:
       - "50051:50051"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
-      - RUST_LOG=tokio_php=info
+      - LOG_LEVEL=trace
       # PHP_WORKERS: number of PHP worker processes (0 = auto-detect from CPU cores)
       - PHP_WORKERS=${PHP_WORKERS:-0}
       # EXECUTOR: script executor mode
@@ -41,7 +41,7 @@ services:
       # ERROR_PAGES_DIR: directory with custom HTML error pages (e.g., 404.html, 500.html)
       - ERROR_PAGES_DIR=${ERROR_PAGES_DIR:-/var/www/html/errors}
       # ACCESS_LOG: set to 1 or true to enable access logs
-      - ACCESS_LOG=${ACCESS_LOG:-0}
+      - ACCESS_LOG=${ACCESS_LOG:-1}
       # RATE_LIMIT: max requests per IP per window (0 = disabled)
       - RATE_LIMIT=${RATE_LIMIT:-0}
       # RATE_WINDOW: rate limit window in seconds (default: 60)
@@ -50,6 +50,10 @@ services:
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       # REQUEST_TIMEOUT: request timeout (30s, 2m, 5m, off). Returns 504 on timeout
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      # HEADER_TIMEOUT_SECS: header read timeout, Slowloris protection (default: 5)
+      - HEADER_TIMEOUT_SECS=${HEADER_TIMEOUT_SECS:-5}
+      # IDLE_TIMEOUT_SECS: idle connection timeout (default: 60)
+      - IDLE_TIMEOUT_SECS=${IDLE_TIMEOUT_SECS:-60}
       # OpenTelemetry (requires CARGO_FEATURES=otel build)
       - OTEL_ENABLED=${OTEL_ENABLED:-0}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
@@ -96,7 +100,7 @@ services:
       - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8443
-      - RUST_LOG=tokio_php=info
+      - LOG_LEVEL=info
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - EXECUTOR=${EXECUTOR:-sapi}
       - INDEX_FILE=${INDEX_FILE:-}
@@ -110,6 +114,8 @@ services:
       - RATE_WINDOW=${RATE_WINDOW:-60}
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      - HEADER_TIMEOUT_SECS=${HEADER_TIMEOUT_SECS:-5}
+      - IDLE_TIMEOUT_SECS=${IDLE_TIMEOUT_SECS:-60}
       # OpenTelemetry (requires CARGO_FEATURES=otel build)
       - OTEL_ENABLED=${OTEL_ENABLED:-0}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
