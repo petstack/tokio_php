@@ -405,6 +405,7 @@ fn is_connection_error(err_str: &str) -> bool {
         || err_str.contains("os error 32")
         || err_str.contains("timed out")
         || err_str.contains("deadline has elapsed")
+        || err_str.contains("HeaderTimeout") // Slowloris protection timeout
 }
 
 use super::internal::RequestMetrics;
@@ -429,6 +430,10 @@ pub struct ConnectionContext<E: ScriptExecutor> {
     pub request_timeout: super::config::RequestTimeout,
     /// SSE timeout (SSE_TIMEOUT env var, default: 30m).
     pub sse_timeout: super::config::RequestTimeout,
+    /// Header read timeout (HEADER_TIMEOUT_SECS, default: 5s).
+    pub header_timeout: std::time::Duration,
+    /// Idle connection timeout (IDLE_TIMEOUT_SECS, default: 60s).
+    pub idle_timeout: std::time::Duration,
     /// Profiling enabled (compile-time with debug-profile feature).
     #[allow(dead_code)]
     pub profile_enabled: bool,
@@ -531,7 +536,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         if let Err(err) = auto::Builder::new(TokioExecutor::new())
             .http1()
             .timer(TokioTimer::new())
-            .header_read_timeout(Some(Duration::from_secs(5)))
+            .header_read_timeout(Some(self.header_timeout))
             .keep_alive(true)
             .http2()
             .max_concurrent_streams(250)
@@ -549,7 +554,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         // Wait for first byte with timeout to detect idle connections (skip for stub mode)
         if !self.is_stub_mode {
             let mut peek_buf = [0u8; 1];
-            match tokio::time::timeout(Duration::from_secs(10), stream.peek(&mut peek_buf)).await {
+            match tokio::time::timeout(self.idle_timeout, stream.peek(&mut peek_buf)).await {
                 Ok(Ok(0)) | Err(_) => {
                     // Connection closed or timeout - client connected but sent nothing
                     debug!("Connection idle timeout or closed: {:?}", remote_addr);
@@ -575,7 +580,7 @@ impl<E: ScriptExecutor + 'static> ConnectionContext<E> {
         if let Err(err) = auto::Builder::new(TokioExecutor::new())
             .http1()
             .timer(TokioTimer::new())
-            .header_read_timeout(Some(Duration::from_secs(5)))
+            .header_read_timeout(Some(self.header_timeout))
             .keep_alive(true)
             .http2()
             .max_concurrent_streams(250)

@@ -132,6 +132,11 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error + Se
     // Request timeout (unified type, no conversion needed)
     server_config = server_config.with_request_timeout(config.server.request_timeout);
 
+    // Connection timeouts
+    server_config = server_config
+        .with_header_timeout(config.server.header_timeout)
+        .with_idle_timeout(config.server.idle_timeout);
+
     // Get worker parameters
     #[allow(unused_variables)]
     let worker_threads = config.executor.worker_count();
