@@ -84,7 +84,10 @@ All tags are multi-arch (`amd64` + `arm64`).
 | `ERROR_PAGES_DIR` | _(empty)_ | Directory with custom HTML error pages (e.g., `404.html`, `500.html`) |
 | `STATIC_CACHE_TTL` | `1d` | Cache-Control max-age for static files. Values: `off`, `30s`, `2m`, `1h`, `1d`, `1w`, `1y` |
 | `REQUEST_TIMEOUT` | `2m` | Request timeout. Values: `30s`, `2m`, `5m`, `off`. Returns 504 on timeout |
+| `SSE_TIMEOUT` | `30m` | SSE/streaming connection timeout. Values: `30m`, `1h`, `off` |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout in seconds |
+| `HEADER_TIMEOUT_SECS` | `5` | Header read timeout in seconds (Slowloris protection) |
+| `IDLE_TIMEOUT_SECS` | `60` | Idle connection timeout in seconds (keep-alive) |
 
 ### Rate Limiting
 
@@ -97,8 +100,10 @@ All tags are multi-arch (`amd64` + `arm64`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RUST_LOG` | `tokio_php=info` | Log level: `error`, `warn`, `info`, `debug`, `trace` |
-| `ACCESS_LOG` | `0` | Enable access logging. `1` = enabled |
+| `LOG_LEVEL` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `ACCESS_LOG` | `0` | Enable access logging (async non-blocking I/O). `1` = enabled |
+
+**Advanced log filtering:** Set `RUST_LOG` (e.g., `tokio_php=debug,hyper=warn`) for per-module control. `LOG_LEVEL` takes priority when both are set.
 
 **Profiling:** Build from source with `CARGO_FEATURES=debug-profile` for detailed timing reports. See [GitHub](https://github.com/petstack/tokio_php/blob/master/docs/profiling.md).
 
@@ -202,22 +207,23 @@ curl http://localhost:9090/config
 
 ## Profiling
 
-Enable profiling and send requests with `X-Profile: 1` header:
+Profiling is enabled at **compile time** with the `debug-profile` feature. Build from source:
 
 ```bash
-docker run -d -p 8080:8080 -e PROFILE=1 ...
+CARGO_FEATURES=debug-profile docker compose build
+docker compose up -d
 
-curl -H "X-Profile: 1" http://localhost:8080/index.php -I
+# Make a request
+curl http://localhost:8080/index.php
+
+# View profile report
+docker compose exec tokio_php cat /tmp/tokio_profile_request_*.md
 ```
 
-Response headers include timing data:
-- `X-Profile-Total-Us` - Total request time (microseconds)
-- `X-Profile-Queue-Us` - Worker queue wait time
-- `X-Profile-PHP-Startup-Us` - PHP request startup time
-- `X-Profile-Script-Us` - PHP script execution time
-- `X-Profile-PHP-Shutdown-Us` - PHP request shutdown time
-- `X-Profile-TLS-Handshake-Us` - TLS handshake time (HTTPS only)
-- `X-Profile-TLS-Protocol` - TLS version (TLSv1_2, TLSv1_3)
+When built with profiling:
+- Server runs in **single-worker mode** (accurate timing)
+- All requests generate detailed markdown reports to `/tmp/`
+- Reports include tree-structured timing breakdown (parse, queue wait, PHP execution, response build)
 
 ## Kubernetes
 

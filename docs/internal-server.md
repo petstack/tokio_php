@@ -66,7 +66,8 @@ curl http://localhost:9090/config
   "EXECUTOR": "ext",
   "TLS_CERT": "",
   "TLS_KEY": "",
-  "RUST_LOG": "tokio_php=info",
+  "LOG_LEVEL": "info",
+  "RUST_LOG": "",
   "SERVICE_NAME": "tokio_php"
 }
 ```
@@ -90,7 +91,8 @@ curl http://localhost:9090/config
 | `EXECUTOR` | `ext` | Script executor (`ext`, `php`, `stub`) |
 | `TLS_CERT` | _(empty)_ | TLS certificate path |
 | `TLS_KEY` | _(empty)_ | TLS private key path |
-| `RUST_LOG` | `tokio_php=info` | Log level filter |
+| `LOG_LEVEL` | `info` | Log level (simple filter, takes priority) |
+| `RUST_LOG` | _(fallback)_ | Advanced log filter (if LOG_LEVEL not set) |
 | `SERVICE_NAME` | `tokio_php` | Service name for logs |
 
 **Use Cases:**

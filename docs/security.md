@@ -411,7 +411,7 @@ See [Configuration](configuration.md) for details.
 - [ ] Read-only volumes (`:ro`)
 - [ ] Resource limits configured
 - [ ] Access logging enabled (`ACCESS_LOG=1`)
-- [ ] Disable debug logging (`RUST_LOG=tokio_php=warn`)
+- [ ] Disable debug logging (`LOG_LEVEL=warn`)
 
 ### Kubernetes
 

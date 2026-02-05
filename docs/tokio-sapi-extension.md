@@ -1,6 +1,6 @@
 # tokio_sapi PHP Extension
 
-tokio_php includes a PHP extension (`tokio_sapi`) that provides PHP functions for request information, streaming support, and runtime information. This extension is used by the legacy `ExtExecutor` but is **not required** for the default `SapiExecutor` which uses a pure Rust SAPI implementation.
+tokio_php includes a PHP extension (`tokio_sapi`) that provides PHP functions for request information, streaming support, and runtime information. This extension is **required** for the default `ExtExecutor` and provides C API functions for FFI superglobals.
 
 ## Overview
 
@@ -8,35 +8,31 @@ The extension provides:
 - **PHP functions**: Access to request/worker information, streaming, early response
 - **C API**: Functions for setting superglobals directly via FFI (used by ExtExecutor)
 - **Streaming**: SSE support and chunked transfer encoding
-- **Legacy compatibility**: Required only when using `EXECUTOR=ext` or `EXECUTOR=php`
+- **Default dependency**: Required when using `EXECUTOR=ext` (default) or `EXECUTOR=php`
 
-## Pure Rust SAPI (Default)
+## Default Executor (ExtExecutor)
 
-The default executor (`EXECUTOR=sapi`) uses a **pure Rust SAPI implementation** without requiring the tokio_sapi PHP extension:
+The default executor (`EXECUTOR=ext`) uses the tokio_sapi extension for FFI superglobals:
 
 ```bash
-# Default - SapiExecutor with pure Rust SAPI (no extension needed)
+# Default - ExtExecutor with FFI superglobals
 docker compose up -d
 
-# Explicitly specify SAPI executor
-EXECUTOR=sapi docker compose up -d
+# Explicitly specify ExtExecutor
+EXECUTOR=ext docker compose up -d
 ```
 
-The pure Rust SAPI provides all the same PHP functions (`tokio_request_id()`, `tokio_worker_id()`, etc.) but implements them directly in Rust instead of using a C extension.
-
-## Legacy Executors
-
-The tokio_sapi extension is required for legacy executors:
+## Alternative Executors
 
 ```bash
-# ExtExecutor - Uses C extension for FFI superglobals (legacy)
-EXECUTOR=ext docker compose up -d
+# SapiExecutor - Pure Rust SAPI (experimental, requires tokio-sapi feature)
+EXECUTOR=sapi docker compose up -d
 
 # PhpExecutor - Uses eval-based superglobals (legacy)
 EXECUTOR=php docker compose up -d
 ```
 
-When using legacy executors, `ExtExecutor` or `PhpExecutor` are used instead of `SapiExecutor`.
+The experimental SapiExecutor provides all the same PHP functions (`tokio_request_id()`, `tokio_worker_id()`, etc.) but implements them directly in Rust instead of using a C extension.
 
 ## PHP Functions
 

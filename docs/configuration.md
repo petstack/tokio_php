@@ -20,7 +20,7 @@ tokio_php is configured via environment variables.
 | `ACCESS_LOG` | `0` | Enable access logs (target: `access`) |
 | `RATE_LIMIT` | `0` | Max requests per IP per window (0 = disabled) |
 | `RATE_WINDOW` | `60` | Rate limit window in seconds |
-| `EXECUTOR` | `sapi` | Script executor: `sapi` (recommended, pure Rust SAPI), `ext` (C extension), `php` (legacy), `stub` (benchmark) |
+| `EXECUTOR` | `ext` | Script executor: `ext` (recommended, C extension), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | _(empty)_ | Path to TLS certificate (PEM) |
 | `TLS_KEY` | _(empty)_ | Path to TLS private key (PEM) |
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Docker secrets: host path to certificate |
@@ -505,13 +505,10 @@ See [Rate Limiting](rate-limiting.md) for algorithm details and best practices.
 
 ### EXECUTOR
 
-Select the script execution backend. **Default: `sapi` (recommended).**
+Select the script execution backend. **Default: `ext` (recommended).**
 
 ```bash
-# SapiExecutor - Pure Rust SAPI implementation (default, recommended)
-EXECUTOR=sapi
-
-# ExtExecutor - C extension with FFI superglobals (legacy)
+# ExtExecutor - C extension with FFI superglobals (default, recommended)
 EXECUTOR=ext
 
 # PhpExecutor - eval-based superglobals (legacy)
@@ -523,17 +520,15 @@ EXECUTOR=stub
 
 | Value | Executor | Method | Use Case |
 |-------|----------|--------|----------|
-| `sapi` | SapiExecutor | Pure Rust SAPI + direct PHP C API | **All production apps (fastest)** |
-| `ext` | ExtExecutor | `php_execute_script()` + C extension FFI | Legacy compatibility |
+| `ext` | ExtExecutor | `php_execute_script()` + C extension FFI | **All production apps (recommended)** |
 | `php` | PhpExecutor | `zend_eval_string()` | Debugging/testing |
 | `stub` | StubExecutor | No PHP | Benchmarking HTTP overhead |
 
-SapiExecutor is **fastest** for production:
-- Pure Rust SAPI implementation with direct PHP C API calls
-- No C extension overhead or FFI bridge cost
-- Optimized superglobals batch setting
-- Memory-safe callbacks implemented in Rust
-- ~26K+ RPS for index.php with superglobals
+ExtExecutor is **recommended** for production:
+- Uses `php_execute_script()` for native PHP execution
+- FFI superglobals batch setting via C extension
+- Fully OPcache/JIT optimized
+- ~25K+ RPS for index.php with superglobals
 
 See [Architecture](architecture.md) for executor comparison and performance benchmarks.
 
@@ -728,7 +723,7 @@ INTERNAL_ADDR=0.0.0.0:9090 \
 ERROR_PAGES_DIR=/var/www/html/errors \
 STATIC_CACHE_TTL=1w \
 ACCESS_LOG=1 \
-EXECUTOR=sapi \
+EXECUTOR=ext \
 LOG_LEVEL=info \
 docker compose up -d
 ```
@@ -751,7 +746,7 @@ services:
       - SERVICE_NAME=${SERVICE_NAME:-tokio_php}
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - QUEUE_CAPACITY=${QUEUE_CAPACITY:-0}
-      - EXECUTOR=${EXECUTOR:-sapi}  # sapi (recommended), ext, php, stub
+      - EXECUTOR=${EXECUTOR:-ext}  # ext (recommended), php, stub
       - INDEX_FILE=${INDEX_FILE:-}
       - DOCUMENT_ROOT=${DOCUMENT_ROOT:-/var/www/html}
       - INTERNAL_ADDR=0.0.0.0:9090

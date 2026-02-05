@@ -60,13 +60,14 @@ PHP_VERSION=8.5 docker compose up -d
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Server bind address |
 | `DOCUMENT_ROOT` | `/var/www/html` | Web root directory |
 | `INDEX_FILE` | — | Routing mode: `index.php` (framework), `index.html` (SPA), empty (traditional) |
-| `EXECUTOR` | `sapi` | Script executor: `sapi` (recommended, pure Rust SAPI), `ext` (C extension), `php` (legacy), `stub` (benchmark) |
+| `EXECUTOR` | `ext` | Script executor: `ext` (recommended), `php` (legacy), `stub` (benchmark) |
 | `TLS_CERT` | — | Path to TLS certificate (PEM) |
 | `TLS_KEY` | — | Path to TLS private key (PEM) |
 | `STATIC_CACHE_TTL` | `1d` | Static file cache duration |
 | `ERROR_PAGES_DIR` | — | Custom HTML error pages directory |
 | `DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown timeout |
 | `REQUEST_TIMEOUT` | `2m` | Request timeout (30s, 2m, 5m, off) |
+| `SSE_TIMEOUT` | `30m` | SSE/streaming connection timeout (30s, 2m, 1h, off) |
 | `HEADER_TIMEOUT_SECS` | `5` | Header read timeout (Slowloris protection) |
 | `IDLE_TIMEOUT_SECS` | `60` | Idle connection timeout |
 | `INTERNAL_ADDR` | — | Internal server for /health, /metrics |

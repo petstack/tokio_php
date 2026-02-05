@@ -270,11 +270,12 @@ healthcheck:
 | `TLS_CERT_FILE` | `./certs/cert.pem` | Host path for Docker secret |
 | `TLS_KEY_FILE` | `./certs/key.pem` | Host path for Docker secret |
 
-### Debugging
+### Logging
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RUST_LOG` | `tokio_php=info` | Log level (trace, debug, info, warn, error) |
+| `LOG_LEVEL` | `info` | Log level: trace, debug, info, warn, error (simple filter, takes priority over RUST_LOG) |
+| `RUST_LOG` | _(fallback)_ | Advanced log filter (e.g., `tokio_php=debug,hyper=warn`). Used only if LOG_LEVEL not set |
 
 **Profiling:** Build with `CARGO_FEATURES=debug-profile` for compile-time profiling. See [Profiling](profiling.md).
 

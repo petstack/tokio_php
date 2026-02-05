@@ -283,34 +283,35 @@ See [OPcache & JIT](opcache-jit.md) for detailed configuration.
 
 tokio_php provides multiple PHP execution modes:
 
-### SapiExecutor (Recommended, Default)
-
-Pure Rust SAPI implementation with direct PHP C API calls:
-
-```bash
-docker compose up -d  # EXECUTOR=sapi by default
-```
-
-- **Fastest** — ~26K+ RPS for real applications
-- Pure Rust implementation with no C extension overhead
-- Direct PHP C API calls for optimal performance
-- Memory-safe callbacks implemented in Rust
-- Full OPcache/JIT optimization
-- Default executor when `tokio-sapi` feature is enabled
-
-### ExtExecutor (Legacy)
+### ExtExecutor (Recommended, Default)
 
 Uses `php_execute_script()` + C extension FFI for superglobals:
 
 ```bash
-EXECUTOR=ext docker compose up -d
+docker compose up -d  # EXECUTOR=ext by default
 ```
 
-- Legacy compatibility mode
+- **Recommended** — ~25K+ RPS for real applications
 - Requires tokio_sapi C extension
-- Native PHP execution path
+- Native PHP execution path via `php_execute_script()`
+- FFI superglobals batch setting
 - Full OPcache/JIT optimization
-- ~25K RPS for real applications
+- Default executor
+
+### SapiExecutor (Experimental)
+
+Pure Rust SAPI implementation with direct PHP C API calls:
+
+```bash
+EXECUTOR=sapi docker compose up -d
+```
+
+- Experimental alternative executor
+- Pure Rust implementation with no C extension overhead
+- Direct PHP C API calls
+- Memory-safe callbacks implemented in Rust
+- Full OPcache/JIT optimization
+- Requires `tokio-sapi` feature
 
 ### PhpExecutor (Legacy)
 
@@ -407,8 +408,8 @@ stub = []
 
 | Command | PHP Required | Available Executors |
 |---------|--------------|---------------------|
-| `cargo build` (default features) | Yes | SapiExecutor (default), StubExecutor |
-| `cargo build --features php` (without tokio-sapi) | Yes | ExtExecutor, PhpExecutor, StubExecutor |
+| `cargo build --features php` (default) | Yes | ExtExecutor (default), PhpExecutor, StubExecutor |
+| `cargo build --features tokio-sapi` | Yes | SapiExecutor, StubExecutor |
 | `cargo build --no-default-features --features stub` | No | StubExecutor only |
 | `cargo build --no-default-features` | No | None (won't start) |
 

@@ -91,7 +91,7 @@ src/
 ├── executor/            # PHP execution backends
 │   ├── mod.rs           # ScriptExecutor trait
 │   ├── common.rs        # WorkerPool, HeartbeatContext
-│   ├── sapi_executor.rs # SapiExecutor (pure Rust SAPI, recommended, default)
+│   ├── sapi_executor.rs # SapiExecutor (pure Rust SAPI, experimental)
 │   ├── ext.rs           # ExtExecutor (C extension, legacy)
 │   ├── php.rs           # PhpExecutor (eval-based, legacy)
 │   ├── stub.rs          # StubExecutor (benchmarking)
@@ -347,40 +347,38 @@ pub trait ScriptExecutor: Send + Sync {
 
 | Executor | Selection | Method | Best For |
 |----------|-----------|--------|----------|
-| `SapiExecutor` | `EXECUTOR=sapi` (default) | Pure Rust SAPI + direct PHP C API | **All production apps (fastest, recommended)** |
-| `ExtExecutor` | `EXECUTOR=ext` | `php_execute_script()` + C extension FFI | Legacy compatibility |
+| `ExtExecutor` | `EXECUTOR=ext` (default) | `php_execute_script()` + C extension FFI | **All production apps (recommended)** |
 | `PhpExecutor` | `EXECUTOR=php` | `zend_eval_string()` | Debugging/testing |
 | `StubExecutor` | `EXECUTOR=stub` | No PHP | Benchmarking only |
+| `SapiExecutor` | `EXECUTOR=sapi` | Pure Rust SAPI + direct PHP C API | Experimental (requires tokio-sapi feature) |
 
 ### Performance Comparison
 
-| Script | SapiExecutor | ExtExecutor | PhpExecutor |
-|--------|--------------|-------------|-------------|
-| bench.php (minimal) | **25,000+** RPS | 20,420 RPS | 22,821 RPS |
-| index.php (superglobals) | **26,000+** RPS | 25,307 RPS | 17,119 RPS |
+| Script | ExtExecutor | PhpExecutor |
+|--------|-------------|-------------|
+| bench.php (minimal) | 20,420 RPS | 22,821 RPS |
+| index.php (superglobals) | **25,307 RPS** | 17,119 RPS |
 
 *Benchmark: 14 workers, OPcache+JIT, wrk -t4 -c100 -d10s, Apple M3 Pro*
 
-**SapiExecutor is fastest** because:
-- Pure Rust SAPI implementation with direct PHP C API calls
-- No C extension overhead or FFI bridge cost
-- Optimized superglobals batch setting via direct PHP API
-- Memory-safe callbacks implemented in Rust
-- Proper cleanup after each request
+**ExtExecutor is recommended** because:
+- Uses `php_execute_script()` for native PHP execution
+- FFI superglobals batch setting via C extension
+- Fully OPcache/JIT optimized
+- **48% faster** than PhpExecutor for real apps with superglobals
 
 **When to use which:**
 
 | Use Case | Recommendation |
 |----------|----------------|
-| All production apps | **EXECUTOR=sapi** — pure Rust, fastest, default |
-| Legacy compatibility | `EXECUTOR=ext` — C extension mode |
+| All production apps | **EXECUTOR=ext** — recommended, default |
 | Debugging/testing | `EXECUTOR=php` — simplest, uses zend_eval_string |
 
 Selection via `EXECUTOR` env var in `main.rs`:
-- `EXECUTOR=sapi` → SapiExecutor **← production default (requires tokio-sapi feature)**
-- `EXECUTOR=ext` → ExtExecutor (requires php feature without tokio-sapi)
-- `EXECUTOR=php` → PhpExecutor (requires php feature without tokio-sapi)
-- `EXECUTOR=stub` → StubExecutor
+- `EXECUTOR=ext` → ExtExecutor **← production default, recommended**
+- `EXECUTOR=php` → PhpExecutor (legacy)
+- `EXECUTOR=stub` → StubExecutor (benchmarking)
+- `EXECUTOR=sapi` → SapiExecutor (experimental, requires tokio-sapi feature)
 
 ## Request Heartbeat
 
