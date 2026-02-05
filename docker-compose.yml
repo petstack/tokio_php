@@ -13,7 +13,7 @@ services:
       - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8080
-      - LOG_LEVEL=trace
+      - LOG_LEVEL=${LOG_LEVEL:-trace}
       # PHP_WORKERS: number of PHP worker processes (0 = auto-detect from CPU cores)
       - PHP_WORKERS=${PHP_WORKERS:-0}
       # EXECUTOR: script executor mode (ext, php, stub)
@@ -41,6 +41,14 @@ services:
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       # REQUEST_TIMEOUT: request timeout (30s, 2m, 5m, off). Returns 504 on timeout
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      # SSE_TIMEOUT: SSE/streaming connection timeout (30m, 1h, off)
+      - SSE_TIMEOUT=${SSE_TIMEOUT:-30m}
+      # DRAIN_TIMEOUT_SECS: graceful shutdown drain timeout in seconds
+      - DRAIN_TIMEOUT_SECS=${DRAIN_TIMEOUT_SECS:-30}
+      # HEADER_TIMEOUT_SECS: header read timeout (Slowloris protection)
+      - HEADER_TIMEOUT_SECS=${HEADER_TIMEOUT_SECS:-5}
+      # IDLE_TIMEOUT_SECS: idle connection timeout (keep-alive)
+      - IDLE_TIMEOUT_SECS=${IDLE_TIMEOUT_SECS:-60}
     volumes:
       - ./www:/var/www/html:ro
       # PHP configuration (OPcache, JIT, etc.)
@@ -52,8 +60,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-#    logging:
-#      driver: "none"  # или ограничить: driver: "json-file", options: { max-size: "1m" }
 
   # HTTPS/TLS variant (uses Docker secrets for certificates)
   tokio_php_tls:
@@ -68,7 +74,7 @@ services:
       - "9090:9090"
     environment:
       - LISTEN_ADDR=0.0.0.0:8443
-      - LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       - PHP_WORKERS=${PHP_WORKERS:-0}
       - EXECUTOR=${EXECUTOR:-ext}
       - INDEX_FILE=${INDEX_FILE:-}
@@ -82,6 +88,10 @@ services:
       - RATE_WINDOW=${RATE_WINDOW:-60}
       - STATIC_CACHE_TTL=${STATIC_CACHE_TTL:-1d}
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-2m}
+      - SSE_TIMEOUT=${SSE_TIMEOUT:-30m}
+      - DRAIN_TIMEOUT_SECS=${DRAIN_TIMEOUT_SECS:-30}
+      - HEADER_TIMEOUT_SECS=${HEADER_TIMEOUT_SECS:-5}
+      - IDLE_TIMEOUT_SECS=${IDLE_TIMEOUT_SECS:-60}
     secrets:
       - tls_cert
       - tls_key
