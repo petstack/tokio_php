@@ -546,6 +546,11 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 // Initialize streaming state (output goes through ub_write callback)
                 sapi::init_stream_state(stream_tx);
 
+                // Initialize bridge context BEFORE php_request_startup so that
+                // OPcache RINIT can read request_time via sapi_get_request_time()
+                bridge::init_ctx(request_id, id as u64);
+                bridge::set_request_time(request.received_at);
+
                 // Profiling: PHP startup
                 let startup_start = Instant::now();
 
@@ -559,9 +564,6 @@ fn ext_worker_main_loop(id: usize, rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>
                 };
 
                 if startup_ok {
-                    // Initialize bridge context (shared TLS for Rust <-> PHP)
-                    bridge::init_ctx(request_id, id as u64);
-                    bridge::set_request_time(request.received_at);
                     sapi::set_trace_context(
                         &request.request_id,
                         &request.trace_id,
